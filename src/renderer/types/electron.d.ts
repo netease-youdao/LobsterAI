@@ -2644,6 +2644,7 @@ interface DshHostPluginEntry {
   surface?: 'native' | 'hybrid' | 'web-only';
   isThemePlugin?: boolean;
   panelId?: string;
+  panelKind?: 'main' | 'settings-section';
   panelLabel?: DshHostPluginLocalizedText;
   errorCode?: string;
   errorMessage?: string;

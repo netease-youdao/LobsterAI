@@ -7,6 +7,7 @@ import {
   applyImagePreviewKeyAction,
   ImagePreviewKeyAction,
   resolveActiveImagePreview,
+  resolveClickedImageGallery,
   resolveImagePreviewKeyAction,
   stepImagePreviewIndex,
 } from './imagePreviewNavigation';
@@ -75,6 +76,33 @@ describe('imagePreviewNavigation', () => {
       items: [a, b],
       activeIndex: -1,
       activeImage: null,
+    });
+  });
+
+  test('resolves clicked image galleries by identity even with duplicate URLs', () => {
+    const first = { id: 'node-1' };
+    const second = { id: 'node-2' };
+    const third = { id: 'node-3' };
+    const entries = [
+      { key: first, image: { src: 'localfile:///same.png', alt: 'first' } },
+      { key: second, image: { src: 'localfile:///same.png', alt: 'second' } },
+      { key: third, image: { src: 'localfile:///other.png', alt: 'third' } },
+    ];
+
+    expect(resolveClickedImageGallery(entries, second, { src: 'localfile:///same.png', alt: 'second' })).toEqual({
+      images: [
+        { src: 'localfile:///same.png', alt: 'first' },
+        { src: 'localfile:///same.png', alt: 'second' },
+        { src: 'localfile:///other.png', alt: 'third' },
+      ],
+      index: 1,
+    });
+
+    // Falls back to matching src when element reference is omitted, or to single image if absent.
+    expect(resolveClickedImageGallery(entries, undefined, { src: 'localfile:///other.png' }).index).toBe(2);
+    expect(resolveClickedImageGallery([], undefined, { src: 'localfile:///only.png' })).toEqual({
+      images: [{ src: 'localfile:///only.png' }],
+      index: 0,
     });
   });
 });

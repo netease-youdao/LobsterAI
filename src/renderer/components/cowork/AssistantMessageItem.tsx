@@ -19,6 +19,10 @@ import MessageForkIcon from '../icons/MessageForkIcon';
 import MarkdownContent from '../MarkdownContent';
 import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
+import {
+  collectMarkdownPreviewGallery,
+  type ImagePreviewGalleryState,
+} from './imagePreviewNavigation';
 import { MessageActionButton, MessageCopyButton } from './MessageActionButton';
 import {
   getMessageModelLabel,
@@ -360,14 +364,15 @@ const AssistantMessageItem: React.FC<{
   onAdjustPlan,
   forceSearchExpanded = false,
 }) => {
-  const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [previewGallery, setPreviewGallery] = useState<ImagePreviewGalleryState | null>(null);
   const rawContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
   const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(rawContent));
   const displayContent = proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
   const copyContent = getAssistantMessageCopyContent(rawContent);
   const goalCompletionLabel = getGoalCompletionLabel(completedGoal);
   const showPlanConfirmationActions = planConfirmationMessageId === message.id;
-  const handleImageClick = useCallback((image: ImagePreviewSource) => {
+  const handleImageClick = useCallback((image: ImagePreviewSource, element?: HTMLImageElement) => {
     reportConversationMessageAction({
       actionType: 'open_message_image',
       message,
@@ -375,7 +380,7 @@ const AssistantMessageItem: React.FC<{
         messageRole: 'assistant',
       },
     });
-    setExpandedImage(image);
+    setPreviewGallery(collectMarkdownPreviewGallery(containerRef.current, element, image));
   }, [message]);
   useEffect(() => {
     if (!proposedPlan.didNormalizePlanText) return;
@@ -407,6 +412,7 @@ const AssistantMessageItem: React.FC<{
   ) : null;
   return (
     <div
+      ref={containerRef}
       className="relative focus:outline-none"
       data-cowork-assistant-message-id={message.id}
       data-cowork-search-message-id={message.id}
@@ -440,7 +446,12 @@ const AssistantMessageItem: React.FC<{
         )}
       </div>
       {!displayContent && metaRow}
-      <ImagePreviewModal image={expandedImage} onClose={() => setExpandedImage(null)} />
+      <ImagePreviewModal
+        images={previewGallery?.images}
+        currentIndex={previewGallery?.index ?? null}
+        onIndexChange={(index) => setPreviewGallery((current) => (current ? { ...current, index } : null))}
+        onClose={() => setPreviewGallery(null)}
+      />
     </div>
   );
 };

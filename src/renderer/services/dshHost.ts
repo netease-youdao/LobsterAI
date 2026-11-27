@@ -7,6 +7,7 @@ import {
   type DshPluginApplicationStatus,
   type DshPluginAvailability,
   type DshPluginInstallPhase,
+  type DshPluginPanelKind,
   type DshPluginSurface,
   type DshPluginUpdateKind,
   type DshPluginUpdateOutcomeKind,
@@ -23,6 +24,7 @@ export const DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY = 'dsh.plugins.installRegis
 export interface DshEmbeddedPluginTarget {
   name: string;
   panelId: string;
+  panelKind?: DshPluginPanelKind;
   title: string;
   icon?: string;
 }
@@ -227,6 +229,7 @@ export interface DshPluginEntry {
   surface?: DshPluginSurface;
   isThemePlugin?: boolean;
   panelId?: string;
+  panelKind?: DshPluginPanelKind;
   panelLabel?: DshPluginLocalizedText;
   errorCode?: string;
   errorMessage?: string;

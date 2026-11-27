@@ -7,6 +7,7 @@ import {
   DSH_HOST_BUNDLE_NAME,
   DSH_WEB_APP_BUNDLE_NAME,
   DshHostPhase,
+  DshPluginPanelKind,
   DshPluginSurface,
 } from '../../../shared/dshEngine/hostConstants';
 import {
@@ -101,9 +102,17 @@ export type SidebarPluginPlacement =
 export interface SidebarPluginPanelItem {
   name: string;
   panelId: string;
+  panelKind?: DshPluginPanelKind;
   title: string;
   icon?: string;
   description?: string;
+}
+
+export function getDshPluginPanelKey(panel: {
+  panelId: string;
+  panelKind?: DshPluginPanelKind;
+}): string {
+  return `${panel.panelKind ?? DshPluginPanelKind.Main}:${panel.panelId}`;
 }
 
 export interface PartitionedSidebarPluginPanels {
@@ -156,12 +165,14 @@ export function resolveSidebarPluginPlacement(
   maxSlots: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
 ): Record<string, SidebarPluginPlacement> {
   const eligiblePluginNames: string[] = [];
-  const seenPanelIds = new Set<string>();
+  const seenPanelKeys = new Set<string>();
   for (const plugin of orderedPlugins) {
     if (plugin.managed || !plugin.enabled || plugin.isThemePlugin) continue;
     const panelId = plugin.panelId?.trim();
-    if (!panelId || seenPanelIds.has(panelId)) continue;
-    seenPanelIds.add(panelId);
+    if (!panelId) continue;
+    const panelKey = getDshPluginPanelKey({ panelId, panelKind: plugin.panelKind });
+    if (seenPanelKeys.has(panelKey)) continue;
+    seenPanelKeys.add(panelKey);
     eligiblePluginNames.push(plugin.name);
   }
   const directVisibleCount = resolveSidebarDirectVisibleCount(eligiblePluginNames.length, maxSlots);
@@ -198,15 +209,18 @@ export function getSidebarPluginPanels(
   t: (key: string) => string,
 ): SidebarPluginPanelItem[] {
   const result: SidebarPluginPanelItem[] = [];
-  const seenPanelIds = new Set<string>();
+  const seenPanelKeys = new Set<string>();
   for (const plugin of plugins) {
     if (plugin.managed || !plugin.enabled || plugin.isThemePlugin) continue;
     const panelId = plugin.panelId?.trim();
-    if (!panelId || seenPanelIds.has(panelId)) continue;
-    seenPanelIds.add(panelId);
+    if (!panelId) continue;
+    const panelKey = getDshPluginPanelKey({ panelId, panelKind: plugin.panelKind });
+    if (seenPanelKeys.has(panelKey)) continue;
+    seenPanelKeys.add(panelKey);
     result.push({
       name: plugin.name,
       panelId,
+      ...(plugin.panelKind ? { panelKind: plugin.panelKind } : {}),
       title: resolvePluginDisplayTitle(plugin, language, t),
       ...(plugin.icon ? { icon: plugin.icon } : {}),
       ...(resolvePluginDisplayDescription(plugin, language)
@@ -219,15 +233,20 @@ export function getSidebarPluginPanels(
 
 export function buildDshEmbeddedPluginHash(options: {
   panelId: string;
+  panelKind?: DshPluginPanelKind;
   theme: 'light' | 'dark';
   language: 'zh' | 'en';
 }): string {
-  const params = new URLSearchParams({
+  const entries: Record<string, string> = {
     'lobster-embed': '1',
     panel: options.panelId,
+    ...(options.panelKind === DshPluginPanelKind.SettingsSection
+      ? { panelKind: DshPluginPanelKind.SettingsSection }
+      : {}),
     theme: options.theme,
     lang: options.language,
-  });
+  };
+  const params = new URLSearchParams(entries);
   return params.toString();
 }
 
@@ -235,6 +254,7 @@ export function buildDshEmbeddedPluginUrl(
   baseUrl: string,
   options: {
     panelId: string;
+    panelKind?: DshPluginPanelKind;
     theme: 'light' | 'dark';
     language: 'zh' | 'en';
     stripQuery?: boolean;

@@ -1,10 +1,11 @@
 import {
   ArrowDownTrayIcon, ArrowsPointingOutIcon, ArrowUturnLeftIcon, ArrowUturnRightIcon, CheckIcon, ChevronDownIcon,
-  HandRaisedIcon, MinusIcon, PlusIcon, TrashIcon, ViewColumnsIcon, XMarkIcon,
+  ChevronLeftIcon, ChevronRightIcon, HandRaisedIcon, MinusIcon, PlusIcon, TrashIcon, ViewColumnsIcon, XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { LocalFileThumbnailFit } from '../../../../shared/artifactPreview/localFileThumbnail';
 import { imagePoint, imageRectangle } from '../../../../shared/imageEditing/geometry';
 import {
   IMAGE_EDIT_MAX_REGIONS, IMAGE_EDIT_RATIOS, ImageEditOperation, ImageEditorTool,
@@ -20,10 +21,11 @@ import {
 } from '../../../store/slices/imageEditorSlice';
 import type { Artifact } from '../../../types/artifact';
 import { createModalEscapeLayerId, isDismissEscapeEvent, isTopModalEscapeLayer, registerModalEscapeLayer, unregisterModalEscapeLayer } from '../../common/modalEscape';
+import { applyImagePreviewKeyAction, resolveImagePreviewKeyAction, stepImagePreviewIndex } from '../../cowork/imagePreviewNavigation';
 import MessageCopiedIcon from '../../icons/MessageCopiedIcon';
 import MessageCopyIcon from '../../icons/MessageCopyIcon';
 import { MAC_TRAFFIC_LIGHT_WIDE_INSET_CLASS } from '../../window/windowZoom';
-import { getImageArtifactSrc } from '../renderers/imageArtifactSource';
+import { getImageArtifactDisplaySrc, getImageArtifactSrc } from '../renderers/imageArtifactSource';
 import ImageRenderer from '../renderers/ImageRenderer';
 import { buildLocalFileSrc } from '../renderers/VideoRenderer';
 import { drawImageMark, drawImageMarks, exportImageDrawing, loadEditorImage } from './imageDrawing';
@@ -32,6 +34,10 @@ import { ImageEditJobPhase } from './imageEditJobStatus';
 import { ImageEditPendingVersion, ImageEditProgressCard, ImageEditStageOverlay, useImageEditJobStatus } from './ImageEditProgress';
 import ImageMarkupToolbar from './ImageMarkupToolbar';
 import { isImageStudioAvailable } from './imageStudioAvailability';
+import {
+  canNavigateStudioGalleryByKey, captureStudioViewportSnapshot, clampStudioZoom, computeStudioStageGeometry,
+  getStudioArtifactCacheKey, type ImageStudioViewportSnapshot, resolveStudioViewportScroll,
+} from './imageStudioNavigation';
 import { imageTextBox } from './imageText';
 import ImageTextBox from './ImageTextBox';
 
@@ -46,10 +52,20 @@ const MODE_OPERATIONS: [Mode, ImageEditOperation][] = [[Mode.Markup, ImageEditOp
 const modeFor = (operation?: ImageEditOperation): Mode => MODE_OPERATIONS.find(([, value]) => value === operation)?.[0] ?? Mode.View;
 const operationFor = (mode: Mode): ImageEditOperation | undefined => MODE_OPERATIONS.find(([value]) => value === mode)?.[1];
 const STAGE_GUTTER = 24;
+const GALLERY_STAGE_GUTTER = 68;
+const GALLERY_CACHE_LIMIT = 8;
+const GALLERY_THUMBNAIL_EDGE = 88;
 const NOTICE_TIMEOUT_MS = 4000;
 const COPIED_FEEDBACK_MS = 2000;
 const COMPACT_WIDTH = 560;
-const clampZoom = (value: number) => Math.min(8, Math.max(0.25, value));
+const clampZoom = clampStudioZoom;
+
+interface CachedStudioImage {
+  version: ImageVersion;
+  dataUrl: string;
+  image: HTMLImageElement;
+  versions: ImageVersion[];
+}
 const buttonClass = 'inline-flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-35';
 const primaryClass = `${buttonClass} shrink-0 bg-accent px-3 font-medium text-white hover:bg-accent/90`;
 const floatingClass = 'pointer-events-auto border border-border bg-surface/95 shadow-popover backdrop-blur';
@@ -75,17 +91,35 @@ function composerPosition(region: ImageRegion): React.CSSProperties {
   };
 }
 
-export default function ImageEditor({ artifact, surface = ImageEditorSurface.Panel, initialOperation, initialVersionId, onClose }: {
-  artifact: Artifact; surface?: ImageEditorSurface; initialOperation?: ImageEditOperation; initialVersionId?: string; onClose?: () => void;
+export default function ImageEditor({
+  artifact,
+  surface = ImageEditorSurface.Panel,
+  initialOperation,
+  initialVersionId,
+  galleryArtifacts,
+  galleryIndex = 0,
+  onSelectGalleryArtifact,
+  onClose,
+}: {
+  artifact: Artifact;
+  surface?: ImageEditorSurface;
+  initialOperation?: ImageEditOperation;
+  initialVersionId?: string;
+  galleryArtifacts?: readonly Artifact[];
+  galleryIndex?: number;
+  onSelectGalleryArtifact?: (artifact: Artifact) => void;
+  onClose?: () => void;
 }) {
   const dispatch = useDispatch();
   const bridge = window.electron?.artifact?.imageEditing;
   const isStudio = surface === ImageEditorSurface.Studio;
+  const canNavigateGallery = isStudio && Boolean(galleryArtifacts && galleryArtifacts.length > 1 && onSelectGalleryArtifact);
   const [loaded, setLoaded] = useState<{ version: ImageVersion; dataUrl: string; image: HTMLImageElement }>();
   const loadedRef = useRef(loaded); loadedRef.current = loaded;
   const loadGeneration = useRef(0);
   const invalidateLoads = useCallback(() => { loadGeneration.current++; }, []);
   const [versions, setVersions] = useState<ImageVersion[]>([]);
+  const versionsRef = useRef(versions); versionsRef.current = versions;
   const [mode, setMode] = useState<Mode>(() => modeFor(initialOperation));
   const modeRef = useRef(mode); modeRef.current = mode;
   const [tool, setTool] = useState<ImageEditorTool>(ImageEditorTool.Pen);
@@ -98,6 +132,7 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   const [activeMark, setActiveMark] = useState<ImageMark>();
   const activeMarkRef = useRef<ImageMark>();
   const [selection, setSelection] = useState<ImageRegion>();
+  const selectionRef = useRef(selection); selectionRef.current = selection;
   const [selecting, setSelecting] = useState(false);
   const [regionText, setRegionText] = useState('');
   const [textDraft, setTextDraft] = useState<ImageMark>();
@@ -109,11 +144,17 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   const copiedTimer = useRef<number | null>(null);
   useEffect(() => () => { if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current); }, []);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(busy); busyRef.current = busy;
+  const [switching, setSwitching] = useState(false);
   const [initialFailed, setInitialFailed] = useState(false);
+  const initialFailedRef = useRef(initialFailed); initialFailedRef.current = initialFailed;
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(zoom); zoomRef.current = zoom;
   const [viewportSize, setViewportSize] = useState({ width: 500, height: 500 });
+  const viewportSizeRef = useRef(viewportSize); viewportSizeRef.current = viewportSize;
   // The floating bars' height in view mode, so the loading placeholder already sits where the canvas will.
   const [insets, setInsets] = useState({ top: 66, bottom: 66 });
+  const insetsRef = useRef(insets); insetsRef.current = insets;
   const [space, setSpace] = useState(false);
   const [compare, setCompare] = useState(false);
   const [original, setOriginal] = useState<HTMLImageElement>();
@@ -131,7 +172,17 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   const stage = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const regionInput = useRef<HTMLTextAreaElement>(null);
+  const activeThumbnailRef = useRef<HTMLButtonElement>(null);
   const drag = useRef<{ start: ImagePoint; pan?: { x: number; y: number; left: number; top: number } }>();
+  const galleryCacheRef = useRef<Map<string, CachedStudioImage>>(new Map());
+  const preloadingKeysRef = useRef<Set<string>>(new Set());
+  const pendingViewportRef = useRef<{ artifactId: string; snapshot: ImageStudioViewportSnapshot } | null>(null);
+  const pendingScrollRef = useRef<{ versionId: string; snapshot: ImageStudioViewportSnapshot } | null>(null);
+  const activeCacheKeyRef = useRef(getStudioArtifactCacheKey(artifact));
+  activeCacheKeyRef.current = getStudioArtifactCacheKey(artifact);
+  const compact = viewportSize.width < COMPACT_WIDTH;
+  const horizontalGutter = canNavigateGallery && !compact ? GALLERY_STAGE_GUTTER : STAGE_GUTTER;
+  const horizontalGutterRef = useRef(horizontalGutter); horizontalGutterRef.current = horizontalGutter;
   const key = loaded ? `${artifact.sessionId}:${loaded.version.id}` : '';
   const drawing = useSelector((state: RootState) => state.imageEditor.documents[key] ?? EMPTY_IMAGE_DOCUMENT);
   const focusRequest = useSelector((state: RootState) => state.imageEditor.focus);
@@ -143,6 +194,51 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   const [revealId, setRevealId] = useState<string>();
   const isPanMode = mode === Mode.View || mode === Mode.Resize || mode === Mode.RemoveBackground;
 
+  const cacheStudioImage = useCallback((cacheKey: string, entry: CachedStudioImage) => {
+    const cache = galleryCacheRef.current;
+    if (cache.has(cacheKey)) cache.delete(cacheKey);
+    cache.set(cacheKey, entry);
+    while (cache.size > GALLERY_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  }, []);
+
+  const applyLoadedArtifact = useCallback((
+    nextLoaded: { version: ImageVersion; dataUrl: string; image: HTMLImageElement },
+    nextVersions: ImageVersion[],
+    targetArtifactId: string,
+  ) => {
+    const pending = pendingViewportRef.current;
+    if (pending && pending.artifactId === targetArtifactId) {
+      pendingViewportRef.current = null;
+      pendingScrollRef.current = { versionId: nextLoaded.version.id, snapshot: pending.snapshot };
+      setZoom(clampZoom(pending.snapshot.zoom));
+    } else {
+      pendingScrollRef.current = null;
+      setZoom(1);
+    }
+    setLoaded(nextLoaded);
+    setVersions(nextVersions);
+    setInitialFailed(false);
+    setSwitching(false);
+    setOriginal(undefined);
+    setSelection(undefined);
+    setRegionText('');
+    setTextDraft(undefined);
+    textDraftRef.current = undefined;
+    setActiveMark(undefined);
+    activeMarkRef.current = undefined;
+    setSelecting(false);
+    setCompare(false);
+    setVersionMenu(false);
+    setError('');
+    setNotice('');
+    setBrushPoint(undefined);
+    drag.current = undefined;
+  }, []);
+
   const loadVersion = useCallback(async (version: ImageVersion) => {
     const generation = ++loadGeneration.current;
     const result = await bridge.read({ sessionId: artifact.sessionId, versionId: version.id });
@@ -150,21 +246,53 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     if (!result.success) throw new Error(result.error);
     const image = await loadEditorImage(result.data.dataUrl);
     if (generation !== loadGeneration.current) return;
-    setLoaded({ ...result.data, image });
+    const nextLoaded = { ...result.data, image };
+    setLoaded(nextLoaded);
     setZoom(1); setSelection(undefined); setTextDraft(undefined); setCompare(false); setNotice('');
-  }, [artifact.sessionId, bridge]);
+    pendingScrollRef.current = null;
+    if (isStudio) {
+      const knownVersions = versionsRef.current.some(v => v.id === result.data.version.id)
+        ? versionsRef.current
+        : [...versionsRef.current, result.data.version];
+      cacheStudioImage(activeCacheKeyRef.current, { ...nextLoaded, versions: knownVersions });
+    }
+  }, [artifact.sessionId, bridge, cacheStudioImage, isStudio]);
 
   useEffect(() => {
     if (!bridge) { setInitialFailed(true); return; }
     let alive = true;
     const generation = ++loadGeneration.current;
-    setInitialFailed(false); setLoaded(undefined); setOriginal(undefined); setVersions([]);
-    setMode(modeFor(initialOperation)); setSelection(undefined); setCompare(false); setError(''); setNotice('');
+    const cacheKey = getStudioArtifactCacheKey({
+      id: artifact.id,
+      contentVersion: artifact.contentVersion,
+      createdAt: artifact.createdAt,
+      filePath: artifact.filePath,
+    });
+    setMode(modeFor(initialOperation));
+    setSelection(undefined); setRegionText(''); setTextDraft(undefined); textDraftRef.current = undefined;
+    setActiveMark(undefined); activeMarkRef.current = undefined; setSelecting(false);
+    setCompare(false); setVersionMenu(false); setError(''); setNotice(''); setRevealId(undefined); setBrushPoint(undefined);
+    drag.current = undefined;
     // Only the studio answers focus requests, so the side panel never jumps to another version underneath it.
     const focus = isStudio ? store.getState().imageEditor.focus : undefined;
     const restoreVersion = focus?.source.sessionId === artifact.sessionId && (artifact.id === `image-edit-version-${focus.source.id}`
       || artifact.filePath === focus.source.originalPath || artifact.filePath === focus.source.filePath);
     const versionId = restoreVersion ? focus.source.id : initialVersionId;
+    if (isStudio && !versionId) {
+      const cached = galleryCacheRef.current.get(cacheKey);
+      if (cached) {
+        applyLoadedArtifact({ version: cached.version, dataUrl: cached.dataUrl, image: cached.image }, cached.versions, artifact.id);
+        const finished = store.getState().imageEditor.jobs[imageEditJobKey(artifact.sessionId, cached.version.rootId)];
+        if (finished && cached.versions.some(version => version.requestId === finished.requestId)) dispatch(endImageEditJob(finished.requestId));
+        return () => { alive = false; invalidateLoads(); };
+      }
+    }
+    const keepStageMounted = isStudio && Boolean(loadedRef.current) && !initialFailedRef.current;
+    if (keepStageMounted) {
+      setSwitching(true);
+    } else {
+      setInitialFailed(false); setLoaded(undefined); setOriginal(undefined); setVersions([]); setSwitching(false);
+    }
     const opening = versionId ? bridge.read({ sessionId: artifact.sessionId, versionId })
       : bridge.open({ sessionId: artifact.sessionId, title: artifact.title, filePath: artifact.filePath,
         dataUrl: artifact.filePath ? undefined : artifact.content });
@@ -173,21 +301,89 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
       const image = await loadEditorImage(result.data.dataUrl);
       const list = await bridge.list({ sessionId: artifact.sessionId, rootId: result.data.version.rootId });
       if (!alive || generation !== loadGeneration.current) return;
-      setLoaded({ ...result.data, image }); setVersions(list.success ? list.data : [result.data.version]);
+      const nextVersions = list.success ? list.data : [result.data.version];
+      if (isStudio && !versionId) {
+        cacheStudioImage(cacheKey, { ...result.data, image, versions: nextVersions });
+      }
+      applyLoadedArtifact({ ...result.data, image }, nextVersions, artifact.id);
       // An edit that finished while no editor was open has already added its version.
       const finished = store.getState().imageEditor.jobs[imageEditJobKey(artifact.sessionId, result.data.version.rootId)];
       if (finished && list.success && list.data.some(version => version.requestId === finished.requestId)) dispatch(endImageEditJob(finished.requestId));
-    }).catch(error => { if (alive) { setError(error.message); setInitialFailed(true); } });
+    }).catch(error => {
+      if (alive && generation === loadGeneration.current) {
+        pendingViewportRef.current = null;
+        pendingScrollRef.current = null;
+        setSwitching(false);
+        setLoaded(undefined);
+        setError(error.message);
+        setInitialFailed(true);
+      }
+    });
     return () => { alive = false; invalidateLoads(); };
   // contentVersion reopens a file refreshed in the panel or changed on disk.
-  }, [artifact.id, artifact.content, artifact.contentVersion, artifact.filePath, artifact.sessionId, artifact.title, bridge, dispatch, initialOperation, initialVersionId, invalidateLoads, isStudio]);
+  }, [applyLoadedArtifact, artifact.id, artifact.content, artifact.contentVersion, artifact.createdAt, artifact.filePath, artifact.sessionId, artifact.title, bridge, cacheStudioImage, dispatch, initialOperation, initialVersionId, invalidateLoads, isStudio]);
+
+  // Preload immediate gallery neighbors in the background so switching between images is instantaneous.
+  useEffect(() => {
+    if (!canNavigateGallery || !galleryArtifacts || !bridge || !loaded || switching) return;
+    let alive = true;
+    const neighborIndices = new Set([
+      stepImagePreviewIndex(galleryIndex, -1, galleryArtifacts.length),
+      stepImagePreviewIndex(galleryIndex, 1, galleryArtifacts.length),
+    ]);
+    neighborIndices.delete(galleryIndex);
+    neighborIndices.delete(-1);
+
+    for (const index of neighborIndices) {
+      const neighbor = galleryArtifacts[index];
+      if (!neighbor) continue;
+      const cacheKey = getStudioArtifactCacheKey(neighbor);
+      if (galleryCacheRef.current.has(cacheKey) || preloadingKeysRef.current.has(cacheKey)) continue;
+      preloadingKeysRef.current.add(cacheKey);
+      void bridge.open({
+        sessionId: neighbor.sessionId,
+        title: neighbor.title,
+        filePath: neighbor.filePath,
+        dataUrl: neighbor.filePath ? undefined : neighbor.content,
+      }).then(async result => {
+        if (!alive || !result.success) return;
+        const image = await loadEditorImage(result.data.dataUrl);
+        const list = await bridge.list({ sessionId: neighbor.sessionId, rootId: result.data.version.rootId });
+        if (!alive) return;
+        cacheStudioImage(cacheKey, {
+          ...result.data,
+          image,
+          versions: list.success ? list.data : [result.data.version],
+        });
+      }).catch(() => {
+        // Unsupported or unreadable neighbors fall back cleanly if the user navigates to them.
+      }).finally(() => {
+        preloadingKeysRef.current.delete(cacheKey);
+      });
+    }
+
+    return () => { alive = false; };
+  }, [bridge, cacheStudioImage, canNavigateGallery, galleryArtifacts, galleryIndex, loaded, switching]);
 
   useEffect(() => {
     if (!bridge) return;
     return bridge.onChanged(version => {
+      // Drop stale cached sibling entries when a background edit produces a new version for them.
+      for (const [cachedKey, cached] of galleryCacheRef.current.entries()) {
+        if (cached.version.rootId === version.rootId && cachedKey !== activeCacheKeyRef.current) {
+          galleryCacheRef.current.delete(cachedKey);
+        }
+      }
       const current = loadedRef.current;
       if (version.sessionId !== artifact.sessionId || version.rootId !== current?.version.rootId) return;
-      setVersions(values => values.some(v => v.id === version.id) ? values : [...values, version]);
+      setVersions(values => {
+        const next = values.some(v => v.id === version.id) ? values : [...values, version];
+        const activeCached = galleryCacheRef.current.get(activeCacheKeyRef.current);
+        if (activeCached && activeCached.version.rootId === version.rootId) {
+          galleryCacheRef.current.set(activeCacheKeyRef.current, { ...activeCached, versions: next });
+        }
+        return next;
+      });
       const finished = jobRef.current;
       if (!finished || version.requestId !== finished.requestId) return;
       dispatch(endImageEditJob(finished.requestId));
@@ -238,7 +434,33 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     if (top) observer.observe(top);
     observer.observe(bottom);
     return () => observer.disconnect();
-  }, [loaded?.version.id]);
+  }, [canNavigateGallery, loaded?.version.id, mode]);
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRef.current;
+    const element = viewport.current;
+    if (!pending || !loaded || pending.versionId !== loaded.version.id || !element) return;
+    const measuredTop = topBar.current?.offsetHeight ?? insets.top;
+    const measuredBottom = bottomBar.current?.offsetHeight ?? insets.bottom;
+    if (measuredTop !== insets.top || measuredBottom !== insets.bottom) return;
+    const { scrollLeft, scrollTop } = resolveStudioViewportScroll({
+      imageWidth: loaded.version.width,
+      imageHeight: loaded.version.height,
+      viewportWidth: viewportSize.width,
+      viewportHeight: viewportSize.height,
+      insetTop: insets.top,
+      insetBottom: insets.bottom,
+      horizontalGutter,
+    }, pending.snapshot);
+    element.scrollLeft = scrollLeft;
+    element.scrollTop = scrollTop;
+    pendingScrollRef.current = null;
+  }, [horizontalGutter, insets.bottom, insets.top, loaded, viewportSize.height, viewportSize.width]);
+
+  useEffect(() => {
+    if (!canNavigateGallery || mode !== Mode.View) return;
+    activeThumbnailRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [canNavigateGallery, galleryIndex, mode]);
 
   useEffect(() => {
     if (!notice) return;
@@ -293,12 +515,64 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     }
   }, [loaded, compare, original, drawing.marks, drawing.mask, activeMark, mode]);
 
+  const commit = useCallback(
+    (marks = drawingRef.current.marks, mask = drawingRef.current.mask) => dispatch(commitImageDrawing({ key, drawing: { marks, mask } })),
+    [dispatch, key],
+  );
+  const finishText = useCallback(() => {
+    const mark = textDraftRef.current;
+    if (mark?.text?.trim()) commit([...drawingRef.current.marks, mark]);
+    textDraftRef.current = undefined; setTextDraft(undefined);
+  }, [commit]);
+  const navigateGalleryTo = useCallback((targetIndex: number) => {
+    if (!canNavigateGallery || !galleryArtifacts || !onSelectGalleryArtifact || busyRef.current) return;
+    const target = galleryArtifacts[targetIndex];
+    if (!target || target.id === artifact.id) return;
+    finishText();
+    const existingPending = pendingViewportRef.current;
+    if (existingPending) {
+      pendingViewportRef.current = { artifactId: target.id, snapshot: existingPending.snapshot };
+    } else if (loadedRef.current && viewport.current) {
+      pendingViewportRef.current = {
+        artifactId: target.id,
+        snapshot: captureStudioViewportSnapshot({
+          imageWidth: loadedRef.current.version.width,
+          imageHeight: loadedRef.current.version.height,
+          viewportWidth: viewportSizeRef.current.width,
+          viewportHeight: viewportSizeRef.current.height,
+          insetTop: insetsRef.current.top,
+          insetBottom: insetsRef.current.bottom,
+          horizontalGutter: horizontalGutterRef.current,
+          zoom: zoomRef.current,
+          scrollLeft: viewport.current.scrollLeft,
+          scrollTop: viewport.current.scrollTop,
+        }),
+      };
+    }
+    onSelectGalleryArtifact(target);
+  }, [artifact.id, canNavigateGallery, finishText, galleryArtifacts, onSelectGalleryArtifact]);
+  const stepGalleryBy = useCallback((delta: number) => {
+    if (!canNavigateGallery || !galleryArtifacts) return;
+    const nextIndex = stepImagePreviewIndex(galleryIndex, delta, galleryArtifacts.length);
+    if (nextIndex >= 0 && nextIndex !== galleryIndex) navigateGalleryTo(nextIndex);
+  }, [canNavigateGallery, galleryArtifacts, galleryIndex, navigateGalleryTo]);
+  const canNavigateGalleryRef = useRef(canNavigateGallery); canNavigateGalleryRef.current = canNavigateGallery;
+  const galleryArtifactsRef = useRef(galleryArtifacts); galleryArtifactsRef.current = galleryArtifacts;
+  const galleryIndexRef = useRef(galleryIndex); galleryIndexRef.current = galleryIndex;
+  const navigateGalleryToRef = useRef(navigateGalleryTo); navigateGalleryToRef.current = navigateGalleryTo;
+
   useEffect(() => {
     const layer = escapeLayer.current;
-    if (layer) registerModalEscapeLayer(layer);
+    if (!layer) return;
+    registerModalEscapeLayer(layer);
+    return () => unregisterModalEscapeLayer(layer);
+  }, [isStudio]);
+
+  useEffect(() => {
+    const layer = escapeLayer.current;
     const down = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      const typing = /INPUT|TEXTAREA|SELECT/.test(target.tagName);
+      const typing = /INPUT|TEXTAREA|SELECT/.test(target.tagName) || target.isContentEditable;
       // The studio is modal: Escape steps back out of menus and tools first, then closes it.
       if (layer && event.key === 'Escape') {
         if (!isDismissEscapeEvent(event) || !isTopModalEscapeLayer(layer)) return;
@@ -308,6 +582,30 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
         else if (modeRef.current !== Mode.View && !jobRef.current) { setSelection(undefined); setTextDraft(undefined); setMode(Mode.View); }
         else onCloseRef.current?.();
         return;
+      }
+      if (
+        layer
+        && isTopModalEscapeLayer(layer)
+        && canNavigateStudioGalleryByKey({
+          canNavigate: canNavigateGalleryRef.current,
+          isTyping: typing,
+          isViewMode: modeRef.current === Mode.View,
+          hasVersionMenuOpen: versionMenuRef.current,
+          isBusy: busyRef.current,
+          hasActiveDraft: Boolean(textDraftRef.current || selectionRef.current),
+        })
+      ) {
+        const count = galleryArtifactsRef.current?.length ?? 0;
+        const action = resolveImagePreviewKeyAction(event, count);
+        if (action) {
+          event.preventDefault();
+          event.stopPropagation();
+          const nextIndex = applyImagePreviewKeyAction(galleryIndexRef.current, action, count);
+          if (nextIndex >= 0 && nextIndex !== galleryIndexRef.current) {
+            navigateGalleryToRef.current(nextIndex);
+          }
+          return;
+        }
       }
       if (!(layer || root.current?.contains(document.activeElement)) || typing) return;
       if (event.code === 'Space') { event.preventDefault(); setSpace(true); }
@@ -319,7 +617,6 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     const up = () => setSpace(false);
     window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', up);
     return () => {
-      if (layer) unregisterModalEscapeLayer(layer);
       window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', up);
     };
   }, [dispatch, key]);
@@ -329,12 +626,6 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     setBusy(true); setError(''); setNotice('');
     try { await action(); } catch (error) { setError(error instanceof Error ? error.message : t('imageEditFailed')); }
     finally { setBusy(false); }
-  };
-  const commit = (marks = drawingRef.current.marks, mask = drawingRef.current.mask) => dispatch(commitImageDrawing({ key, drawing: { marks, mask } }));
-  const finishText = () => {
-    const mark = textDraftRef.current;
-    if (mark?.text?.trim()) commit([...drawingRef.current.marks, mark]);
-    textDraftRef.current = undefined; setTextDraft(undefined);
   };
   /** Regions are collected here and go to the model together when the user applies the edit. */
   const setRegions = (regions: ImageRegion[]) => { dispatch(setImageRegions({ key, regions })); setSelection(undefined); setRegionText(''); };
@@ -424,12 +715,87 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   const platform = window.electron?.platform;
   const topBarClass = `pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-2 p-3 ${
     isStudio ? `draggable ${platform === 'darwin' ? MAC_TRAFFIC_LIGHT_WIDE_INSET_CLASS : ''} ${platform === 'win32' ? 'pr-[150px]' : ''}` : ''}`;
-  if (initialFailed) return <div className="flex h-full flex-col">
-    <div className={`flex items-center gap-2 px-4 py-2 ${isStudio ? 'draggable' : ''}`}><p className="flex-1 text-xs text-muted">{error || t('imageEditUnsupported')}</p>{studioClose}</div>
-    <div className="min-h-0 flex-1"><ImageRenderer artifact={artifact} /></div>
+  const galleryCounter = canNavigateGallery && galleryArtifacts && (
+    <span className="shrink-0 rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-secondary dark:bg-white/[0.08]">
+      {galleryIndex + 1} / {galleryArtifacts.length}
+    </span>
+  );
+  const galleryArrows = canNavigateGallery && galleryArtifacts && <>
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => stepGalleryBy(-1)}
+      title={t('imagePreviewPrevious')}
+      aria-label={t('imagePreviewPrevious')}
+      className={`${floatingClass} non-draggable absolute left-4 top-1/2 z-20 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full text-secondary transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-35`}
+    >
+      <ChevronLeftIcon className="h-5 w-5" />
+    </button>
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => stepGalleryBy(1)}
+      title={t('imagePreviewNext')}
+      aria-label={t('imagePreviewNext')}
+      className={`${floatingClass} non-draggable absolute right-4 top-1/2 z-20 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full text-secondary transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-35`}
+    >
+      <ChevronRightIcon className="h-5 w-5" />
+    </button>
+  </>;
+  const galleryFilmstrip = canNavigateGallery && galleryArtifacts && mode === Mode.View && !job && (
+    <div
+      role="group"
+      aria-label={t('imagePreviewThumbnails')}
+      className={`${floatingClass} non-draggable flex max-w-[min(calc(100vw-3rem),640px)] items-center gap-1.5 overflow-x-auto rounded-2xl p-1.5`}
+    >
+      {galleryArtifacts.map((item, index) => {
+        const isActive = index === galleryIndex;
+        const itemTitle = item.fileName || item.title || t('artifactImageAlt');
+        const thumbSrc = getImageArtifactDisplaySrc(item, GALLERY_THUMBNAIL_EDGE, LocalFileThumbnailFit.Cover);
+        return (
+          <button
+            key={item.id}
+            ref={isActive ? activeThumbnailRef : undefined}
+            type="button"
+            disabled={busy}
+            title={itemTitle}
+            aria-label={`${itemTitle} (${index + 1} / ${galleryArtifacts.length})`}
+            aria-current={isActive ? 'true' : undefined}
+            onClick={() => navigateGalleryTo(index)}
+            className={`h-11 w-11 shrink-0 overflow-hidden rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed ${
+              isActive
+                ? 'opacity-100 ring-2 ring-accent'
+                : 'opacity-65 ring-1 ring-border hover:opacity-100'
+            }`}
+          >
+            <img
+              src={thumbSrc}
+              alt={itemTitle}
+              draggable={false}
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+              style={CHECKERBOARD}
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+  if (initialFailed) return <div ref={root} className="relative flex h-full flex-col bg-background text-foreground">
+    <div className={`flex items-center gap-2 px-4 py-2 ${isStudio ? `draggable ${platform === 'darwin' ? MAC_TRAFFIC_LIGHT_WIDE_INSET_CLASS : ''} ${platform === 'win32' ? 'pr-[150px]' : ''}` : ''}`}>
+      {isStudio && <span className="max-w-[260px] truncate text-sm font-medium" title={artifact.title}>{artifact.title}</span>}
+      {galleryCounter}
+      <p className="min-w-0 flex-1 truncate text-xs text-muted">{error || t('imageEditUnsupported')}</p>
+      {studioClose}
+    </div>
+    <div className="relative min-h-0 flex-1">
+      <ImageRenderer artifact={artifact} />
+      {galleryArrows}
+    </div>
+    {galleryFilmstrip && <div className="flex justify-center px-3 pb-3 pt-2">{galleryFilmstrip}</div>}
   </div>;
   // The bottom bar renders while loading too, so the placeholder is laid out around its real height, mode panel included.
-  const compact = viewportSize.width < COMPACT_WIDTH;
   const isEraser = mode === Mode.Markup && tool === ImageEditorTool.Eraser;
   const isText = mode === Mode.Markup && tool === ImageEditorTool.Text;
   const brushValue = mode === Mode.Erase ? maskBrush : isEraser ? eraserBrush : brush;
@@ -516,6 +882,7 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   // Keyed alike in both renders below, so finishing the load keeps the bar's elements and does not replay its panel's entry animation.
   const bottomBarElement = <div key="bottom-bar" ref={bottomBar} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 px-3 pb-3 pt-2">
     {modePanel}
+    {galleryFilmstrip}
     <div role="toolbar" aria-label={t('imageEditTools')} className={`${floatingClass} flex max-w-full items-center gap-0.5 overflow-x-auto rounded-2xl p-1`}>
       {tools.map(([value, Icon, label], index) => <React.Fragment key={value}>
         {index === 1 && <span className={dividerClass} />}
@@ -532,7 +899,7 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   // The placeholder is laid out like the stage and shown at full strength, so the canvas takes its place without moving.
   if (!loaded) return <div ref={root} className={rootClass} aria-label={t('imageEditTitle')}>
     <div key="viewport" ref={viewport} className={viewportClass}>
-      {isStudio && fallbackSrc && <div className="absolute inset-0" style={{ padding: `${insets.top}px ${STAGE_GUTTER}px ${insets.bottom}px` }}>
+      {isStudio && fallbackSrc && <div className="absolute inset-0" style={{ padding: `${insets.top}px ${horizontalGutter}px ${insets.bottom}px` }}>
         <div className="relative h-full w-full">
           <img src={fallbackSrc} alt="" draggable={false} className={`absolute inset-0 m-auto max-h-full max-w-full ${imageFrameClass}`} style={CHECKERBOARD} />
         </div>
@@ -542,12 +909,21 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     <span className={`text-sm text-muted ${isStudio ? 'absolute left-1/2 top-16 -translate-x-1/2 animate-[fade-in_0.2s_ease-out_0.3s_both] rounded-full border border-border bg-surface/95 px-3 py-1.5 text-xs shadow-popover'
       : 'pointer-events-none absolute inset-0 flex items-center justify-center'}`}>{t('imageEditLoading')}</span>
     {studioClose && <div className={topBarClass}><div className="ml-auto rounded-xl border border-transparent p-1">{studioClose}</div></div>}
+    {galleryArrows}
     {bottomBarElement}
   </div>;
   const size = loaded.version;
-  const fit = Math.min((viewportSize.width - STAGE_GUTTER * 2) / size.width, (viewportSize.height - insets.top - insets.bottom) / size.height, 1);
-  const displayWidth = Math.max(1, size.width * Math.max(0.01, fit) * zoom);
-  const displayHeight = Math.max(1, size.height * Math.max(0.01, fit) * zoom);
+  const stageGeometry = computeStudioStageGeometry({
+    imageWidth: size.width,
+    imageHeight: size.height,
+    viewportWidth: viewportSize.width,
+    viewportHeight: viewportSize.height,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    horizontalGutter,
+    zoom,
+  });
+  const { fit, displayWidth, displayHeight, innerWidth, innerHeight } = stageGeometry;
   const eraseCursor = (mode === Mode.Erase || isEraser) && !space && !compare && !busy && !job;
   const working = !!job && job.sourceId === size.id && jobStatus?.phase !== ImageEditJobPhase.Failed;
   const brushDiameter = brushValue / 1000 * Math.max(displayWidth, displayHeight);
@@ -577,8 +953,7 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   return <div ref={root} className={rootClass} aria-label={t('imageEditTitle')}>
     <div key="viewport" ref={viewport} onScroll={() => setBrushPoint(undefined)}
       className={viewportClass}>
-      <div className="flex min-h-full min-w-full" style={{ width: Math.max(viewportSize.width, displayWidth + STAGE_GUTTER * 2),
-        height: Math.max(viewportSize.height, displayHeight + insets.top + insets.bottom), padding: `${insets.top}px ${STAGE_GUTTER}px ${insets.bottom}px` }}>
+      <div className="flex min-h-full min-w-full" style={{ width: innerWidth, height: innerHeight, padding: `${insets.top}px ${horizontalGutter}px ${insets.bottom}px` }}>
         <div ref={stage} tabIndex={0} role="img" aria-label={size.title} onPointerDown={pointerDown} onPointerMove={pointerMove}
           onPointerUp={pointerUp} onPointerCancel={pointerUp}
           onPointerEnter={previewBrush} onPointerLeave={() => setBrushPoint(undefined)}
@@ -627,7 +1002,7 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
     </div>
     <div ref={topBar} className={`${topBarClass} animate-fade-in`}>
       <div ref={versionPicker} className={`${floatingClass} non-draggable relative flex min-w-0 items-center gap-1 rounded-xl p-1`}>
-        {isStudio && <><span className="max-w-[260px] truncate pl-2 pr-1 text-sm font-medium" title={artifact.title}>{artifact.title}</span><span className={dividerClass} /></>}
+        {isStudio && <><span className="max-w-[260px] truncate pl-2 pr-1 text-sm font-medium" title={artifact.title}>{artifact.title}</span>{galleryCounter}<span className={dividerClass} /></>}
         {/* Anchor the menu to the trigger, not the pill, so it opens right under the select even when the title sits to its left. */}
         <div className="relative flex min-w-0">
           <button type="button" aria-haspopup="listbox" aria-expanded={versionMenu} title={t('imageStudioVersions')} disabled={busy && !versionMenu}
@@ -696,6 +1071,8 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
         {error && <button type="button" aria-label={t('close')} title={t('close')} onClick={() => setError('')} className="-mr-1 shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10"><XMarkIcon className="h-3.5 w-3.5" /></button>}
       </div>
     </div>}
+    {switching && !busy && !error && <span className="pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2 animate-[fade-in_0.2s_ease-out_0.3s_both] rounded-full border border-border bg-surface/95 px-3 py-1.5 text-xs text-muted shadow-popover">{t('imageEditLoading')}</span>}
+    {galleryArrows}
     {bottomBarElement}
   </div>;
 }

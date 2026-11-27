@@ -12,6 +12,7 @@ import {
   DshHostIpc,
   DshPluginApplicationStatus,
   DshPluginAvailability,
+  DshPluginPanelKind,
   DshPluginSurface,
   DshPluginUpdateKind,
   DshPluginUpdateOutcomeKind,
@@ -745,6 +746,7 @@ describe('classifyBundleSurface & buildEnrichedPluginEntries', () => {
     `;
     expect(extractPanelMetadataFromClientSource(mediaDeskClient)).toEqual({
       panelId: 'media-desk',
+      panelKind: DshPluginPanelKind.Main,
       panelLabel: { en: '自媒体工作台', zh: '自媒体工作台' },
     });
 
@@ -755,6 +757,7 @@ describe('classifyBundleSurface & buildEnrichedPluginEntries', () => {
     `;
     expect(extractPanelMetadataFromClientSource(i18nClient)).toEqual({
       panelId: 'forge-board',
+      panelKind: DshPluginPanelKind.Main,
     });
 
     // tsdown / rolldown / oxc minified bundle using backtick template literals (e.g. dsh-context).
@@ -762,9 +765,50 @@ describe('classifyBundleSurface & buildEnrichedPluginEntries', () => {
       'let Xd=`dsh-context`;function Zd(e,t,n,r,i){return[e.slots.inject(`main`,()=>e.slots.register({name:`main`,key:Xd,locale:i},n)),e.slots.inject(`sidebar.panellist`,()=>e.slots.register({name:`sidebar.panellist`,id:Xd,order:20,label:()=>r(`ov.title`),locale:i},w))]}';
     expect(extractPanelMetadataFromClientSource(tsdownBacktickClient)).toEqual({
       panelId: 'dsh-context',
+      panelKind: DshPluginPanelKind.Main,
     });
 
-    // Non-panel client plugin (no main or sidebar.panellist slot) yields empty metadata.
+    // settings.section plugin (e.g. dsh-pocket): detects section id, marks SettingsSection,
+    // and skips single-word translator keys like translate("section").
+    const pocketClient = `
+      ctx.slots.inject(
+        "settings.section",
+        () => ctx.slots.register(
+          {
+            name: "settings.section",
+            id: "pocket",
+            order: 1,
+            label: () => translate("section"),
+            inject: () => ({ rpcCall, t: translate })
+          },
+          PocketSettingsTab
+        )
+      );
+    `;
+    expect(extractPanelMetadataFromClientSource(pocketClient, 'dsh-pocket')).toEqual({
+      panelId: 'pocket',
+      panelKind: DshPluginPanelKind.SettingsSection,
+    });
+
+    // settings.section plugin with direct localized label retains panelLabel.
+    const labeledSettingsClient = `
+      ctx.slots.inject('settings.section', () =>
+        ctx.slots.register({ id: 'remote-sync', name: 'settings.section', label: () => '远程同步' }, Tab)
+      );
+    `;
+    expect(extractPanelMetadataFromClientSource(labeledSettingsClient)).toEqual({
+      panelId: 'remote-sync',
+      panelKind: DshPluginPanelKind.SettingsSection,
+      panelLabel: { en: '远程同步', zh: '远程同步' },
+    });
+
+    // Built-in reserved settings.section ids are never misclassified as plugin panels.
+    const reservedSettingsClient = `
+      ctx.slots.register({ name: 'settings.section', id: 'general' }, GeneralPatch);
+    `;
+    expect(extractPanelMetadataFromClientSource(reservedSettingsClient, 'custom-patch')).toEqual({});
+
+    // Non-panel client plugin (no main, sidebar.panellist, or settings.section slot) yields empty metadata.
     const widgetOnly = `ctx.slots.register({ name: 'sidebar.footer.action', id: 'badge' }, Badge);`;
     expect(extractPanelMetadataFromClientSource(widgetOnly, 'widget-row')).toEqual({});
   });
@@ -818,7 +862,61 @@ describe('classifyBundleSurface & buildEnrichedPluginEntries', () => {
       hasWebClient: true,
       isThemePlugin: false,
       panelId: 'media-desk',
+      panelKind: DshPluginPanelKind.Main,
       panelLabel: { en: '自媒体工作台', zh: '自媒体工作台' },
+    });
+  });
+
+  test('classifies dsh-pocket settings.section dual-face plugin as Hybrid with SettingsSection panel metadata', () => {
+    const profileDir = createTempDir();
+    const pkgDir = path.join(profileDir, 'node_modules', 'dsh-pocket');
+    fs.mkdirSync(path.join(pkgDir, 'lib'), { recursive: true });
+    fs.mkdirSync(path.join(pkgDir, 'client'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, 'package.json'),
+      JSON.stringify({
+        name: 'dsh-pocket',
+        main: 'lib/index.js',
+        exports: {
+          '.': { default: './lib/index.js' },
+          './client': './client/client.js',
+        },
+        dsh: {
+          bundle: { patch: './cordis.patch.yml' },
+          client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-slots'] },
+        },
+      }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, 'cordis.patch.yml'),
+      '- insert:\n    - id: dsh-pocket\n      name: dsh-pocket\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, 'lib', 'index.js'),
+      'const inject = ["connection", "webServer"]; export function apply(ctx) {}',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, 'client', 'client.js'),
+      'ctx.slots.inject("settings.section", () => ctx.slots.register({ name: "settings.section", id: "pocket", order: 1, label: () => translate("section") }, Tab));',
+      'utf8',
+    );
+
+    expect(
+      classifyBundleSurface({
+        name: 'dsh-pocket',
+        rows: [{ rowId: 'dsh-pocket', moduleName: 'dsh-pocket' }],
+        profileDir,
+      }),
+    ).toEqual({
+      surface: DshPluginSurface.Hybrid,
+      hasHostCapability: true,
+      hasWebClient: true,
+      isThemePlugin: false,
+      panelId: 'pocket',
+      panelKind: DshPluginPanelKind.SettingsSection,
     });
   });
 

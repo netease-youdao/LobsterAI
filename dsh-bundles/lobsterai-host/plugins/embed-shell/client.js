@@ -7,6 +7,14 @@ window.__ModuleLoader__.load({
     const EMBED_STORAGE_KEY = 'lobsterai:dsh-embed-state';
     const STYLE_ELEMENT_ID = 'lobsterai-dsh-embed-shell-style';
     const FALLBACK_READY_TIMEOUT_MS = 4000;
+    const PANEL_KIND_MAIN = 'main';
+    const PANEL_KIND_SETTINGS_SECTION = 'settings-section';
+
+    function normalizePanelKind(value) {
+      return String(value || '').trim().toLowerCase() === PANEL_KIND_SETTINGS_SECTION
+        ? PANEL_KIND_SETTINGS_SECTION
+        : PANEL_KIND_MAIN;
+    }
 
     function parseEmbedParamsFromHash(rawHash) {
       const cleaned = typeof rawHash === 'string' ? rawHash.replace(/^#/, '') : '';
@@ -19,12 +27,13 @@ window.__ModuleLoader__.load({
         } catch {
           // Ignore storage errors in restricted contexts.
         }
-        return { active: false, panel: '', theme: '', lang: '' };
+        return { active: false, panel: '', panelKind: PANEL_KIND_MAIN, theme: '', lang: '' };
       }
       if (flag === '1' || flag === 'true') {
         const state = {
           active: true,
           panel: (params.get('panel') || '').trim(),
+          panelKind: normalizePanelKind(params.get('panelKind')),
           theme: (params.get('theme') || '').trim().toLowerCase(),
           lang: (params.get('lang') || '').trim().toLowerCase(),
         };
@@ -52,6 +61,7 @@ window.__ModuleLoader__.load({
           return {
             active: true,
             panel: typeof parsed.panel === 'string' ? parsed.panel : '',
+            panelKind: normalizePanelKind(parsed.panelKind),
             theme: typeof parsed.theme === 'string' ? parsed.theme : '',
             lang: typeof parsed.lang === 'string' ? parsed.lang : '',
           };
@@ -97,6 +107,54 @@ html[data-lobster-embed="true"] [data-global-panel] {
 html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) {
   opacity: 0 !important;
 }
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"] :has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"][data-lobster-embed-ready="false"] body > :has(> [data-shortcut-modal="settings"]) {
+  opacity: 0 !important;
+}
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"] body > :has(> [data-shortcut-modal="settings"]) {
+  position: fixed !important;
+  inset: 0 !important;
+  align-items: stretch !important;
+  justify-content: stretch !important;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, transparent)) !important;
+}
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"] body > :has(> [data-shortcut-modal="settings"]) > :not([data-shortcut-modal="settings"]) {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"] [data-shortcut-modal="settings"] {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100% !important;
+  max-height: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, transparent)) !important;
+}
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"] [data-shortcut-modal="settings"] > :not(:last-child) {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+html[data-lobster-embed="true"][data-lobster-embed-mode="settings"] [data-shortcut-modal="settings"] > :last-child {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 24px !important;
+  overflow-y: auto !important;
+}
 `;
 
     function installEmbedStyles() {
@@ -112,11 +170,20 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
       return () => {
         delete document.documentElement.dataset.lobsterEmbed;
         delete document.documentElement.dataset.lobsterEmbedReady;
+        delete document.documentElement.dataset.lobsterEmbedMode;
         const existing = document.getElementById(STYLE_ELEMENT_ID);
         if (existing && existing.parentNode) {
           existing.parentNode.removeChild(existing);
         }
       };
+    }
+
+    function syncEmbedModeAttribute(currentState) {
+      if (typeof document === 'undefined') return;
+      document.documentElement.dataset.lobsterEmbedMode =
+        currentState && currentState.panelKind === PANEL_KIND_SETTINGS_SECTION
+          ? 'settings'
+          : 'main';
     }
 
     function normalizePanelKey(value) {
@@ -127,12 +194,18 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
         .replace(/^dsh-/, '');
     }
 
+    function readSlotEntries(ctx, slotName) {
+      if (!ctx || !ctx.slots) return [];
+      const entries = typeof ctx.slots.entriesOfSlot === 'function'
+        ? ctx.slots.entriesOfSlot(slotName)
+        : (typeof ctx.slots.entries === 'function' ? ctx.slots.entries(slotName) : []);
+      return Array.isArray(entries) ? entries : [];
+    }
+
     function findMatchingMainPanelKey(ctx, targetPanelId) {
       if (!targetPanelId || !ctx.slots) return null;
-      const entries = typeof ctx.slots.entries === 'function'
-        ? ctx.slots.entries('main')
-        : (typeof ctx.slots.entriesOfSlot === 'function' ? ctx.slots.entriesOfSlot('main') : []);
-      if (!Array.isArray(entries) || entries.length === 0) return null;
+      const entries = readSlotEntries(ctx, 'main');
+      if (entries.length === 0) return null;
 
       const keys = entries
         .map((entry) => entry && entry.options && entry.options.key)
@@ -146,6 +219,45 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
       return fuzzy || null;
     }
 
+    function findMatchingSettingsSectionId(ctx, targetSectionId) {
+      if (!targetSectionId || !ctx.slots) return null;
+      const entries = readSlotEntries(ctx, 'settings.section');
+      if (entries.length === 0) return null;
+
+      const ids = entries
+        .map((entry) => entry && entry.options && entry.options.id)
+        .filter((id) => typeof id === 'string' && id.length > 0);
+
+      if (ids.includes(targetSectionId)) {
+        return targetSectionId;
+      }
+      const normalizedTarget = normalizePanelKey(targetSectionId);
+      const fuzzy = ids.find((id) => normalizePanelKey(id) === normalizedTarget);
+      return fuzzy || null;
+    }
+
+    function resolveSettingsShellStore(ctx) {
+      const entries = readSlotEntries(ctx, 'sidebar.settings');
+      for (const entry of entries) {
+        const handle = entry && entry.store;
+        if (!handle || typeof handle.create !== 'function') continue;
+        try {
+          const instance = handle.create();
+          if (
+            instance
+            && instance.actions
+            && typeof instance.actions.openSection === 'function'
+            && typeof instance.actions.close === 'function'
+          ) {
+            return instance;
+          }
+        } catch {
+          // Try next registration if present.
+        }
+      }
+      return null;
+    }
+
     exports.inject = ['slots', 'layout'];
 
     exports.apply = function apply(ctx) {
@@ -157,8 +269,12 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
       let readyTimer = null;
       let themeService = null;
       let localeService = null;
+      let guardedSettingsStore = null;
+      let unsubscribeSettingsStore = null;
+      let reopeningSettings = false;
 
       const removeStyles = installEmbedStyles();
+      syncEmbedModeAttribute(state);
       document.documentElement.dataset.lobsterEmbedReady = state.panel ? 'false' : 'true';
 
       const syncThemeAndLocale = (currentState) => {
@@ -203,11 +319,86 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
         }, FALLBACK_READY_TIMEOUT_MS);
       };
 
+      const detachSettingsGuard = () => {
+        if (typeof unsubscribeSettingsStore === 'function') {
+          try {
+            unsubscribeSettingsStore();
+          } catch {
+            // Ignore cleanup errors.
+          }
+        }
+        unsubscribeSettingsStore = null;
+        guardedSettingsStore = null;
+      };
+
+      const closeSettingsShellIfOpen = () => {
+        detachSettingsGuard();
+        const settingsStore = resolveSettingsShellStore(ctx);
+        if (!settingsStore) return;
+        try {
+          const snap = typeof settingsStore.getSnapshot === 'function' ? settingsStore.getSnapshot() : null;
+          if (!snap || snap.open) {
+            settingsStore.actions.close();
+          }
+        } catch {
+          // Best-effort close when leaving settings-section embed mode.
+        }
+      };
+
+      const ensureSettingsSectionOpen = (settingsStore, sectionId) => {
+        if (reopeningSettings) return;
+        try {
+          const snap = typeof settingsStore.getSnapshot === 'function' ? settingsStore.getSnapshot() : null;
+          if (!snap || !snap.open || snap.activeId !== sectionId) {
+            reopeningSettings = true;
+            try {
+              settingsStore.actions.openSection(sectionId);
+            } finally {
+              reopeningSettings = false;
+            }
+          }
+        } catch {
+          reopeningSettings = false;
+        }
+      };
+
+      const attachSettingsGuard = (settingsStore) => {
+        if (guardedSettingsStore === settingsStore && typeof unsubscribeSettingsStore === 'function') {
+          return;
+        }
+        detachSettingsGuard();
+        guardedSettingsStore = settingsStore;
+        if (typeof settingsStore.subscribe === 'function') {
+          unsubscribeSettingsStore = settingsStore.subscribe(() => {
+            if (!state || state.panelKind !== PANEL_KIND_SETTINGS_SECTION || !state.panel) return;
+            const currentMatched = findMatchingSettingsSectionId(ctx, state.panel);
+            if (!currentMatched) return;
+            ensureSettingsSectionOpen(settingsStore, currentMatched);
+          });
+        }
+      };
+
       const trySelectTargetPanel = () => {
+        syncEmbedModeAttribute(state);
         if (!state || !state.panel) {
+          closeSettingsShellIfOpen();
           markReady();
           return true;
         }
+        if (state.panelKind === PANEL_KIND_SETTINGS_SECTION) {
+          const matchedSectionId = findMatchingSettingsSectionId(ctx, state.panel);
+          const settingsStore = resolveSettingsShellStore(ctx);
+          if (!matchedSectionId || !settingsStore) return false;
+          try {
+            attachSettingsGuard(settingsStore);
+            ensureSettingsSectionOpen(settingsStore, matchedSectionId);
+            markReady();
+            return true;
+          } catch {
+            return false;
+          }
+        }
+        closeSettingsShellIfOpen();
         const matchedKey = findMatchingMainPanelKey(ctx, state.panel);
         if (!matchedKey) return false;
         try {
@@ -243,10 +434,12 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
       const handleHashChange = () => {
         const next = readEmbedState();
         if (!next) return;
-        const panelChanged = !state || next.panel !== state.panel;
+        const targetChanged =
+          !state || next.panel !== state.panel || next.panelKind !== state.panelKind;
         state = next;
+        syncEmbedModeAttribute(state);
         syncThemeAndLocale(state);
-        if (panelChanged && state.panel) {
+        if (targetChanged && state.panel) {
           const alreadyMatched = trySelectTargetPanel();
           if (!alreadyMatched) {
             document.documentElement.dataset.lobsterEmbedReady = 'false';
@@ -264,6 +457,12 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
         const offSidebar = ctx.slots.subscribe('sidebar.panellist', () => {
           trySelectTargetPanel();
         });
+        const offSidebarSettings = ctx.slots.subscribe('sidebar.settings', () => {
+          trySelectTargetPanel();
+        });
+        const offSettingsSection = ctx.slots.subscribe('settings.section', () => {
+          trySelectTargetPanel();
+        });
         window.addEventListener('hashchange', handleHashChange);
 
         if (!trySelectTargetPanel()) {
@@ -275,7 +474,10 @@ html[data-lobster-embed="true"][data-lobster-embed-ready="false"] :has(> [data-r
             window.clearTimeout(readyTimer);
             readyTimer = null;
           }
+          detachSettingsGuard();
           window.removeEventListener('hashchange', handleHashChange);
+          offSettingsSection();
+          offSidebarSettings();
           offSidebar();
           offMain();
           removeStyles();

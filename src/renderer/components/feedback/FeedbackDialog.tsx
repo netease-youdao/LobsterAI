@@ -1,10 +1,10 @@
 import { ArrowPathIcon, CheckCircleIcon, PhotoIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { FEEDBACK_IMAGE_TYPES, FEEDBACK_LIMITS, FEEDBACK_PRIVACY_URL, FeedbackCategory, FeedbackError } from '../../../shared/feedback/constants';
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
-import ImagePreviewModal from '../cowork/ImagePreviewModal';
+import ImagePreviewModal, { type ImagePreviewSource } from '../cowork/ImagePreviewModal';
 import { getFeedbackImagePreviewUrl } from './feedbackImagePreview';
 
 type SelectedImage = { id: string; file: File; url: string };
@@ -26,7 +26,7 @@ export default function FeedbackDialog({ onClose }: { onClose: () => void }) {
   const [category, setCategory] = useState<FeedbackCategory>(FeedbackCategory.Issue);
   const [content, setContent] = useState('');
   const [images, setImages] = useState<SelectedImage[]>([]);
-  const [previewImage, setPreviewImage] = useState<SelectedImage | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [includeLogs, setIncludeLogs] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +39,17 @@ export default function FeedbackDialog({ onClose }: { onClose: () => void }) {
   const dialog = useRef<HTMLElement>(null);
   const imageRef = useRef(images);
   imageRef.current = images;
-  const previewUrl = previewImage ? getFeedbackImagePreviewUrl(previewImage.url) : undefined;
+  const { previewSources, previewIndexByImageId } = useMemo(() => {
+    const sources: ImagePreviewSource[] = [];
+    const indexById = new Map<string, number>();
+    for (const image of images) {
+      const src = getFeedbackImagePreviewUrl(image.url);
+      if (!src) continue;
+      indexById.set(image.id, sources.length);
+      sources.push({ src, name: image.file.name, alt: image.file.name });
+    }
+    return { previewSources: sources, previewIndexByImageId: indexById };
+  }, [images]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -142,14 +152,22 @@ export default function FeedbackDialog({ onClose }: { onClose: () => void }) {
                 placeholder={t(category === FeedbackCategory.AiReport ? 'feedbackReportPlaceholder' : 'feedbackPlaceholder')}
                 className="block min-h-[148px] w-full resize-none rounded-t-xl bg-transparent px-3.5 pb-2 pt-3 text-[13px] leading-5 text-foreground placeholder:text-muted focus:outline-none disabled:opacity-60" />
               {images.length > 0 && <div className="flex flex-wrap gap-2 px-3.5 pb-2">
-                {images.map(image => <div key={image.id} className="relative h-14 w-14 rounded-lg border border-border">
+                {images.map((image) => <div key={image.id} className="relative h-14 w-14 rounded-lg border border-border">
                   <button type="button" disabled={submitting} aria-label={`${t('feedbackPreviewImage')} ${image.file.name}`} title={t('feedbackPreviewImage')}
-                    onClick={() => setPreviewImage(image)}
+                    onClick={() => {
+                      const nextIndex = previewIndexByImageId.get(image.id);
+                      if (nextIndex !== undefined) setPreviewIndex(nextIndex);
+                    }}
                     className="h-full w-full cursor-zoom-in overflow-hidden rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 disabled:cursor-default">
                     <img src={getFeedbackImagePreviewUrl(image.url)} alt={image.file.name} className="h-full w-full object-cover" />
                   </button>
                   <button type="button" disabled={submitting} aria-label={`${t('feedbackRemoveImage')} ${image.file.name}`}
-                    onClick={() => { changed(); URL.revokeObjectURL(image.url); setImages(current => current.filter(item => item.id !== image.id)); }}
+                    onClick={() => {
+                      changed();
+                      setPreviewIndex(null);
+                      URL.revokeObjectURL(image.url);
+                      setImages(current => current.filter(item => item.id !== image.id));
+                    }}
                     className="absolute -right-1.5 -top-1.5 rounded-full bg-foreground/80 p-0.5 text-background transition-colors hover:bg-foreground"><XMarkIcon className="h-3 w-3" /></button>
                 </div>)}
               </div>}
@@ -191,7 +209,12 @@ export default function FeedbackDialog({ onClose }: { onClose: () => void }) {
           </>
         )}
       </section>
-      <ImagePreviewModal image={previewImage && previewUrl ? { src: previewUrl, name: previewImage.file.name } : null} onClose={() => setPreviewImage(null)} />
+      <ImagePreviewModal
+        images={previewSources}
+        currentIndex={previewIndex}
+        onIndexChange={setPreviewIndex}
+        onClose={() => setPreviewIndex(null)}
+      />
     </Modal>
   );
 }

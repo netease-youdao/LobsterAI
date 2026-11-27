@@ -7,8 +7,8 @@ export interface ImageEditorDrawing { marks: ImageMark[]; mask: ImageMark[] }
 export interface ImageEditorDocument extends ImageEditorDrawing { past: ImageEditorDrawing[]; future: ImageEditorDrawing[]; regions: ImageRegion[] }
 export const EMPTY_IMAGE_DOCUMENT: ImageEditorDocument = { marks: [], mask: [], past: [], future: [], regions: [] };
 interface ImageEditorFocus { id: string; source: ImageVersion; regionId?: string; operation?: ImageEditOperation }
-/** The full-screen studio; `operation` picks the tool it opens with and `versionId` the version it shows first. */
-export interface ImageStudioRequest { artifact: Artifact; operation?: ImageEditOperation; versionId?: string }
+/** The full-screen studio; `operation` picks the tool it opens with, `versionId` the version, and `artifacts` the sibling gallery. */
+export interface ImageStudioRequest { artifact: Artifact; operation?: ImageEditOperation; versionId?: string; artifacts?: Artifact[] }
 /** An edit sent to the conversation. One per image, so every editor of that image shows it until the new version arrives. */
 export interface ImageEditJob {
   requestId: string; sessionId: string; rootId: string; sourceId: string; operation: ImageEditOperation; regionCount: number; startedAt: number;
@@ -20,6 +20,10 @@ const initialState: { documents: Record<string, ImageEditorDocument>; jobs: Reco
 };
 const imageEditorSlice = createSlice({ name: 'imageEditor', initialState, reducers: {
   openImageStudio(state, action: PayloadAction<ImageStudioRequest>) { state.studio = action.payload; },
+  selectImageStudioArtifact(state, action: PayloadAction<Artifact>) {
+    if (!state.studio || state.studio.artifact.id === action.payload.id) return;
+    state.studio = { artifact: action.payload, artifacts: state.studio.artifacts };
+  },
   closeImageStudio(state) { state.studio = undefined; },
   requestImageEditorFocus(state, action: PayloadAction<ImageEditorFocus>) { state.focus = action.payload; },
   consumeImageEditorFocus(state, action: PayloadAction<string>) {
@@ -61,5 +65,5 @@ const imageEditorSlice = createSlice({ name: 'imageEditor', initialState, reduce
   },
 } });
 export const { commitImageDrawing, undoImageDrawing, redoImageDrawing, setImageRegions, requestImageEditorFocus, consumeImageEditorFocus,
-  openImageStudio, closeImageStudio, startImageEditJob, markImageEditJobRunning, endImageEditJob } = imageEditorSlice.actions;
+  openImageStudio, selectImageStudioArtifact, closeImageStudio, startImageEditJob, markImageEditJobRunning, endImageEditJob } = imageEditorSlice.actions;
 export default imageEditorSlice.reducer;

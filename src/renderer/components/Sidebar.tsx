@@ -50,6 +50,7 @@ import {
 } from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
 import {
+  getDshPluginPanelKey,
   getSidebarPluginPanels,
   partitionSidebarPluginPanels,
   type SidebarPluginPanelItem,
@@ -82,7 +83,7 @@ interface SidebarProps {
   onShowConnectors: () => void;
   onShowExperts: () => void;
   onShowLibrary: () => void;
-  activePluginPanelId?: string | null;
+  activePluginPanelKey?: string | null;
   onSelectPluginPanel?: (plugin: DshEmbeddedPluginTarget) => void;
   onNewChat: () => void;
   isCollapsed: boolean;
@@ -214,7 +215,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowConnectors,
   onShowExperts,
   onShowLibrary,
-  activePluginPanelId,
+  activePluginPanelKey,
   onSelectPluginPanel,
   onNewChat,
   isCollapsed,
@@ -412,6 +413,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     onSelectPluginPanel?.({
       name: panel.name,
       panelId: panel.panelId,
+      ...(panel.panelKind ? { panelKind: panel.panelKind } : {}),
       title: panel.title,
       ...(panel.icon ? { icon: panel.icon } : {}),
     });
@@ -890,11 +892,12 @@ const Sidebar: React.FC<SidebarProps> = ({
             <span className="min-w-0 truncate">{i18nService.t('librarySidebarTitle')}</span>
           </button>
           {visiblePluginPanels.map((panel) => {
+            const panelKey = getDshPluginPanelKey(panel);
             const isPanelActive =
-              activeView === MainView.PluginPanel && activePluginPanelId === panel.panelId;
+              activeView === MainView.PluginPanel && activePluginPanelKey === panelKey;
             return (
               <button
-                key={panel.panelId}
+                key={panelKey}
                 type="button"
                 title={panel.title}
                 onClick={() => handleSelectPluginPanel(panel)}
@@ -920,7 +923,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             <SidebarPluginOverflowMenu
               panels={overflowPluginPanels}
               activeView={activeView}
-              activePluginPanelId={activePluginPanelId}
+              activePluginPanelKey={activePluginPanelKey}
               isCollapsed={isCollapsed}
               className={sidebarNavItemClassName}
               activeClassName={activeSidebarNavItemClassName}

@@ -837,7 +837,7 @@ export const DshPluginEcosystemView: React.FC = () => {
                                       {t('dshPluginsSidebarOverflowBadge')}
                                     </span>
                                   )}
-                                  {isHybrid && (
+                                  {isHybrid && Boolean(plugin.panelId) && (
                                     <span
                                       title={t('dshPluginsHybridTooltip')}
                                       className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
@@ -900,6 +900,7 @@ export const DshPluginEcosystemView: React.FC = () => {
                                         dispatchOpenEmbeddedPlugin({
                                           name: plugin.name,
                                           panelId: plugin.panelId!,
+                                          ...(plugin.panelKind ? { panelKind: plugin.panelKind } : {}),
                                           title,
                                           ...(plugin.icon ? { icon: plugin.icon } : {}),
                                         });
