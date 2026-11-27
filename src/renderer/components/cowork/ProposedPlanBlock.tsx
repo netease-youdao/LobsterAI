@@ -21,7 +21,7 @@ import { MessageActionButton, MessageCopyButton } from './MessageActionButton';
 interface ProposedPlanBlockProps {
   content: string;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
-  onImageClick: (image: ImagePreviewSource) => void;
+  onImageClick: (image: ImagePreviewSource, element?: HTMLImageElement) => void;
   showConfirmationActions?: boolean;
   onConfirmExecution?: () => void;
   onAdjustPlan?: () => void;

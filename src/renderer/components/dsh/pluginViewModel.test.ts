@@ -4,6 +4,7 @@ import {
   DSH_BASE_BUNDLE_NAME,
   DSH_HOST_BUNDLE_NAME,
   DshHostPhase,
+  DshPluginPanelKind,
   DshPluginSurface,
 } from '../../../shared/dshEngine/hostConstants';
 import { type DshPluginEntry, sanitizeDshPluginOrder } from '../../services/dshHost';
@@ -12,6 +13,7 @@ import {
   buildDshEmbeddedPluginUrl,
   formatPluginVersion,
   formatRegistryDisplayName,
+  getDshPluginPanelKey,
   getSidebarPluginPanels,
   isHostPhaseHealthy,
   isWebOnlyOrThemeInspection,
@@ -308,12 +310,30 @@ describe('pluginViewModel', () => {
     ).toBe('lobster-embed=1&panel=media-desk&theme=dark&lang=zh');
 
     expect(
+      buildDshEmbeddedPluginHash({
+        panelId: 'pocket',
+        panelKind: DshPluginPanelKind.SettingsSection,
+        theme: 'light',
+        language: 'zh',
+      }),
+    ).toBe('lobster-embed=1&panel=pocket&panelKind=settings-section&theme=light&lang=zh');
+
+    expect(
       buildDshEmbeddedPluginUrl('http://127.0.0.1:4321/?token=abc123', {
         panelId: 'media-desk',
         theme: 'light',
         language: 'en',
       }),
     ).toBe('http://127.0.0.1:4321/?token=abc123#lobster-embed=1&panel=media-desk&theme=light&lang=en');
+
+    expect(
+      buildDshEmbeddedPluginUrl('http://127.0.0.1:4321/?token=abc123', {
+        panelId: 'pocket',
+        panelKind: DshPluginPanelKind.SettingsSection,
+        theme: 'dark',
+        language: 'zh',
+      }),
+    ).toBe('http://127.0.0.1:4321/?token=abc123#lobster-embed=1&panel=pocket&panelKind=settings-section&theme=dark&lang=zh');
 
     expect(
       buildDshEmbeddedPluginUrl('http://127.0.0.1:4321/?token=abc123#old', {
@@ -323,5 +343,54 @@ describe('pluginViewModel', () => {
         stripQuery: true,
       }),
     ).toBe('http://127.0.0.1:4321/#lobster-embed=1&panel=media-desk&theme=dark&lang=zh');
+  });
+
+  test('distinguishes main panels and settings-section panels in sidebar keys and entries', () => {
+    const plugins: DshPluginEntry[] = [
+      {
+        name: 'dsh-pocket',
+        specifier: '^2.13.2',
+        managed: false,
+        enabled: true,
+        surface: DshPluginSurface.Hybrid,
+        isThemePlugin: false,
+        panelId: 'pocket',
+        panelKind: DshPluginPanelKind.SettingsSection,
+      },
+      {
+        name: 'dsh-pocket-main',
+        specifier: '^1.0.0',
+        managed: false,
+        enabled: true,
+        surface: DshPluginSurface.Hybrid,
+        isThemePlugin: false,
+        panelId: 'pocket',
+        panelKind: DshPluginPanelKind.Main,
+      },
+    ];
+
+    expect(getDshPluginPanelKey({ panelId: 'pocket' })).toBe('main:pocket');
+    expect(
+      getDshPluginPanelKey({ panelId: 'pocket', panelKind: DshPluginPanelKind.SettingsSection }),
+    ).toBe('settings-section:pocket');
+
+    expect(getSidebarPluginPanels(plugins, 'zh', identityT)).toEqual([
+      {
+        name: 'dsh-pocket',
+        panelId: 'pocket',
+        panelKind: DshPluginPanelKind.SettingsSection,
+        title: 'dsh-pocket',
+      },
+      {
+        name: 'dsh-pocket-main',
+        panelId: 'pocket',
+        panelKind: DshPluginPanelKind.Main,
+        title: 'dsh-pocket-main',
+      },
+    ]);
+    expect(resolveSidebarPluginPlacement(plugins)).toEqual({
+      'dsh-pocket': SidebarPluginPlacement.Pinned,
+      'dsh-pocket-main': SidebarPluginPlacement.Pinned,
+    });
   });
 });

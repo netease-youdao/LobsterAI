@@ -517,9 +517,22 @@ const InlineVideoGallery: React.FC<InlineVideoGalleryProps> = ({
   const artifactFileShare = useOptionalArtifactFileShare();
   const [gridExpanded, setGridExpanded] = useState(false);
   const [processAssetsExpanded, setProcessAssetsExpanded] = useState(false);
-  const [previewImage, setPreviewImage] = useState<ImagePreviewSource | null>(null);
+  const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
   const returnVideoTimeRef = useRef<((time: number) => void) | null>(null);
+
+  const previewProcessImages = useMemo<ImagePreviewSource[]>(
+    () => processImages.map((artifact) => {
+      const name = getVideoDisplayName(artifact, t('artifactImageAlt'));
+      return {
+        src: getImageArtifactSrc(artifact),
+        thumbSrc: getImageArtifactDisplaySrc(artifact, 88, LocalFileThumbnailFit.Cover),
+        name,
+        alt: name,
+      };
+    }),
+    [processImages],
+  );
 
   const handleOpenFullscreenVideo = useCallback(
     (source: VideoPreviewSource, onReturnTime: (time: number) => void) => {
@@ -537,7 +550,7 @@ const InlineVideoGallery: React.FC<InlineVideoGalleryProps> = ({
     setPreviewVideo(null);
   }, []);
 
-  const handleOpenProcessImage = useCallback((artifact: Artifact, operation?: ImageEditOperation) => {
+  const handleOpenProcessImage = useCallback((artifact: Artifact, index: number, operation?: ImageEditOperation) => {
     const inStudio = editable && isImageStudioAvailable();
     reportArtifactPreviewAction({
       actionType: 'card_open',
@@ -548,14 +561,11 @@ const InlineVideoGallery: React.FC<InlineVideoGalleryProps> = ({
       },
     });
     if (inStudio) {
-      openImageInStudio(artifact, operation);
+      openImageInStudio(artifact, operation, undefined, processImages);
       return;
     }
-    setPreviewImage({
-      src: getImageArtifactSrc(artifact),
-      name: getVideoDisplayName(artifact, t('artifactImageAlt')),
-    });
-  }, [editable]);
+    setPreviewImageIndex(index);
+  }, [editable, processImages]);
 
   const handleShare = useCallback((artifact: Artifact) => {
     void artifactFileShare?.openShare(artifact, {
@@ -656,14 +666,14 @@ const InlineVideoGallery: React.FC<InlineVideoGalleryProps> = ({
                   onOpenFullscreen={handleOpenFullscreenVideo}
                 />
               ))}
-              {processImages.map(artifact => (
+              {processImages.map((artifact, index) => (
                 <ProcessImageCard
                   key={artifact.id}
                   artifact={artifact}
                   editable={editable}
                   canShare={Boolean(artifactFileShare) && isArtifactFileShareable(artifact)}
-                  onOpen={() => handleOpenProcessImage(artifact)}
-                  onEdit={() => handleOpenProcessImage(artifact, ImageEditOperation.Comment)}
+                  onOpen={() => handleOpenProcessImage(artifact, index)}
+                  onEdit={() => handleOpenProcessImage(artifact, index, ImageEditOperation.Comment)}
                   onShare={() => handleShare(artifact)}
                 />
               ))}
@@ -672,7 +682,12 @@ const InlineVideoGallery: React.FC<InlineVideoGalleryProps> = ({
         </div>
       )}
 
-      <ImagePreviewModal image={previewImage} onClose={() => setPreviewImage(null)} />
+      <ImagePreviewModal
+        images={previewProcessImages}
+        currentIndex={previewImageIndex}
+        onIndexChange={setPreviewImageIndex}
+        onClose={() => setPreviewImageIndex(null)}
+      />
       <VideoPreviewModal video={previewVideo} onClose={handleCloseFullscreenVideo} />
     </div>
   );

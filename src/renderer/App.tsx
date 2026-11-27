@@ -44,6 +44,7 @@ import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import { DshEmbeddedPluginView } from './components/dsh/DshEmbeddedPluginView';
+import { getDshPluginPanelKey } from './components/dsh/pluginViewModel';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import FeedbackDialog from './components/feedback/FeedbackDialog';
 import LaunchAdModal from './components/LaunchAdModal';
@@ -767,7 +768,13 @@ const App: React.FC = () => {
       setActivePluginPanel((current) => {
         if (!current) return current;
         const stillEnabled = detail.plugins!.some(
-          (entry) => !entry.managed && entry.enabled && !entry.isThemePlugin && entry.panelId === current.panelId,
+          (entry) =>
+            !entry.managed
+            && entry.enabled
+            && !entry.isThemePlugin
+            && Boolean(entry.panelId)
+            && getDshPluginPanelKey({ panelId: entry.panelId!, panelKind: entry.panelKind })
+              === getDshPluginPanelKey(current),
         );
         if (!stillEnabled) {
           setMainView((view) => (view === MainView.PluginPanel ? MainView.Cowork : view));
@@ -2110,7 +2117,7 @@ const App: React.FC = () => {
           onShowConnectors={handleShowMcp}
           onShowExperts={handleShowExperts}
           onShowLibrary={handleShowLibrary}
-          activePluginPanelId={activePluginPanel?.panelId ?? null}
+          activePluginPanelKey={activePluginPanel ? getDshPluginPanelKey(activePluginPanel) : null}
           onSelectPluginPanel={handleSelectPluginPanel}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}

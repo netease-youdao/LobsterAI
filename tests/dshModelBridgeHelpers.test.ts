@@ -80,6 +80,17 @@ type ModelBridgeHelpers = {
   ) => string | undefined;
   invokeModelApiStream: (params: Record<string, unknown>) => unknown;
   dispatchProviderStream: (params: Record<string, unknown>) => unknown;
+  resolveRequestTurnTraceId: (
+    request?: { purpose?: unknown },
+    bound?: { traceId?: unknown },
+  ) => string | undefined;
+  applyLobsterRequestHeaders: (params: {
+    request?: { purpose?: unknown };
+    headers: Headers;
+    instanceId?: unknown;
+    bound?: { coworkSessionId?: unknown; traceId?: unknown };
+    buildTraceParent: (traceId: string) => string;
+  }) => void;
 };
 
 let cached: ModelBridgeHelpers | null = null;
@@ -830,5 +841,72 @@ describe('model-bridge-helpers', () => {
     expect(resolveEffectiveContextWindow(model, 'user-context:yd-fast:800000', undefined)).toBe(800_000);
     expect(resolveEffectiveContextWindow(model, 'yd-fast', 600_000)).toBe(600_000);
     expect(resolveEffectiveContextWindow(model, null, null)).toBe(200_000);
+  });
+
+  test('isolates unbilled session-title requests from inheriting the active turn traceparent', async () => {
+    const { resolveRequestTurnTraceId, applyLobsterRequestHeaders } = await loadHelpers();
+    const traceId = 'F9493440959139A3AA44E351FAEBC40E';
+    const normalizedTraceId = traceId.toLowerCase();
+    const buildTraceParent = vi.fn((id: string) => `00-${id}-1111222233334444-01`);
+
+    expect(resolveRequestTurnTraceId({}, { traceId })).toBe(normalizedTraceId);
+    expect(resolveRequestTurnTraceId({ purpose: 'compaction' }, { traceId })).toBe(normalizedTraceId);
+    expect(resolveRequestTurnTraceId({ purpose: 'session-title' }, { traceId })).toBeUndefined();
+    expect(resolveRequestTurnTraceId({ purpose: ' Session-Title ' }, { traceId })).toBeUndefined();
+    expect(resolveRequestTurnTraceId({}, { traceId: '0'.repeat(32) })).toBeUndefined();
+    expect(resolveRequestTurnTraceId({}, { traceId: 'not-a-trace-id' })).toBeUndefined();
+    expect(resolveRequestTurnTraceId({}, undefined)).toBeUndefined();
+
+    // Main conversation call attaches instance, session, and turn traceparent.
+    const mainHeaders = new Headers();
+    applyLobsterRequestHeaders({
+      request: {},
+      headers: mainHeaders,
+      instanceId: 'inst-1',
+      bound: { coworkSessionId: 'cw-1', traceId },
+      buildTraceParent,
+    });
+    expect(mainHeaders.get('x-lobsterai-instance')).toBe('inst-1');
+    expect(mainHeaders.get('x-lobsterai-session')).toBe('cw-1');
+    expect(mainHeaders.get('traceparent')).toBe(`00-${normalizedTraceId}-1111222233334444-01`);
+
+    // Unbilled session-title call keeps correlation headers but omits turn traceparent.
+    const titleHeaders = new Headers();
+    applyLobsterRequestHeaders({
+      request: { purpose: 'session-title' },
+      headers: titleHeaders,
+      instanceId: 'inst-1',
+      bound: { coworkSessionId: 'cw-1', traceId },
+      buildTraceParent,
+    });
+    expect(titleHeaders.get('x-lobsterai-instance')).toBe('inst-1');
+    expect(titleHeaders.get('x-lobsterai-session')).toBe('cw-1');
+    expect(titleHeaders.has('traceparent')).toBe(false);
+
+    // Compaction call still bills to the active turn trace.
+    const compactionHeaders = new Headers();
+    applyLobsterRequestHeaders({
+      request: { purpose: 'compaction' },
+      headers: compactionHeaders,
+      instanceId: 'inst-1',
+      bound: { coworkSessionId: 'cw-1', traceId },
+      buildTraceParent,
+    });
+    expect(compactionHeaders.get('traceparent')).toBe(`00-${normalizedTraceId}-1111222233334444-01`);
+
+    // Pre-existing explicit traceparent is never overwritten.
+    const existingHeaders = new Headers({
+      traceparent: '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01',
+    });
+    applyLobsterRequestHeaders({
+      request: {},
+      headers: existingHeaders,
+      instanceId: 'inst-1',
+      bound: { coworkSessionId: 'cw-1', traceId },
+      buildTraceParent,
+    });
+    expect(existingHeaders.get('traceparent')).toBe(
+      '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01',
+    );
   });
 });

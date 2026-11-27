@@ -222,6 +222,12 @@ export const DshPluginSurface = {
 } as const;
 export type DshPluginSurface = typeof DshPluginSurface[keyof typeof DshPluginSurface];
 
+export const DshPluginPanelKind = {
+  Main: 'main',
+  SettingsSection: 'settings-section',
+} as const;
+export type DshPluginPanelKind = typeof DshPluginPanelKind[keyof typeof DshPluginPanelKind];
+
 export const DshPluginApplicationStatus = {
   Applied: 'applied',
   RestartRequired: 'restart-required',

@@ -1549,6 +1549,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
                   dispatchOpenEmbeddedPlugin({
                     name: installedPluginEntry.name,
                     panelId: installedPluginEntry.panelId!,
+                    ...(installedPluginEntry.panelKind ? { panelKind: installedPluginEntry.panelKind } : {}),
                     title: resolvePluginDisplayTitle(installedPluginEntry, language, t),
                     ...(installedPluginEntry.icon ? { icon: installedPluginEntry.icon } : {}),
                   });

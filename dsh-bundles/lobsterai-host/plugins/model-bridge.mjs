@@ -20,6 +20,7 @@ import {
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai';
 import { DEFAULT_LOBSTER_RETRY_POLICY, guardEmptyStopStream } from './empty-stop-guard.mjs';
 import {
+  applyLobsterRequestHeaders,
   canonicalizeProviderId,
   dispatchProviderStream,
   hasVerifiedModelThinkingLevels,
@@ -500,17 +501,15 @@ export function apply(ctx) {
 
   // Inject LobsterAI observability, turn credit traceparent & instance correlation headers on every LLM call.
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
-    if (state.instanceId) {
-      headers.set('x-lobsterai-instance', state.instanceId);
-    }
     const sid = resolveSessionId(request);
     const bound = resolveSessionContext(ctx, state, sid);
-    if (bound && typeof bound.coworkSessionId === 'string' && bound.coworkSessionId.length > 0) {
-      headers.set('x-lobsterai-session', bound.coworkSessionId);
-    }
-    if (!headers.has('traceparent')) {
-      headers.set('traceparent', buildTraceParent(bound?.traceId));
-    }
+    applyLobsterRequestHeaders({
+      request,
+      headers,
+      instanceId: state.instanceId,
+      bound,
+      buildTraceParent,
+    });
     return next();
   });
 

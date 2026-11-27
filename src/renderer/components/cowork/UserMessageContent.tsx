@@ -36,7 +36,7 @@ const flushText = (
 
 const renderUserMessageParts = (
   content: string,
-  onImageClick?: (image: { src: string; alt?: string | null }) => void,
+  onImageClick?: (image: { src: string; alt?: string | null }, element?: HTMLImageElement) => void,
   leading?: React.ReactNode,
 ): React.ReactNode[] => {
   const nodes: React.ReactNode[] = [];
@@ -78,7 +78,7 @@ const renderUserMessageParts = (
 interface UserMessageContentProps {
   content: string;
   className?: string;
-  onImageClick?: (image: { src: string; alt?: string | null }) => void;
+  onImageClick?: (image: { src: string; alt?: string | null }, element?: HTMLImageElement) => void;
   /** Inline elements (e.g. skill chips) placed before the first line of text. */
   leading?: React.ReactNode;
 }

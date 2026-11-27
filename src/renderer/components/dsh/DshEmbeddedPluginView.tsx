@@ -73,11 +73,13 @@ export const DshEmbeddedPluginView: React.FC<DshEmbeddedPluginViewProps> = ({
   const latestOriginRef = useRef<string | null>(null);
   const latestTargetRef = useRef({
     panelId: plugin.panelId,
+    panelKind: plugin.panelKind,
     theme: effectiveTheme,
     language,
   });
   latestTargetRef.current = {
     panelId: plugin.panelId,
+    panelKind: plugin.panelKind,
     theme: effectiveTheme,
     language,
   };
@@ -115,9 +117,9 @@ export const DshEmbeddedPluginView: React.FC<DshEmbeddedPluginViewProps> = ({
       if (originChanged || forceRemount || !initialWebviewUrl) {
         latestOriginRef.current = nextOrigin;
         setIsWebviewReady(false);
-        const { panelId, theme, language: lang } = latestTargetRef.current;
+        const { panelId, panelKind, theme, language: lang } = latestTargetRef.current;
         setInitialWebviewUrl(
-          buildDshEmbeddedPluginUrl(res.url, { panelId, theme, language: lang }),
+          buildDshEmbeddedPluginUrl(res.url, { panelId, panelKind, theme, language: lang }),
         );
         setWebviewMountKey((prev) => prev + 1);
       }
@@ -144,8 +146,8 @@ export const DshEmbeddedPluginView: React.FC<DshEmbeddedPluginViewProps> = ({
 
   const syncEmbedHash = useCallback((node: DshPluginWebviewElement | null) => {
     if (!node?.executeJavaScript) return;
-    const { panelId, theme, language: lang } = latestTargetRef.current;
-    const nextHash = `#${buildDshEmbeddedPluginHash({ panelId, theme, language: lang })}`;
+    const { panelId, panelKind, theme, language: lang } = latestTargetRef.current;
+    const nextHash = `#${buildDshEmbeddedPluginHash({ panelId, panelKind, theme, language: lang })}`;
     void node
       .executeJavaScript(
         `if (window.location.hash !== ${JSON.stringify(nextHash)}) { window.location.hash = ${JSON.stringify(nextHash)}; }`,
@@ -186,7 +188,7 @@ export const DshEmbeddedPluginView: React.FC<DshEmbeddedPluginViewProps> = ({
   useEffect(() => {
     if (!isWebviewReady || !webviewNode) return;
     syncEmbedHash(webviewNode);
-  }, [effectiveTheme, isWebviewReady, language, plugin.panelId, syncEmbedHash, webviewNode]);
+  }, [effectiveTheme, isWebviewReady, language, plugin.panelId, plugin.panelKind, syncEmbedHash, webviewNode]);
 
   const handleReload = () => {
     setLoadError(null);

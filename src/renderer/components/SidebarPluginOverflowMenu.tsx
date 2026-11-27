@@ -4,7 +4,10 @@ import { createPortal } from 'react-dom';
 
 import { i18nService } from '../services/i18n';
 import { MainView } from '../types/navigation';
-import type { SidebarPluginPanelItem } from './dsh/pluginViewModel';
+import {
+  getDshPluginPanelKey,
+  type SidebarPluginPanelItem,
+} from './dsh/pluginViewModel';
 import SidebarPluginsMoreIcon from './icons/SidebarPluginsMoreIcon';
 
 const MENU_EDGE_GAP = 8;
@@ -17,7 +20,7 @@ const selectedMenuItemClassName = `${menuItemClassName} bg-surface-raised font-m
 interface SidebarPluginOverflowMenuProps {
   panels: readonly SidebarPluginPanelItem[];
   activeView: MainView;
-  activePluginPanelId?: string | null;
+  activePluginPanelKey?: string | null;
   isCollapsed: boolean;
   onSelect: (panel: SidebarPluginPanelItem) => void;
   className: string;
@@ -29,7 +32,7 @@ interface SidebarPluginOverflowMenuProps {
 const SidebarPluginOverflowMenu: React.FC<SidebarPluginOverflowMenuProps> = ({
   panels,
   activeView,
-  activePluginPanelId,
+  activePluginPanelKey,
   isCollapsed,
   onSelect,
   className,
@@ -47,8 +50,8 @@ const SidebarPluginOverflowMenu: React.FC<SidebarPluginOverflowMenuProps> = ({
   const focusItemOnOpenRef = useRef(false);
   const menuId = useId();
   const selectedIndex =
-    activeView === MainView.PluginPanel && activePluginPanelId
-      ? panels.findIndex((panel) => panel.panelId === activePluginPanelId)
+    activeView === MainView.PluginPanel && activePluginPanelKey
+      ? panels.findIndex((panel) => getDshPluginPanelKey(panel) === activePluginPanelKey)
       : -1;
   const isActive = selectedIndex !== -1;
 
@@ -219,10 +222,11 @@ const SidebarPluginOverflowMenu: React.FC<SidebarPluginOverflowMenuProps> = ({
           }}
         >
           {panels.map((panel, index) => {
-            const isSelected = activeView === MainView.PluginPanel && activePluginPanelId === panel.panelId;
+            const panelKey = getDshPluginPanelKey(panel);
+            const isSelected = activeView === MainView.PluginPanel && activePluginPanelKey === panelKey;
             return (
               <button
-                key={panel.panelId}
+                key={panelKey}
                 ref={(element) => {
                   itemRefs.current[index] = element;
                 }}

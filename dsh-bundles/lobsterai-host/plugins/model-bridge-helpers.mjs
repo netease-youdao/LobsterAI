@@ -62,6 +62,15 @@ const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ma
 const THINKING_LEVEL_SET = new Set(THINKING_LEVELS);
 const NON_OFF_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const USER_CONTEXT_WINDOW_PREFIX = 'user-context:';
+const W3C_TRACE_ID_RE = /^[0-9a-f]{32}$/i;
+const INVALID_W3C_TRACE_ID = '0'.repeat(32);
+// Auxiliary DSH LLM purposes that are free/unbilled on lobsterai-server must not
+// inherit the active Cowork turn's traceId, otherwise OpenClawTokenProxy counts
+// them in observedCompletedRequests while /api/usage/llm-traces excludes them
+// and leaves the turn permanently stuck in Partial (`≥`).
+const TURN_TRACE_EXCLUDED_PURPOSES = new Set([
+  'session-title',
+]);
 
 function isRecord(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -936,4 +945,63 @@ export function dispatchProviderStream({
     modelMeta,
     requestContext,
   });
+}
+
+/**
+ * Resolve the Cowork turn `traceId` to propagate via W3C `traceparent`, or
+ * `undefined` when the request is an unbilled auxiliary purpose (such as
+ * `session-title`) or no valid turn trace is bound.
+ *
+ * @param {{ purpose?: unknown } | undefined} request
+ * @param {{ traceId?: unknown } | undefined} bound
+ * @returns {string | undefined}
+ */
+export function resolveRequestTurnTraceId(request, bound) {
+  const purpose = typeof request?.purpose === 'string' ? request.purpose.trim().toLowerCase() : '';
+  if (purpose && TURN_TRACE_EXCLUDED_PURPOSES.has(purpose)) {
+    return undefined;
+  }
+  const rawTraceId = typeof bound?.traceId === 'string' ? bound.traceId.trim().toLowerCase() : '';
+  if (!rawTraceId || rawTraceId === INVALID_W3C_TRACE_ID || !W3C_TRACE_ID_RE.test(rawTraceId)) {
+    return undefined;
+  }
+  return rawTraceId;
+}
+
+/**
+ * Populate LobsterAI correlation headers (`x-lobsterai-instance`,
+ * `x-lobsterai-session`, and per-turn W3C `traceparent`) for an outbound
+ * `llm-pi-ai/request-headers` hook call.
+ *
+ * Unbilled auxiliary requests (such as `session-title`) omit `traceparent` so
+ * `OpenClawTokenProxy` assigns an isolated generated trace instead of counting
+ * them toward the active turn's `observedCompletedRequests`.
+ *
+ * @param {{
+ *   request?: { purpose?: unknown };
+ *   headers: Headers;
+ *   instanceId?: unknown;
+ *   bound?: { coworkSessionId?: unknown; traceId?: unknown };
+ *   buildTraceParent: (traceId: string) => string;
+ * }} params
+ */
+export function applyLobsterRequestHeaders({
+  request,
+  headers,
+  instanceId,
+  bound,
+  buildTraceParent,
+}) {
+  if (typeof instanceId === 'string' && instanceId.length > 0) {
+    headers.set('x-lobsterai-instance', instanceId);
+  }
+  if (bound && typeof bound.coworkSessionId === 'string' && bound.coworkSessionId.length > 0) {
+    headers.set('x-lobsterai-session', bound.coworkSessionId);
+  }
+  if (!headers.has('traceparent')) {
+    const turnTraceId = resolveRequestTurnTraceId(request, bound);
+    if (turnTraceId) {
+      headers.set('traceparent', buildTraceParent(turnTraceId));
+    }
+  }
 }

@@ -10,6 +10,7 @@ import * as path from 'path';
 import {
   DshPluginApplicationStatus,
   DshPluginAvailability,
+  DshPluginPanelKind,
   DshPluginSurface,
   DshPluginUpdateKind,
   DshPluginUpdateOutcomeKind,
@@ -44,6 +45,7 @@ export interface DshEnrichedPluginEntry extends DshProfilePluginInfo {
   surface: DshPluginSurface;
   isThemePlugin: boolean;
   panelId?: string;
+  panelKind?: DshPluginPanelKind;
   panelLabel?: LocalizedTextMap;
   errorCode?: string;
   errorMessage?: string;
@@ -53,6 +55,7 @@ export interface DshEnrichedPluginEntry extends DshProfilePluginInfo {
 
 export interface DshPluginPanelMetadata {
   panelId?: string;
+  panelKind?: DshPluginPanelKind;
   panelLabel?: LocalizedTextMap;
 }
 
@@ -62,6 +65,7 @@ export interface DshPluginSurfaceClassification {
   hasWebClient: boolean;
   isThemePlugin: boolean;
   panelId?: string;
+  panelKind?: DshPluginPanelKind;
   panelLabel?: LocalizedTextMap;
   heuristicOnly?: boolean;
 }
@@ -192,7 +196,16 @@ const HOST_ENTRY_SIGNAL_PATTERN =
 
 const MAX_CLIENT_BUNDLE_INSPECT_BYTES = 4 * 1024 * 1024;
 const RESERVED_MAIN_PANEL_IDS = new Set(['conversation', 'plugins']);
-const I18N_DOTTED_KEY_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$/i;
+const RESERVED_SETTINGS_SECTION_IDS = new Set([
+  'general',
+  'account',
+  'models',
+  'plugins',
+  'agent-presets',
+  'archived-sessions',
+]);
+const I18N_KEY_PATTERN =
+  /^(?:[a-z][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_-]+)*|[A-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_-]+)+)$/;
 
 function resolveClientEntryRelPath(manifest: Record<string, unknown>): string | null {
   if (!isRecord(manifest.exports)) return null;
@@ -232,12 +245,51 @@ function resolveIdentifierStringLiteral(source: string, identifier: string): str
   return match?.[2] ? decodeJsStringLiteral(match[2]) : null;
 }
 
-function normalizeValidPanelId(candidate: string | null | undefined): string | undefined {
+function normalizeValidPanelId(
+  candidate: string | null | undefined,
+  reservedIds: ReadonlySet<string> = RESERVED_MAIN_PANEL_IDS,
+): string | undefined {
   if (!candidate) return undefined;
   const trimmed = candidate.trim();
-  if (!trimmed || RESERVED_MAIN_PANEL_IDS.has(trimmed)) return undefined;
+  if (!trimmed || reservedIds.has(trimmed)) return undefined;
   if (/[\s\x00-\x1f\x7f]/.test(trimmed)) return undefined;
   return trimmed;
+}
+
+function extractSlotPropertyString(
+  source: string,
+  block: string,
+  propName: 'key' | 'id',
+): string | null {
+  const literalMatch = new RegExp(`\\b${propName}\\s*:\\s*(['"\`])([^'"\`\\\\\\r\\n$]+)\\1`).exec(block);
+  if (literalMatch?.[2]) {
+    return decodeJsStringLiteral(literalMatch[2]);
+  }
+  const identMatch = new RegExp(`\\b${propName}\\s*:\\s*([A-Za-z_$][A-Za-z0-9_$]*)`).exec(block);
+  if (identMatch?.[1]) {
+    return resolveIdentifierStringLiteral(source, identMatch[1]);
+  }
+  return null;
+}
+
+function extractSlotLabel(block: string): LocalizedTextMap | undefined {
+  if (!block) return undefined;
+  // Match `label: "Text"`, `label: () => "Text"`, or `label: () => fn("Text")`
+  // across single, double, and backtick quotes.
+  const labelCallMatch =
+    /\blabel\s*:\s*(?:\(\s*\)\s*=>\s*)?([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\\r\n])+)\2/.exec(
+      block,
+    );
+  const labelDirectMatch =
+    /\blabel\s*:\s*(?:\(\s*\)\s*=>\s*)?(['"`])((?:\\.|(?!\1)[^\\\r\n])+)\1/.exec(block);
+  const rawLabel = labelDirectMatch?.[2] ?? labelCallMatch?.[3];
+  const isWrappedCall = !labelDirectMatch && Boolean(labelCallMatch);
+  if (!rawLabel) return undefined;
+  const decoded = decodeJsStringLiteral(rawLabel);
+  if (!decoded || (isWrappedCall && I18N_KEY_PATTERN.test(decoded))) {
+    return undefined;
+  }
+  return { en: decoded, zh: decoded };
 }
 
 export function extractPanelMetadataFromClientSource(
@@ -247,74 +299,83 @@ export function extractPanelMetadataFromClientSource(
   if (!source) return {};
 
   let panelId: string | undefined;
+  let panelKind: DshPluginPanelKind | undefined;
+  let panelLabel: LocalizedTextMap | undefined;
 
   // 1. Inspect `main` slot registration object block (supports ', ", and tsdown/oxc ` quotes,
-  //    as well as arbitrary property ordering such as `{ name: `main`, locale: i, key: Xd }`).
+  //    as well as arbitrary property ordering such as `{ name: `main`, locale: i, key: Xd }` or `{ key: 'x', name: 'main' }`).
   const mainEntryMatch =
-    /\bname\s*:\s*(['"`])main\1[^}]{0,300}/.exec(source)
-    ?? /\{[^{}]{0,200}\bkey\s*:\s*(?:['"`][^'"`\\]+['"`]|[A-Za-z_$][A-Za-z0-9_$]*)[^{}]{0,200}\bname\s*:\s*(['"`])main\1/.exec(source);
+    /\{[^{}]{0,200}\bname\s*:\s*(['"`])main\1[^}]{0,300}/.exec(source)
+    ?? /\bname\s*:\s*(['"`])main\1[^}]{0,300}/.exec(source);
   const mainBlock = mainEntryMatch?.[0] ?? '';
 
-  if (mainBlock) {
-    const literalMainKey = /\bkey\s*:\s*(['"`])([^'"`\\\r\n$]+)\1/.exec(mainBlock)?.[2];
-    if (literalMainKey) {
-      panelId = normalizeValidPanelId(decodeJsStringLiteral(literalMainKey));
-    } else {
-      const identMainKey = /\bkey\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(mainBlock)?.[1];
-      if (identMainKey) {
-        panelId = normalizeValidPanelId(resolveIdentifierStringLiteral(source, identMainKey));
-      }
-    }
+  const rawMainKey = mainBlock ? extractSlotPropertyString(source, mainBlock, 'key') : null;
+  if (rawMainKey) {
+    panelId = normalizeValidPanelId(rawMainKey, RESERVED_MAIN_PANEL_IDS);
   }
 
   // 2. Inspect `sidebar.panellist` registration block (`id` and optional `label`).
-  const sidebarEntryMatch = /\bname\s*:\s*(['"`])sidebar\.panellist\1[^}]{0,400}/.exec(source);
+  const sidebarEntryMatch =
+    /\{[^{}]{0,200}\bname\s*:\s*(['"`])sidebar\.panellist\1[^}]{0,400}/.exec(source)
+    ?? /\bname\s*:\s*(['"`])sidebar\.panellist\1[^}]{0,400}/.exec(source);
   const sidebarBlock = sidebarEntryMatch?.[0] ?? '';
 
-  if (!panelId && sidebarBlock) {
-    const literalSidebarId = /\bid\s*:\s*(['"`])([^'"`\\\r\n$]+)\1/.exec(sidebarBlock)?.[2];
-    if (literalSidebarId) {
-      panelId = normalizeValidPanelId(decodeJsStringLiteral(literalSidebarId));
-    } else {
-      const identSidebarId = /\bid\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(sidebarBlock)?.[1];
-      if (identSidebarId) {
-        panelId = normalizeValidPanelId(resolveIdentifierStringLiteral(source, identSidebarId));
-      }
-    }
+  const rawSidebarId = !panelId && sidebarBlock
+    ? extractSlotPropertyString(source, sidebarBlock, 'id')
+    : null;
+  if (rawSidebarId) {
+    panelId = normalizeValidPanelId(rawSidebarId, RESERVED_MAIN_PANEL_IDS);
   }
 
-  const hasPanelSlotRegistration =
+  const hasMainPanelRegistration =
     Boolean(panelId)
-    || Boolean(mainBlock)
-    || Boolean(sidebarBlock)
-    || /\bslots\.inject\s*\(\s*(['"`])(?:main|sidebar\.panellist)\1/.test(source);
+    || (!rawMainKey && !rawSidebarId && (
+      Boolean(mainBlock)
+      || Boolean(sidebarBlock)
+      || /\bslots\.inject\s*\(\s*(['"`])(?:main|sidebar\.panellist)\1/.test(source)
+    ));
 
-  if (!panelId && hasPanelSlotRegistration && fallbackRowId) {
-    panelId = normalizeValidPanelId(fallbackRowId);
+  if (!panelId && hasMainPanelRegistration && fallbackRowId) {
+    panelId = normalizeValidPanelId(fallbackRowId, RESERVED_MAIN_PANEL_IDS);
   }
 
-  let panelLabel: LocalizedTextMap | undefined;
-  if (sidebarBlock) {
-    // Match `label: "Text"`, `label: () => "Text"`, or `label: () => fn("Text")`
-    // across single, double, and backtick quotes.
-    const labelCallMatch =
-      /\blabel\s*:\s*(?:\(\s*\)\s*=>\s*)?([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\\r\n])+)\2/.exec(
-        sidebarBlock,
-      );
-    const labelDirectMatch =
-      /\blabel\s*:\s*(?:\(\s*\)\s*=>\s*)?(['"`])((?:\\.|(?!\1)[^\\\r\n])+)\1/.exec(sidebarBlock);
-    const rawLabel = labelDirectMatch?.[2] ?? labelCallMatch?.[3];
-    const isWrappedCall = !labelDirectMatch && Boolean(labelCallMatch);
-    if (rawLabel) {
-      const decoded = decodeJsStringLiteral(rawLabel);
-      if (decoded && !(isWrappedCall && I18N_DOTTED_KEY_PATTERN.test(decoded))) {
-        panelLabel = { en: decoded, zh: decoded };
-      }
+  if (panelId) {
+    panelKind = DshPluginPanelKind.Main;
+    panelLabel = extractSlotLabel(sidebarBlock);
+  } else {
+    // 3. Inspect `settings.section` registration block for plugins whose dedicated
+    //    UI is contributed as a DSH Settings tab (e.g. `dsh-pocket`).
+    const settingsEntryMatch =
+      /\{[^{}]{0,200}\bname\s*:\s*(['"`])settings\.section\1[^}]{0,400}/.exec(source)
+      ?? /\bname\s*:\s*(['"`])settings\.section\1[^}]{0,400}/.exec(source);
+    const settingsBlock = settingsEntryMatch?.[0] ?? '';
+
+    const rawSettingsId = settingsBlock
+      ? extractSlotPropertyString(source, settingsBlock, 'id')
+      : null;
+    if (rawSettingsId) {
+      panelId = normalizeValidPanelId(rawSettingsId, RESERVED_SETTINGS_SECTION_IDS);
+    }
+
+    const hasSettingsSectionRegistration =
+      Boolean(panelId)
+      || (!rawSettingsId && (
+        Boolean(settingsBlock)
+        || /\bslots\.inject\s*\(\s*(['"`])settings\.section\1/.test(source)
+      ));
+
+    if (!panelId && hasSettingsSectionRegistration && fallbackRowId) {
+      panelId = normalizeValidPanelId(fallbackRowId, RESERVED_SETTINGS_SECTION_IDS);
+    }
+
+    if (panelId) {
+      panelKind = DshPluginPanelKind.SettingsSection;
+      panelLabel = extractSlotLabel(settingsBlock);
     }
   }
 
   return {
-    ...(panelId ? { panelId } : {}),
+    ...(panelId ? { panelId, ...(panelKind ? { panelKind } : {}) } : {}),
     ...(panelLabel ? { panelLabel } : {}),
   };
 }
@@ -556,6 +617,7 @@ export function classifyBundleSurface(options: {
   let isThemePlugin = false;
   let inspectedConcreteRows = false;
   let panelId: string | undefined;
+  let panelKind: DshPluginPanelKind | undefined;
   let panelLabel: LocalizedTextMap | undefined;
 
   for (const rowSpec of rowSpecs) {
@@ -574,16 +636,20 @@ export function classifyBundleSurface(options: {
         hasWebClient = true;
         if (info.isThemePlugin) {
           isThemePlugin = true;
-        } else if (!panelId) {
+        } else if (!panelId || panelKind === DshPluginPanelKind.SettingsSection) {
           const panelMeta = detectClientPanelMetadata(
             resolved.dir || null,
             resolved.manifest,
             rowSpec.rowId,
           );
-          if (panelMeta.panelId) {
+          const shouldAdopt =
+            Boolean(panelMeta.panelId)
+            && (!panelId || panelMeta.panelKind === DshPluginPanelKind.Main);
+          if (shouldAdopt && panelMeta.panelId) {
             panelId = panelMeta.panelId;
-          }
-          if (panelMeta.panelLabel && !panelLabel) {
+            panelKind = panelMeta.panelKind;
+            panelLabel = panelMeta.panelLabel;
+          } else if (panelMeta.panelLabel && !panelLabel) {
             panelLabel = panelMeta.panelLabel;
           }
         }
@@ -608,7 +674,10 @@ export function classifyBundleSurface(options: {
       inspectedConcreteRows = true;
       if (!selfInfo.isThemePlugin) {
         const panelMeta = detectClientPanelMetadata(bundleDir, bundleManifest);
-        if (panelMeta.panelId) panelId = panelMeta.panelId;
+        if (panelMeta.panelId) {
+          panelId = panelMeta.panelId;
+          panelKind = panelMeta.panelKind;
+        }
         if (panelMeta.panelLabel) panelLabel = panelMeta.panelLabel;
       }
     } else {
@@ -629,7 +698,11 @@ export function classifyBundleSurface(options: {
   }
 
   const panelFields = panelId && !isThemePlugin
-    ? { panelId, ...(panelLabel ? { panelLabel } : {}) }
+    ? {
+        panelId,
+        ...(panelKind ? { panelKind } : {}),
+        ...(panelLabel ? { panelLabel } : {}),
+      }
     : {};
 
   if (hasWebClient && !hasHostCapability) {
@@ -761,6 +834,7 @@ export function buildEnrichedPluginEntries(options: {
         surface: surfaceInfo.surface,
         isThemePlugin: surfaceInfo.isThemePlugin,
         ...(surfaceInfo.panelId ? { panelId: surfaceInfo.panelId } : {}),
+        ...(surfaceInfo.panelKind ? { panelKind: surfaceInfo.panelKind } : {}),
         ...(surfaceInfo.panelLabel ? { panelLabel: surfaceInfo.panelLabel } : {}),
         ...(bundle.error?.code ? { errorCode: bundle.error.code } : {}),
         ...(bundle.error?.diagnostic ? { errorMessage: bundle.error.diagnostic } : {}),
@@ -813,6 +887,7 @@ function enrichFallbackEntry(
     surface: surfaceInfo.surface,
     isThemePlugin: surfaceInfo.isThemePlugin,
     ...(surfaceInfo.panelId ? { panelId: surfaceInfo.panelId } : {}),
+    ...(surfaceInfo.panelKind ? { panelKind: surfaceInfo.panelKind } : {}),
     ...(surfaceInfo.panelLabel ? { panelLabel: surfaceInfo.panelLabel } : {}),
   };
 }

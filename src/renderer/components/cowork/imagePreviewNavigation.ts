@@ -9,6 +9,13 @@ export interface ImagePreviewSource {
   name?: string | null;
 }
 
+export const MARKDOWN_PREVIEW_IMAGE_ATTR = 'data-markdown-preview-image';
+
+export interface ImagePreviewGalleryState {
+  images: readonly ImagePreviewSource[];
+  index: number;
+}
+
 export const ImagePreviewKeyAction = {
   Previous: 'previous',
   Next: 'next',
@@ -105,4 +112,58 @@ export function resolveActiveImagePreview(params: {
     activeIndex: -1,
     activeImage: null,
   };
+}
+
+/**
+ * Resolves the full preview gallery and active index when one rendered image is clicked.
+ * Uses element identity first so duplicate URLs still open at the exact clicked occurrence.
+ */
+export function resolveClickedImageGallery<T>(
+  entries: readonly { key: T; image: ImagePreviewSource }[],
+  clickedKey: T | undefined,
+  fallbackImage: ImagePreviewSource,
+): ImagePreviewGalleryState {
+  const validEntries = entries.filter((entry) => Boolean(entry.image.src));
+  if (validEntries.length === 0) {
+    return { images: [fallbackImage], index: 0 };
+  }
+
+  let index = clickedKey !== undefined
+    ? validEntries.findIndex((entry) => entry.key === clickedKey)
+    : -1;
+  if (index < 0) {
+    index = validEntries.findIndex((entry) => entry.image.src === fallbackImage.src);
+  }
+  if (index < 0) {
+    return { images: [fallbackImage], index: 0 };
+  }
+  return {
+    images: validEntries.map((entry) => entry.image),
+    index,
+  };
+}
+
+/**
+ * Collects all rendered previewable markdown images inside `container` and returns
+ * the gallery centered on `clickedElement`.
+ */
+export function collectMarkdownPreviewGallery(
+  container: ParentNode | null | undefined,
+  clickedElement: HTMLImageElement | undefined,
+  fallbackImage: ImagePreviewSource,
+): ImagePreviewGalleryState {
+  if (!container) {
+    return { images: [fallbackImage], index: 0 };
+  }
+  const elements = Array.from(
+    container.querySelectorAll<HTMLImageElement>(`img[${MARKDOWN_PREVIEW_IMAGE_ATTR}="true"]`),
+  );
+  const entries = elements.map((element) => ({
+    key: element,
+    image: {
+      src: element.getAttribute('src') || element.src,
+      alt: element.getAttribute('alt'),
+    },
+  }));
+  return resolveClickedImageGallery(entries, clickedElement, fallbackImage);
 }
