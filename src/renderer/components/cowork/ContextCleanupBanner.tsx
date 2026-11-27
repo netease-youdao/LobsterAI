@@ -1,14 +1,12 @@
 import { SparklesIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ContextCleanupApplyResult, ContextCleanupScanResult } from '../../../shared/contextCleanup/types';
 import { contextCleanupService } from '../../services/contextCleanup';
 import { i18nService } from '../../services/i18n';
 import { formatTokenCount } from '../../utils/tokenFormat';
-import ContextCleanupModal, {
-  type ContextCleanupUndoState,
-  ContextCleanupUndoToast,
-} from './ContextCleanupModal';
+import ContextCleanupModal from './ContextCleanupModal';
+import { showContextCleanupUndoToast } from './contextCleanupToast';
 
 interface ContextCleanupBannerProps {
   className?: string;
@@ -17,33 +15,46 @@ interface ContextCleanupBannerProps {
 const ContextCleanupBanner: React.FC<ContextCleanupBannerProps> = ({ className = '' }) => {
   const [scanResult, setScanResult] = useState<ContextCleanupScanResult | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [undoState, setUndoState] = useState<ContextCleanupUndoState | null>(null);
+  const mountedRef = useRef(true);
 
   const refreshScan = useCallback(async () => {
     const result = await contextCleanupService.scan();
-    setScanResult(result);
+    if (mountedRef.current) {
+      setScanResult(result);
+    }
   }, []);
 
   useEffect(() => {
-    let active = true;
-    void contextCleanupService.scan().then((result) => {
-      if (active) setScanResult(result);
-    });
-    return () => { active = false; };
-  }, []);
+    mountedRef.current = true;
+    void refreshScan();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [refreshScan]);
 
   const handleDismiss = async () => {
     await contextCleanupService.dismiss();
-    setScanResult((prev) => (prev ? { ...prev, shouldShowBanner: false } : prev));
+    if (mountedRef.current) {
+      setScanResult((prev) => (prev ? { ...prev, shouldShowBanner: false } : prev));
+    }
   };
 
   const handleApplied = (result: ContextCleanupApplyResult) => {
     if (result.closedCount > 0 && result.undoToken) {
-      setUndoState({
-        closedCount: result.closedCount,
-        savedTokens: result.savedTokens,
-        undoToken: result.undoToken,
-      });
+      showContextCleanupUndoToast(
+        {
+          closedCount: result.closedCount,
+          savedTokens: result.savedTokens,
+          undoToken: result.undoToken,
+        },
+        {
+          onUndone: () => {
+            if (mountedRef.current) {
+              void refreshScan();
+            }
+          },
+        },
+      );
     }
     void refreshScan();
   };
@@ -100,12 +111,6 @@ const ContextCleanupBanner: React.FC<ContextCleanupBannerProps> = ({ className =
         scanResult={scanResult}
         onClose={() => setModalOpen(false)}
         onApplied={handleApplied}
-      />
-
-      <ContextCleanupUndoToast
-        undoState={undoState}
-        onDismiss={() => setUndoState(null)}
-        onUndone={() => void refreshScan()}
       />
     </>
   );

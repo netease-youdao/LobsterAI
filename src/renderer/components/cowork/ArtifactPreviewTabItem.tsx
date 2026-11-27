@@ -16,6 +16,7 @@ interface ArtifactPreviewTabItemProps {
   onClose: () => void;
   onCloseOthers?: () => void;
   onCloseToRight?: () => void;
+  onCloseAll?: () => void;
   canRename?: boolean;
   preserveExtensionOnRename?: boolean;
   renameLabel?: string;
@@ -51,6 +52,7 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
   onClose,
   onCloseOthers,
   onCloseToRight,
+  onCloseAll,
   canRename = false,
   preserveExtensionOnRename = true,
   renameLabel,
@@ -221,6 +223,7 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
               onCloseTab={onClose}
               onCloseOthers={onCloseOthers}
               onCloseToRight={onCloseToRight}
+              onCloseAll={onCloseAll}
             />
           )}
           <button

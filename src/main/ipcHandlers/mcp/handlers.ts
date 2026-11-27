@@ -11,7 +11,7 @@ import {
   McpOAuthState,
   type McpOAuthStatusResult,
 } from '../../../shared/mcp/auth';
-import { McpIpcChannel } from '../../../shared/mcp/constants';
+import { McpIpcChannel, McpMarketplaceSource } from '../../../shared/mcp/constants';
 import {
   McpToolDiscoveryErrorCode,
   type McpToolDiscoveryResult,
@@ -41,6 +41,8 @@ export interface McpHandlerDeps {
   getMainWindow?: () => BrowserWindow | null;
   mail?: NeteaseMailConnection;
   getMcpRuntime: () => McpRuntime;
+  getMcpMarketplaceUrl: () => string;
+  fetchMarketplaceText?: (url: string) => Promise<string>;
   syncDshConfig: (options: { reason: string }) => Promise<{ success: boolean; changed: boolean }>;
   getMcpOAuthManager: () => McpOAuthManager | null;
   isAuthGateBlocked?: () => boolean;
@@ -326,7 +328,13 @@ function buildQichachaServerData(
 }
 
 export function registerMcpHandlers(deps: McpHandlerDeps): void {
-  const { getMcpRuntime, syncDshConfig, getMcpOAuthManager } = deps;
+  const {
+    getMcpRuntime,
+    getMcpMarketplaceUrl,
+    fetchMarketplaceText = fetchText,
+    syncDshConfig,
+    getMcpOAuthManager,
+  } = deps;
   const syncMcpConfig = createSerializedMcpConfigSync(syncDshConfig);
 
   if (deps.mail && deps.getMainWindow) registerNeteaseMailHandlers(deps.getMainWindow, new NeteaseMailIntegration(deps.mail));
@@ -734,24 +742,23 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       try {
         const marketplace = JSON.parse(await fs.promises.readFile(localCatalogPath, 'utf8'));
         console.log('[MCP] using local marketplace catalog from LOBSTERAI_MCP_MARKETPLACE_FILE');
-        return { success: true, data: marketplace };
+        return { success: true, data: marketplace, source: McpMarketplaceSource.LocalFile };
       } catch (error) {
         console.error('[MCP] failed to read LOBSTERAI_MCP_MARKETPLACE_FILE:', error);
         return { success: false, error: error instanceof Error ? error.message : 'Failed to read local marketplace' };
       }
     }
-    const url = app.isPackaged
-      ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
-      : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    const url = getMcpMarketplaceUrl();
+    console.log(`[MCP] fetching marketplace from: ${url}`);
     try {
-      const data = await fetchText(url);
+      const data = await fetchMarketplaceText(url);
       const json = JSON.parse(data);
       const value = json?.data?.value;
       if (!value) {
         return { success: false, error: 'Invalid response: missing data.value' };
       }
       const marketplace = typeof value === 'string' ? JSON.parse(value) : value;
-      return { success: true, data: marketplace };
+      return { success: true, data: marketplace, source: McpMarketplaceSource.Remote };
     } catch (error) {
       return {
         success: false,

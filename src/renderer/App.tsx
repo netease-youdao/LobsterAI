@@ -58,7 +58,11 @@ import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdro
 import SkinPresentationScope from './components/skin/SkinPresentationScope';
 import StartupCreditCampaign from './components/StartupCreditCampaign';
 import SubscriptionTrialCampaign from './components/SubscriptionTrialCampaign';
-import Toast, { type ToastEventDetail } from './components/Toast';
+import Toast, {
+  APP_SHOW_TOAST_EVENT,
+  resolveToastDurationMs,
+  type ToastEventDetail,
+} from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateBlockingPanel from './components/update/AppUpdateBlockingPanel';
 import AppUpdateCard from './components/update/AppUpdateCard';
@@ -995,6 +999,14 @@ const App: React.FC = () => {
     setMainView(MainView.Cowork);
   }, [dispatch]);
 
+  const dismissToast = useCallback(() => {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToastMessage(null);
+  }, []);
+
   const showToast = useCallback((toast: string | ToastEventDetail) => {
     const detail = typeof toast === 'string' ? { message: toast } : toast;
     if (!detail.message) return;
@@ -1006,7 +1018,7 @@ const App: React.FC = () => {
     toastTimerRef.current = window.setTimeout(() => {
       setToastMessage(null);
       toastTimerRef.current = null;
-    }, detail.actionLabel && detail.onAction ? 6000 : 2200);
+    }, resolveToastDurationMs(detail));
   }, []);
 
   const startUserInitiatedUpdateFlow = useCallback((reason: string) => {
@@ -1577,8 +1589,8 @@ const App: React.FC = () => {
       const detail = (e as CustomEvent<string | ToastEventDetail>).detail;
       if (detail) showToast(detail);
     };
-    window.addEventListener('app:showToast', handler);
-    return () => window.removeEventListener('app:showToast', handler);
+    window.addEventListener(APP_SHOW_TOAST_EVENT, handler);
+    return () => window.removeEventListener(APP_SHOW_TOAST_EVENT, handler);
   }, [showToast]);
 
   // Listen for ask-ai events: close settings, open a new chat, and pre-fill its input.
@@ -1995,11 +2007,12 @@ const App: React.FC = () => {
       <div className="h-screen overflow-hidden flex flex-col bg-background">
         {toastMessage && (
           <Toast
+            placement={toastMessage.placement}
             message={toastMessage.message}
             actionLabel={toastMessage.actionLabel}
             onAction={toastMessage.onAction}
             closeLabel={i18nService.t('close')}
-            onClose={() => setToastMessage(null)}
+            onClose={dismissToast}
           />
         )}
         {windowsStandaloneTitleBar}
@@ -2048,11 +2061,12 @@ const App: React.FC = () => {
       >
       {toastMessage && (
         <Toast
+          placement={toastMessage.placement}
           message={toastMessage.message}
           actionLabel={toastMessage.actionLabel}
           onAction={toastMessage.onAction}
           closeLabel={i18nService.t('close')}
-          onClose={() => setToastMessage(null)}
+          onClose={dismissToast}
         />
       )}
       <SubscriptionTrialCampaign

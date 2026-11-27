@@ -8,7 +8,6 @@ import {
   FolderOpenIcon,
   GlobeAltIcon,
   MagnifyingGlassIcon,
-  PencilSquareIcon,
   PresentationChartBarIcon,
   TableCellsIcon,
   TrashIcon,
@@ -34,12 +33,9 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 import { SubagentSessionStatus, type SubagentSessionSummary } from '@/types/cowork';
 
-import {
-  getSideChatDisplayTitle,
-  getSideChatPromoteEligibility,
-} from '../cowork/sideChatHelpers';
+import { getSideChatDisplayTitle } from '../cowork/sideChatHelpers';
+import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
-import MessageForkIcon from '../icons/MessageForkIcon';
 import SideChatIcon from '../icons/SideChatIcon';
 import {
   ArtifactNewTabCardId,
@@ -145,9 +141,7 @@ export interface ArtifactNewTabContentProps {
   onOpenWorkspaceChanges?: () => Promise<void> | void;
   onCreateSideChat?: () => void;
   onOpenSideChat?: (sideChatId: string) => void;
-  promotingSideChatId?: string | null;
   onRenameSideChat?: (sideChatId: string, nextTitle: string) => Promise<boolean> | boolean;
-  onPromoteSideChat?: (sideChatId: string) => Promise<boolean> | void;
   onDeleteSideChat?: (sideChatId: string) => void;
 }
 
@@ -169,9 +163,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   onOpenWorkspaceChanges,
   onCreateSideChat,
   onOpenSideChat,
-  promotingSideChatId = null,
   onRenameSideChat,
-  onPromoteSideChat,
   onDeleteSideChat,
 }) => {
   const [query, setQuery] = useState('');
@@ -881,15 +873,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                     const itemTitle = getSideChatDisplayTitle(item.id, sideChats, t('coworkSideChatTitle'));
                     const isRenamingItem = renamingSideChatId === item.id;
                     const isMenuOpen = openSideChatMenuId === item.id;
-                    const isPromotingItem = promotingSideChatId === item.id;
-                    const promoteEligibility = getSideChatPromoteEligibility(item);
-                    const promoteDisabled = !promoteEligibility.allowed || Boolean(promotingSideChatId);
-                    const promoteTooltip = isPromotingItem
-                      ? t('coworkSideChatPromoting')
-                      : promoteEligibility.reasonKey
-                        ? t(promoteEligibility.reasonKey)
-                        : t('coworkSideChatPromote');
-                    const hasRowActions = Boolean(onRenameSideChat || onPromoteSideChat || onDeleteSideChat);
+                    const hasRowActions = Boolean(onRenameSideChat || onDeleteSideChat);
 
                     if (isRenamingItem) {
                       return (
@@ -972,7 +956,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                             {isMenuOpen && (
                               <div
                                 role="menu"
-                                className="absolute right-0 top-7 z-30 min-w-44 overflow-hidden rounded-xl border border-border bg-surface-raised p-1.5 shadow-popover"
+                                className="popover-enter absolute right-0 top-7 z-30 min-w-40 overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-popover"
                               >
                                 {onRenameSideChat && (
                                   <button
@@ -980,29 +964,14 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                                     role="menuitem"
                                     data-recent-sidechat-menu-item="rename"
                                     onClick={() => startRecentSideChatRename(item.id, itemTitle)}
-                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary/10"
+                                    className="flex w-full items-center gap-2.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] leading-5 text-foreground transition-colors hover:bg-surface-raised"
                                   >
-                                    <PencilSquareIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
+                                    <ComposeIcon className="h-[15px] w-[15px] shrink-0 text-foreground/75" />
                                     <span>{t('coworkSideChatRename')}</span>
                                   </button>
                                 )}
-                                {onPromoteSideChat && (
-                                  <button
-                                    type="button"
-                                    role="menuitem"
-                                    disabled={promoteDisabled}
-                                    title={promoteTooltip}
-                                    data-recent-sidechat-menu-item="promote"
-                                    onClick={() => {
-                                      if (promoteDisabled) return;
-                                      setOpenSideChatMenuId(null);
-                                      void onPromoteSideChat(item.id);
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    <MessageForkIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
-                                    <span>{t(isPromotingItem ? 'coworkSideChatPromoting' : 'coworkSideChatPromote')}</span>
-                                  </button>
+                                {onRenameSideChat && onDeleteSideChat && (
+                                  <div className="my-1 border-t border-border/70" role="separator" />
                                 )}
                                 {onDeleteSideChat && (
                                   <button
@@ -1013,9 +982,9 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                                       setOpenSideChatMenuId(null);
                                       onDeleteSideChat(item.id);
                                     }}
-                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive/10"
+                                    className="flex w-full items-center gap-2.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] leading-5 text-destructive transition-colors hover:bg-destructive/10"
                                   >
-                                    <TrashIcon className="h-3.5 w-3.5 shrink-0" />
+                                    <TrashIcon className="h-[15px] w-[15px] shrink-0" strokeWidth={1.7} />
                                     <span>{t('coworkSideChatDelete')}</span>
                                   </button>
                                 )}
