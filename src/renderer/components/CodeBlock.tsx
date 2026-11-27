@@ -1580,6 +1580,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, inline
       <div
         className="flex h-9 items-center justify-between gap-2 pl-3.5 pr-1.5 text-xs"
         data-cowork-search-exclude="true"
+        data-copy-exclude="true"
       >
         <span className="min-w-0 truncate font-mono text-muted">{displayLang}</span>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -1669,6 +1670,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, inline
         ) : (
           <div className="m-0 overflow-x-auto text-code">
             <code
+              data-code-block="true"
               className={`block px-3.5 pb-3 pt-0.5 font-mono text-foreground/90 ${
                 wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre w-max min-w-full'
               }`}
