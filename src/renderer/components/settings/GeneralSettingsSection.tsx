@@ -26,7 +26,8 @@ interface GeneralSettingsSectionProps {
   isUpdatingQuitConfirmation: boolean;
   onToggleQuitConfirmation: () => void | Promise<void>;
   useSystemProxy: boolean;
-  onToggleUseSystemProxy: () => void;
+  isUpdatingUseSystemProxy?: boolean;
+  onToggleUseSystemProxy: () => void | Promise<void>;
 }
 
 const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
@@ -48,6 +49,7 @@ const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
   isUpdatingQuitConfirmation,
   onToggleQuitConfirmation,
   useSystemProxy,
+  isUpdatingUseSystemProxy = false,
   onToggleUseSystemProxy,
 }) => {
   const showSystemNotificationHint = window.electron.platform === 'win32'
@@ -192,6 +194,7 @@ const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
             title={i18nService.t('useSystemProxy')}
             description={i18nService.t('useSystemProxyDescription')}
             checked={useSystemProxy}
+            disabled={isUpdatingUseSystemProxy}
             onToggle={onToggleUseSystemProxy}
           />
         </SettingsRow>

@@ -9,6 +9,8 @@ import {
   DECISION_MODEL_CONFIG_STORE_KEY,
   DecisionModelIpcChannel,
 } from '../../../shared/decisionModel/constants';
+import { canSaveDecisionModelEndpoint } from '../../../shared/decisionModel/endpoint';
+import { t } from '../../i18n';
 import { type DecisionFetch, testDecisionModelConnection } from '../../libs/decisionModelClient';
 import {
   applyDecisionModelConfigUpdate,
@@ -57,6 +59,9 @@ export function registerDecisionModelHandlers(deps: DecisionModelHandlerDeps): v
     const store = deps.getStore();
     const previous = readDecisionModelConfig(store);
     const next = applyDecisionModelConfigUpdate(previous, update);
+    if (!canSaveDecisionModelEndpoint(next, previous.endpoint)) {
+      throw new Error(t('decisionModelErrorInvalidEndpoint'));
+    }
     store.set(DECISION_MODEL_CONFIG_STORE_KEY, next);
 
     // The key and provider are read on every call, so only switching the

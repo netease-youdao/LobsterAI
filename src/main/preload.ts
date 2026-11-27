@@ -1971,6 +1971,54 @@ contextBridge.exposeInMainWorld('electron', {
     ) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, request),
     cancelPluginInstall: (requestId: string) =>
       ipcRenderer.invoke(DshHostIpc.CancelPluginInstall, requestId),
+    onPluginInstallState: (
+      listener: (progress: {
+        requestId: string;
+        phase: string;
+        attempt?: { registry: string | null; index: number; total: number };
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        progress: {
+          requestId: string;
+          phase: string;
+          attempt?: { registry: string | null; index: number; total: number };
+        },
+      ) => listener(progress);
+      ipcRenderer.on(DshHostIpc.PluginInstallState, handler);
+      return () => {
+        ipcRenderer.removeListener(DshHostIpc.PluginInstallState, handler);
+      };
+    },
+    onPluginInstallLog: (
+      listener: (chunk: {
+        requestId?: string;
+        jobId: string;
+        argv: string[];
+        cwd: string;
+        stream: 'stdout' | 'stderr';
+        text: string;
+        exitCode?: number | null;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        chunk: {
+          requestId?: string;
+          jobId: string;
+          argv: string[];
+          cwd: string;
+          stream: 'stdout' | 'stderr';
+          text: string;
+          exitCode?: number | null;
+        },
+      ) => listener(chunk);
+      ipcRenderer.on(DshHostIpc.PluginInstallLog, handler);
+      return () => {
+        ipcRenderer.removeListener(DshHostIpc.PluginInstallLog, handler);
+      };
+    },
     removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
     setPluginEnabled: (packageName: string, enabled: boolean) =>
       ipcRenderer.invoke(DshHostIpc.SetPluginEnabled, packageName, enabled),

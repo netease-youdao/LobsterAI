@@ -240,6 +240,14 @@ export const DshPluginInstallSource = {
 export type DshPluginInstallSource =
   typeof DshPluginInstallSource[keyof typeof DshPluginInstallSource];
 
+export const DshPluginInstallPhase = {
+  Installing: 'installing',
+  Cancelling: 'cancelling',
+  Applying: 'applying',
+} as const;
+export type DshPluginInstallPhase =
+  typeof DshPluginInstallPhase[keyof typeof DshPluginInstallPhase];
+
 export const DshPluginUpdateKind = {
   Registry: 'registry',
   Git: 'git',
@@ -289,6 +297,8 @@ export const DshHostIpc = {
   InspectPlugin: 'dshHost:inspectPlugin',
   InstallPlugin: 'dshHost:installPlugin',
   CancelPluginInstall: 'dshHost:cancelPluginInstall',
+  PluginInstallState: 'dshHost:pluginInstallState',
+  PluginInstallLog: 'dshHost:pluginInstallLog',
   RemovePlugin: 'dshHost:removePlugin',
   SetPluginEnabled: 'dshHost:setPluginEnabled',
   CheckPluginVersions: 'dshHost:checkPluginVersions',

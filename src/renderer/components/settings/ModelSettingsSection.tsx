@@ -33,6 +33,11 @@ import {
   shouldShowApiFormatSelector,
 } from './modelProviderUtils';
 import {
+  SettingsFormFooterMode,
+  SettingsFormStatus,
+} from './settingsDirtyGuard';
+import { SettingsFormFooter, SettingsFormStatusBadge } from './SettingsFormFooter';
+import {
   SETTINGS_DESCRIPTION_TEXT,
   SETTINGS_ITEM_TITLE_TEXT,
   SETTINGS_META_TEXT,
@@ -151,6 +156,11 @@ export interface ModelSettingsSectionProps {
     maxTokens?: number,
   ) => void;
   handleDeleteModel: (modelId: string) => void;
+  connectionFormStatus?: SettingsFormStatus;
+  isConnectionDirty?: boolean;
+  connectionSaveError?: string | null;
+  onSaveConnection?: () => void | boolean | Promise<void | boolean>;
+  onDiscardConnection?: () => void;
 }
 
 export interface DeleteProviderConfirmDialogProps {
@@ -246,6 +256,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
   handleTestConnection,
   isFetchingModels, fetchModelsError, onClearFetchModelsError, handleFetchModels,
   handleAddModel, handleEditModel, handleDeleteModel,
+  connectionFormStatus = SettingsFormStatus.Idle,
+  isConnectionDirty = false,
+  connectionSaveError = null,
+  onSaveConnection,
+  onDiscardConnection,
 }) => {
   const copilotProvider = providers[ProviderName.Copilot];
   const copilotAuthInProgress = copilotAuthStatus === 'requesting'
@@ -510,16 +525,19 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     </button>
                   )}
                 </div>
-                <div
-                  className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
-                    providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
-                      ? 'bg-green-500/20 text-green-600 dark:text-green-400'
-                      : 'bg-surface-raised text-secondary'
-                  }`}
-                >
-                  {providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
-                    ? i18nService.t('providerStatusOn')
-                    : i18nService.t('providerStatusOff')}
+                <div className="flex items-center gap-2">
+                  <SettingsFormStatusBadge status={connectionFormStatus} />
+                  <div
+                    className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
+                      providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
+                        ? 'bg-green-500/20 text-green-600 dark:text-green-400'
+                        : 'bg-surface-raised text-secondary'
+                    }`}
+                  >
+                    {providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
+                      ? i18nService.t('providerStatusOn')
+                      : i18nService.t('providerStatusOff')}
+                  </div>
                 </div>
               </div>
 
@@ -1699,6 +1717,19 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                   </button>
                 )}
               </div>
+              )}
+
+              {/* 局部连接配置保存操作条（仅在修改/保存中/失败时显示） */}
+              {onSaveConnection && onDiscardConnection && (
+                <SettingsFormFooter
+                  status={connectionFormStatus}
+                  mode={SettingsFormFooterMode.DirtyBar}
+                  canSave={isConnectionDirty}
+                  errorMessage={connectionSaveError}
+                  onSave={onSaveConnection}
+                  onDiscard={onDiscardConnection}
+                  className="rounded-xl border border-border bg-surface-raised/60 px-3 py-2.5"
+                />
               )}
 
               <div>

@@ -1,5 +1,5 @@
 import { PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   BrowserCredentialSaveMode,
@@ -18,6 +18,13 @@ import Modal from '../common/Modal';
 import ThemedSelect from '../ui/ThemedSelect';
 import BrowserCredentialSettings from './BrowserCredentialSettings';
 import {
+  type RegisterSettingsDirtyGuard,
+  SETTINGS_FORM_SAVED_RESET_MS,
+  SettingsFormFooterMode,
+  SettingsFormStatus,
+} from './settingsDirtyGuard';
+import { SettingsFormFooter, SettingsFormStatusBadge } from './SettingsFormFooter';
+import {
   SETTINGS_ACTION_BUTTON_CLASS,
   SETTINGS_ICON_BUTTON_CLASS,
   SettingsCard,
@@ -29,7 +36,8 @@ import { SETTINGS_DESCRIPTION_TEXT } from './settingsTypography';
 
 interface BrowserWebAccessSettingsProps {
   value: BrowserWebAccessConfig;
-  onChange: (value: BrowserWebAccessConfig) => void;
+  onCommit: (value: BrowserWebAccessConfig) => Promise<boolean>;
+  onRegisterDirtyGuard?: RegisterSettingsDirtyGuard;
 }
 
 const HostnameListTarget = {
@@ -82,11 +90,46 @@ const HostnameList: React.FC<{
 
 const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
   value,
-  onChange,
+  onCommit,
+  onRegisterDirtyGuard,
 }) => {
   const [hostnameDialogTarget, setHostnameDialogTarget] = useState<HostnameListTarget | null>(null);
   const [hostnameDraft, setHostnameDraft] = useState('');
+  const [externalDraft, setExternalDraft] = useState(() => ({
+    executablePath: value.executablePath ?? '',
+    cdpUrl: value.cdpUrl ?? '',
+  }));
+  const [formStatus, setFormStatus] = useState<SettingsFormStatus>(SettingsFormStatus.Idle);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const hostnameInputRef = useRef<HTMLInputElement>(null);
+  const savedTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current);
+      }
+    };
+  }, []);
+
+  const savedExecutablePath = value.executablePath ?? '';
+  const savedCdpUrl = value.cdpUrl ?? '';
+  const external = value.displayMode === BrowserDisplayMode.External;
+  const isExternalDirty = external && (
+    externalDraft.executablePath.trim() !== savedExecutablePath.trim()
+    || externalDraft.cdpUrl.trim() !== savedCdpUrl.trim()
+  );
+
+  // Keep draft aligned with persisted config whenever there are no local unsaved edits.
+  useEffect(() => {
+    setExternalDraft({
+      executablePath: savedExecutablePath,
+      cdpUrl: savedCdpUrl,
+    });
+  }, [savedExecutablePath, savedCdpUrl]);
 
   useEffect(() => {
     if (hostnameDialogTarget) {
@@ -94,16 +137,116 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
     }
   }, [hostnameDialogTarget]);
 
-  const update = (patch: Partial<BrowserWebAccessConfig>) => {
-    onChange({
+  const clearSavedTimer = useCallback(() => {
+    if (savedTimerRef.current !== null) {
+      window.clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = null;
+    }
+  }, []);
+
+  const commitImmediate = useCallback(async (patch: Partial<BrowserWebAccessConfig>) => {
+    setSaveError(null);
+    const nextConfig: BrowserWebAccessConfig = {
       ...value,
       ...patch,
-    });
-  };
+    };
+    await onCommit(nextConfig);
+  }, [onCommit, value]);
+
+  const handleDisplayModeChange = useCallback((displayMode: BrowserDisplayMode) => {
+    if (displayMode !== BrowserDisplayMode.External) {
+      clearSavedTimer();
+      setExternalDraft({
+        executablePath: savedExecutablePath,
+        cdpUrl: savedCdpUrl,
+      });
+      setFormStatus(SettingsFormStatus.Idle);
+      setSaveError(null);
+    }
+    void commitImmediate({ displayMode });
+  }, [clearSavedTimer, commitImmediate, savedCdpUrl, savedExecutablePath]);
 
   const updateHostnames = (hostnames: string[]) => {
-    update({ blockedHostnames: normalizeBrowserHostnameList(hostnames) });
+    void commitImmediate({ blockedHostnames: normalizeBrowserHostnameList(hostnames) });
   };
+
+  const trimmedCdpUrl = externalDraft.cdpUrl.trim();
+  const cdpUrlInvalid = external && Boolean(trimmedCdpUrl) && !normalizeBrowserCdpUrl(trimmedCdpUrl);
+
+  const handleExternalDraftChange = useCallback((patch: Partial<{ executablePath: string; cdpUrl: string }>) => {
+    clearSavedTimer();
+    setSaveError(null);
+    setExternalDraft(prev => {
+      const next = { ...prev, ...patch };
+      const nextDirty = next.executablePath.trim() !== savedExecutablePath.trim()
+        || next.cdpUrl.trim() !== savedCdpUrl.trim();
+      setFormStatus(nextDirty ? SettingsFormStatus.Dirty : SettingsFormStatus.Idle);
+      return next;
+    });
+  }, [clearSavedTimer, savedCdpUrl, savedExecutablePath]);
+
+  const handleDiscardExternal = useCallback(() => {
+    clearSavedTimer();
+    setExternalDraft({
+      executablePath: savedExecutablePath,
+      cdpUrl: savedCdpUrl,
+    });
+    setSaveError(null);
+    setFormStatus(SettingsFormStatus.Idle);
+  }, [clearSavedTimer, savedCdpUrl, savedExecutablePath]);
+
+  const handleSaveExternal = useCallback(async (): Promise<boolean> => {
+    if (!external || cdpUrlInvalid || !isExternalDirty) {
+      return !cdpUrlInvalid;
+    }
+    clearSavedTimer();
+    setFormStatus(SettingsFormStatus.Saving);
+    setSaveError(null);
+    try {
+      const ok = await onCommit({
+        ...value,
+        executablePath: externalDraft.executablePath.trim() || undefined,
+        cdpUrl: externalDraft.cdpUrl.trim() || undefined,
+      });
+      if (!mountedRef.current) return ok;
+      if (!ok) {
+        setFormStatus(SettingsFormStatus.Error);
+        setSaveError(i18nService.t('failedToSaveSettings'));
+        return false;
+      }
+      setFormStatus(SettingsFormStatus.Saved);
+      savedTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) {
+          setFormStatus(SettingsFormStatus.Idle);
+        }
+        savedTimerRef.current = null;
+      }, SETTINGS_FORM_SAVED_RESET_MS);
+      return true;
+    } catch (error) {
+      if (mountedRef.current) {
+        setFormStatus(SettingsFormStatus.Error);
+        setSaveError(error instanceof Error ? error.message : i18nService.t('failedToSaveSettings'));
+      }
+      return false;
+    }
+  }, [cdpUrlInvalid, clearSavedTimer, external, externalDraft, isExternalDirty, onCommit, value]);
+
+  useEffect(() => {
+    if (!onRegisterDirtyGuard) return;
+    if (isExternalDirty) {
+      onRegisterDirtyGuard({
+        isDirty: true,
+        canSave: !cdpUrlInvalid,
+        save: handleSaveExternal,
+        discard: handleDiscardExternal,
+      });
+    } else {
+      onRegisterDirtyGuard(null);
+    }
+    return () => {
+      onRegisterDirtyGuard(null);
+    };
+  }, [cdpUrlInvalid, handleDiscardExternal, handleSaveExternal, isExternalDirty, onRegisterDirtyGuard]);
 
   const openHostnameDialog = (target: HostnameListTarget) => {
     setHostnameDraft('');
@@ -139,14 +282,23 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
   const hostnameDialogTitle = i18nService.t('browserAddBlockedHostnameTitle');
   const hostnameDialogDescription = i18nService.t('browserAddBlockedHostnameDescription');
 
-  const external = value.displayMode === BrowserDisplayMode.External;
-  const trimmedCdpUrl = value.cdpUrl?.trim() ?? '';
-  const cdpUrlInvalid = external && Boolean(trimmedCdpUrl) && !normalizeBrowserCdpUrl(trimmedCdpUrl);
+  const resolvedFormStatus: SettingsFormStatus = formStatus === SettingsFormStatus.Saving
+    ? SettingsFormStatus.Saving
+    : formStatus === SettingsFormStatus.Error
+      ? SettingsFormStatus.Error
+      : isExternalDirty
+        ? SettingsFormStatus.Dirty
+        : formStatus === SettingsFormStatus.Saved
+          ? SettingsFormStatus.Saved
+          : SettingsFormStatus.Idle;
 
   return (
     <>
       <div className="space-y-6">
-        <SettingsSection title={i18nService.t('browserSettingsGeneralSection')}>
+        <SettingsSection
+          title={i18nService.t('browserSettingsGeneralSection')}
+          action={external ? <SettingsFormStatusBadge status={resolvedFormStatus} /> : undefined}
+        >
           <SettingsCard>
             <SettingsItem
               title={i18nService.t('browserDisplayModeTitle')}
@@ -157,7 +309,7 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
                     id="browser-display-mode"
                     size="sm"
                     value={value.displayMode}
-                    onChange={displayMode => update({ displayMode: displayMode as BrowserDisplayMode })}
+                    onChange={displayMode => handleDisplayModeChange(displayMode as BrowserDisplayMode)}
                     options={[
                       { value: BrowserDisplayMode.InApp, label: i18nService.t('browserDisplayModeInApp') },
                       { value: BrowserDisplayMode.External, label: i18nService.t('browserDisplayModeExternal') },
@@ -175,8 +327,8 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
                     <input
                       aria-label={i18nService.t('browserExecutablePath')}
                       className="h-8 w-64 rounded-lg border border-border bg-surface px-2.5 text-xs text-foreground outline-none placeholder:text-secondary focus:border-primary focus:ring-1 focus:ring-primary/40"
-                      value={value.executablePath ?? ''}
-                      onChange={event => update({ executablePath: event.target.value })}
+                      value={externalDraft.executablePath}
+                      onChange={event => handleExternalDraftChange({ executablePath: event.target.value })}
                     />
                   )}
                 />
@@ -200,11 +352,23 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
                           ? 'border-red-500 focus:border-red-500 focus:ring-red-500/40'
                           : 'border-border focus:border-primary focus:ring-primary/40'
                       }`}
-                      value={value.cdpUrl ?? ''}
-                      onChange={event => update({ cdpUrl: event.target.value })}
+                      value={externalDraft.cdpUrl}
+                      onChange={event => handleExternalDraftChange({ cdpUrl: event.target.value })}
                     />
                   )}
                 />
+                {resolvedFormStatus !== SettingsFormStatus.Idle && resolvedFormStatus !== SettingsFormStatus.Saved ? (
+                  <div className="px-4 py-3">
+                    <SettingsFormFooter
+                      status={resolvedFormStatus}
+                      mode={SettingsFormFooterMode.DirtyBar}
+                      canSave={isExternalDirty && !cdpUrlInvalid}
+                      errorMessage={saveError}
+                      onSave={handleSaveExternal}
+                      onDiscard={handleDiscardExternal}
+                    />
+                  </div>
+                ) : null}
               </>
             ) : (
               <>
@@ -221,9 +385,11 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
                         id="browser-credential-use-mode"
                         size="sm"
                         value={value.credentialUseMode}
-                        onChange={(mode) => update({
-                          credentialUseMode: mode as BrowserCredentialUseModeValue,
-                        })}
+                        onChange={(mode) => {
+                          void commitImmediate({
+                            credentialUseMode: mode as BrowserCredentialUseModeValue,
+                          });
+                        }}
                         options={[
                           {
                             value: BrowserCredentialUseMode.AlwaysAsk,
@@ -254,9 +420,11 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
                         id="browser-credential-save-mode"
                         size="sm"
                         value={value.credentialSaveMode}
-                        onChange={(mode) => update({
-                          credentialSaveMode: mode as BrowserCredentialSaveModeValue,
-                        })}
+                        onChange={(mode) => {
+                          void commitImmediate({
+                            credentialSaveMode: mode as BrowserCredentialSaveModeValue,
+                          });
+                        }}
                         options={[
                           {
                             value: BrowserCredentialSaveMode.Ask,

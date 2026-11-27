@@ -491,7 +491,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     <div
       ref={rowRef}
       className={`group relative flex w-full items-center gap-2 rounded-[9px] ${
-        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[32px]'
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'min-h-[32px] py-1'
       } ${leftPaddingClassName} pr-2 ${textSizeClassName} transition-all duration-150 ${
         isSelectionDisabled
           ? 'cursor-default font-normal text-foreground/30'

@@ -960,6 +960,28 @@ export class DshHostManager extends EventEmitter {
       client.on?.('connected', () => {
         if (this.client === client) this.setDisconnectedAt(null);
       });
+      client.on?.('remote:plugin-manager/install-state', (progress: unknown) => {
+        if (this.client !== client) return;
+        if (
+          progress
+          && typeof progress === 'object'
+          && typeof (progress as { requestId?: unknown }).requestId === 'string'
+          && typeof (progress as { phase?: unknown }).phase === 'string'
+        ) {
+          this.emit('pluginInstallState', progress);
+        }
+      });
+      client.on?.('remote:plugin-manager/install-log', (chunk: unknown) => {
+        if (this.client !== client) return;
+        if (
+          chunk
+          && typeof chunk === 'object'
+          && typeof (chunk as { jobId?: unknown }).jobId === 'string'
+          && typeof (chunk as { text?: unknown }).text === 'string'
+        ) {
+          this.emit('pluginInstallLog', chunk);
+        }
+      });
       client.on?.('remote:plugin-manager/update-state', (progress: unknown) => {
         if (this.client !== client) return;
         if (

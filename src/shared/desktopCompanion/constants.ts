@@ -426,7 +426,7 @@ export const DesktopCompanionSize = {
   Launcher: { width: 276, height: 304 },
   // A 420px card with generous drop targets, plus its transparent shadow margin.
   Drop: { width: 464, height: 188 },
-  // A 48px toolbar plus the margin; the window always reserves ToolbarMenu space below or above it.
+  // A 34px toolbar (or multi-line copy notice) plus the shadow margin; the window always reserves ToolbarMenu space below or above it.
   Toolbar: { width: 680, height: 92 },
   ToolbarMenu: 200,
   // A card up to 400 × 600 plus the margin.
@@ -439,6 +439,8 @@ export const DesktopCompanionSize = {
   SurfacePad: 22,
   Margin: 12,
   Gap: 6,
+  /** Breathing room between the floating selection toolbar and the selected line. */
+  ToolbarGap: 8,
 } as const;
 
 export const DesktopCompanionTiming = {

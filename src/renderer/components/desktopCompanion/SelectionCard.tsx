@@ -26,16 +26,6 @@ export function StopGlyph() {
   return <span className="sel-stop-glyph" aria-hidden="true" />;
 }
 
-/** Both labels take up room, so a button keeps its width when "Copy" turns into "Copied". */
-export function SwapLabel({ on, off, showOn }: { on: string; off: string; showOn: boolean }) {
-  return (
-    <span className="sel-swap">
-      <span aria-hidden={showOn}>{off}</span>
-      <span aria-hidden={!showOn}>{on}</span>
-    </span>
-  );
-}
-
 interface HeaderProps {
   /** Defaults to the LobsterAI mark; standalone tools can use their own icon. */
   icon?: SelectionIcon;

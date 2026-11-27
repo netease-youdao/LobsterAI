@@ -2588,6 +2588,16 @@ const getDshBootstrap = (): DshBootstrap => {
         if (!win.isDestroyed()) win.webContents.send(DshHostIpc.ConnectionChanged);
       }
     });
+    dshBootstrap.hostManager.on('pluginInstallState', (progress: unknown) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginInstallState, progress);
+      }
+    });
+    dshBootstrap.hostManager.on('pluginInstallLog', (chunk: unknown) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginInstallLog, chunk);
+      }
+    });
     dshBootstrap.hostManager.on('pluginUpdateState', (progress: unknown) => {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginUpdateState, progress);

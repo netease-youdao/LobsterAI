@@ -293,8 +293,7 @@ describe('selection toolbar placement', () => {
   test('sits just above the selection, centered on a one-line selection', () => {
     const { bounds, above } = resolveCompanionToolbarBounds(word, size, area);
     expect(above).toBe(true);
-    expect(bounds.y + bounds.height - pad).toBeLessThanOrEqual(200);
-    expect(bounds.y + bounds.height - pad).toBeGreaterThan(188);
+    expect(bounds.y + bounds.height - pad).toBe(word.top - DesktopCompanionSize.ToolbarGap);
     expect(bounds.x + bounds.width / 2).toBe(340);
   });
 

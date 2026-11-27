@@ -64,10 +64,10 @@ export type ShortcutConfig = Record<ShortcutAction, string> & {
 
 export const FontPreferences = {
   UiFontSizeDefault: 15,
-  UiFontSizeMin: 11,
-  UiFontSizeMax: 16,
+  UiFontSizeMin: 12,
+  UiFontSizeMax: 20,
   CodeFontSizeDefault: 14,
-  CodeFontSizeMin: 8,
+  CodeFontSizeMin: 10,
   CodeFontSizeMax: 24,
 } as const;
 

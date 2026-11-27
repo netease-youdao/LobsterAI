@@ -248,8 +248,8 @@ export function companionPointerAnchor(point: CompanionPoint): CompanionSelectio
   return { left: point.x, right: point.x, top: point.y - 18, bottom: point.y + 14, multiline: false };
 }
 
-/** How far the toolbar's first button and the card's text sit inside the visible edge. */
-const SELECTION_INSET = 12;
+/** How far the toolbar's first button (past its drag grip) and the card's text sit inside the visible edge. */
+const SELECTION_INSET = 16;
 
 /** Toolbar and cards share a column: centered on a one-line selection, starting where a longer one starts. */
 function selectionColumnX(anchor: CompanionSelectionAnchor, width: number): number {
@@ -274,7 +274,7 @@ export function resolveCompanionToolbarBounds(
   workArea: CompanionRect,
 ): CompanionToolbarPlacement {
   const pad = DesktopCompanionSize.SurfacePad;
-  const gap = DesktopCompanionSize.Gap;
+  const gap = DesktopCompanionSize.ToolbarGap;
   const aboveY = anchor.top - gap - size.height + pad;
   const belowY = anchor.bottom + gap - pad;
   const above = aboveY >= workArea.y || belowY + size.height > workArea.y + workArea.height;

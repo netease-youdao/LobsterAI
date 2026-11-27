@@ -35,10 +35,67 @@ describe('buildPermissionModalPresentation', () => {
     );
     expect(presentation.dangerLevel).toBe('caution');
     expect(presentation.dangerReasonText).toBe('dangerReasonGitPush');
+    expect(presentation.dangerDetailText).toBe('coworkApprovalRiskGitPush');
     expect(presentation.approvalScopeKey).toBe('shell:git-push');
+    expect(presentation.allowSessionLabel).toBe('coworkApprovalAllowSessionGitPush');
     expect(presentation.canAllowForSession).toBe(true);
     expect(presentation.canSwitchFullAccess).toBe(true);
     expect(presentation.technicalDetails).toBe('');
+  });
+
+  test('surfaces script title, exact triggered line, and scoped session-allow label for embedded scripts', () => {
+    const scriptCommand = [
+      'cd "/Users/alice/Documents/Obsidian Vault/.tmp/github-app-setup" && python3 - <<\'PY\'',
+      'import json, os',
+      'new = json.load(open(\'credentials.json\'))',
+      'open(\'deploy.sh\', \'w\').write(\'echo ok\')',
+      'os.chmod(\'deploy.sh\', 0o755)',
+      'PY',
+    ].join('\n');
+
+    const presentation = buildPermissionModalPresentation(
+      'bash',
+      {
+        command: scriptCommand,
+        description: 'Prepare deployment helper script',
+        permissionPreset: DshPermissionPreset.WorkspaceWrite,
+      },
+      identityT,
+    );
+
+    expect(presentation.title).toBe('coworkApprovalTitleScriptWithDanger');
+    expect(presentation.summary).toBe('coworkApprovalSummaryScriptWithDanger');
+    expect(presentation.modelNoteLabel).toBe('coworkApprovalModelNoteLabel');
+    expect(presentation.modelNote).toBe('Prepare deployment helper script');
+    expect(presentation.targetLabel).toBe('coworkApprovalTargetDir');
+    expect(presentation.targetValue).toBe('/Users/alice/Documents/Obsidian Vault/.tmp/github-app-setup');
+    expect(presentation.dangerLevel).toBe('caution');
+    expect(presentation.dangerReasonText).toBe('dangerReasonPermissionChange');
+    expect(presentation.dangerDetailText).toBe('coworkApprovalRiskPermissionChange');
+    expect(presentation.triggeredSnippet).toBe("os.chmod('deploy.sh', 0o755)");
+    expect(presentation.triggeredLineNumber).toBe(5);
+    expect(presentation.isEmbeddedInScript).toBe(true);
+    expect(presentation.allowSessionLabel).toBe('coworkApprovalAllowSessionPermissionChange');
+    expect(presentation.canAllowForSession).toBe(true);
+  });
+
+  test('presents sudo commands as privilege escalation instead of file permission changes', () => {
+    const presentation = buildPermissionModalPresentation(
+      'bash',
+      {
+        command: 'sudo apt-get install jq',
+        permissionPreset: DshPermissionPreset.WorkspaceWrite,
+      },
+      identityT,
+    );
+
+    expect(presentation.title).toBe('coworkApprovalTitlePrivilegeEscalation');
+    expect(presentation.summary).toBe('coworkApprovalSummaryPrivilegeEscalation');
+    expect(presentation.dangerLevel).toBe('caution');
+    expect(presentation.dangerReasonText).toBe('dangerReasonPrivilegeEscalation');
+    expect(presentation.dangerDetailText).toBe('coworkApprovalRiskPrivilegeEscalation');
+    expect(presentation.approvalScopeKey).toBe('shell:privilege-escalation');
+    expect(presentation.allowSessionLabel).toBe('coworkApprovalAllowSessionPrivilegeEscalation');
   });
 
   test('marks destructive commands non-session-rememberable while keeping full-access option', () => {

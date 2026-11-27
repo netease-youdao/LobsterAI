@@ -904,6 +904,14 @@ describe('registerDshHostHandlers live HMR Typert RPC path', () => {
           enabled: true,
           bundle: spec,
           version: '1.0.0',
+          approvedBuilds: ['esbuild'],
+          registries: ['https://registry.npmmirror.com/'],
+          packageResult: {
+            exitCode: 0,
+            output: 'added 1 package',
+            truncated: false,
+            logPath: '/tmp/install.log',
+          },
         };
       }),
       setPluginBundleEnabled: vi.fn(async (name: string, enabled: boolean): Promise<DshPluginChangeResult> => {
@@ -980,9 +988,22 @@ describe('registerDshHostHandlers live HMR Typert RPC path', () => {
       spec: '@acme/demo-tools',
       registry: 'https://registry.npmmirror.com/',
       requestId: 'req-1',
-    })) as { ok: boolean; application?: string; restartRequired?: boolean; plugins: Array<{ name: string }> };
+    })) as {
+      ok: boolean;
+      application?: string;
+      stage?: string;
+      approvedBuilds?: string[];
+      registries?: Array<string | null>;
+      exitCode?: number | null;
+      restartRequired?: boolean;
+      plugins: Array<{ name: string }>;
+    };
     expect(installRes.ok).toBe(true);
     expect(installRes.application).toBe(DshPluginApplicationStatus.Applied);
+    expect(installRes.stage).toBe('install');
+    expect(installRes.approvedBuilds).toEqual(['esbuild']);
+    expect(installRes.registries).toEqual(['https://registry.npmmirror.com/']);
+    expect(installRes.exitCode).toBe(0);
     expect(installRes.restartRequired).toBe(false);
     expect(installRes.plugins.some((p) => p.name === '@acme/demo-tools')).toBe(true);
     expect(restartMock).not.toHaveBeenCalled();

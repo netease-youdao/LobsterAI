@@ -5,8 +5,12 @@ import {
   dispatchOpenEmbeddedPlugin,
   DSH_OPEN_EMBEDDED_PLUGIN_EVENT,
   DSH_PERMISSION_PRESET_CHANGED_EVENT,
+  DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY,
   DSH_PLUGINS_CHANGED_EVENT,
   dshHostService,
+  loadDshPluginInstallRegistry,
+  sanitizePersistedInstallRegistryChoice,
+  saveDshPluginInstallRegistry,
   shouldApplyPermissionPresetEvent,
 } from './dshHost';
 
@@ -272,5 +276,55 @@ describe('dshHostService plugin operations', () => {
     expect(onPluginsChanged).toHaveBeenCalledTimes(1);
     expect(unsubUpdate).toHaveBeenCalledTimes(1);
     expect(unsubChanged).toHaveBeenCalledTimes(1);
+  });
+
+  test('forwards install state/log subscriptions and persists install registry choice', async () => {
+    const unsubState = vi.fn();
+    const unsubLog = vi.fn();
+    const onPluginInstallState = vi.fn(() => unsubState);
+    const onPluginInstallLog = vi.fn(() => unsubLog);
+    const storeGet = vi.fn(async () => ({ kind: 'offered', registry: 'https://registry.npmmirror.com/' }));
+    const storeSet = vi.fn(async () => undefined);
+
+    vi.stubGlobal('window', {
+      electron: {
+        dshHost: {
+          onPluginInstallState,
+          onPluginInstallLog,
+        },
+        store: {
+          get: storeGet,
+          set: storeSet,
+        },
+      },
+    });
+
+    const offState = dshHostService.onPluginInstallState(() => undefined);
+    const offLog = dshHostService.onPluginInstallLog(() => undefined);
+    offState();
+    offLog();
+    expect(onPluginInstallState).toHaveBeenCalledTimes(1);
+    expect(onPluginInstallLog).toHaveBeenCalledTimes(1);
+    expect(unsubState).toHaveBeenCalledTimes(1);
+    expect(unsubLog).toHaveBeenCalledTimes(1);
+
+    expect(await loadDshPluginInstallRegistry()).toEqual({
+      kind: 'offered',
+      registry: 'https://registry.npmmirror.com/',
+    });
+    expect(storeGet).toHaveBeenCalledWith(DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY);
+
+    await saveDshPluginInstallRegistry({ kind: 'custom', url: ' https://npm.corp.example/ ' });
+    expect(storeSet).toHaveBeenCalledWith(DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY, {
+      kind: 'custom',
+      url: 'https://npm.corp.example/',
+    });
+
+    expect(sanitizePersistedInstallRegistryChoice({ kind: 'offered', registry: null })).toEqual({
+      kind: 'offered',
+      registry: null,
+    });
+    expect(sanitizePersistedInstallRegistryChoice({ kind: 'custom', url: '   ' })).toBeNull();
+    expect(sanitizePersistedInstallRegistryChoice('invalid')).toBeNull();
   });
 });

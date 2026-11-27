@@ -90,6 +90,7 @@ export interface DshPluginMutationOutcome {
   application?: DshPluginApplicationStatus;
   restartRequired?: boolean;
   restartReason?: string;
+  stage?: 'install' | 'enable' | 'remove';
   changed?: boolean;
   enabled?: boolean;
   bundle?: string;
@@ -99,7 +100,10 @@ export interface DshPluginMutationOutcome {
   failedAt?: 'registry' | 'spec-host';
   error?: string;
   pendingBuilds?: string[];
+  approvedBuilds?: string[];
+  registries?: Array<string | null>;
   incompatible?: DshPluginIncompatibleInfo[];
+  exitCode?: number | null;
   output?: string;
   logPath?: string;
   stdout?: string;
@@ -857,6 +861,7 @@ export function normalizePluginChangeOutcome(
     application,
     restartRequired,
     ...(result.restartReason ? { restartReason: result.restartReason } : {}),
+    stage: result.stage,
     changed: result.changed,
     ...(typeof result.enabled === 'boolean' ? { enabled: result.enabled } : {}),
     ...(result.bundle ? { bundle: result.bundle } : {}),
@@ -868,7 +873,16 @@ export function normalizePluginChangeOutcome(
     ...(result.pendingBuilds && result.pendingBuilds.length > 0
       ? { pendingBuilds: result.pendingBuilds }
       : {}),
+    ...(result.approvedBuilds && result.approvedBuilds.length > 0
+      ? { approvedBuilds: result.approvedBuilds }
+      : {}),
+    ...(result.registries && result.registries.length > 0
+      ? { registries: [...result.registries] }
+      : {}),
     ...(incompatible && incompatible.length > 0 ? { incompatible } : {}),
+    ...(result.packageResult?.exitCode !== undefined
+      ? { exitCode: result.packageResult.exitCode }
+      : {}),
     ...(output ? { output } : {}),
     ...(result.packageResult?.logPath ? { logPath: result.packageResult.logPath } : {}),
     plugins,
