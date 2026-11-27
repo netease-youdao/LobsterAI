@@ -54,6 +54,10 @@
 - id: schedule
   disabled: true
 
+# Desktop sessions already generate their title through /api/desktop-tools/session-title.
+- id: session-title-llm
+  disabled: true
+
 # None of LobsterAI's built-in MCP servers use MCP Resources; disabling this
 # avoids injecting 3 unused resource tools + an extra prompt section per turn.
 - id: mcp-resources
