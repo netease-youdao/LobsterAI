@@ -8,6 +8,7 @@ import {
 } from '../../../scheduledTask/constants';
 import type {
   RunFilter,
+  ScheduledRunSessionRequest,
   ScheduledTask,
   ScheduledTaskDelivery,
   ScheduledTaskInput,
@@ -130,7 +131,7 @@ export interface ScheduledTaskHandlerDeps {
     ) => Promise<void>;
   } | null;
   getCoworkSessionTitle: (sessionId: string) => string | null;
-  getCoworkSession?: (sessionId: string) => unknown | null;
+  getCoworkSession?: (sessionId: string, runId?: string) => unknown | null;
   sendProactiveImMessage?: (params: {
     platform: string;
     instanceId?: string;
@@ -454,11 +455,12 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(
     ScheduledTaskIpc.ResolveSession,
-    async (_event, input: string | { sessionId?: string | null; sessionKey?: string | null }) => {
+    async (_event, input: string | ScheduledRunSessionRequest) => {
       try {
         const sessionId = typeof input === 'string' ? input : (input.sessionId ?? input.sessionKey ?? null);
         if (!sessionId || !getCoworkSession) return { success: true, session: null };
-        const session = getCoworkSession(sessionId);
+        const runId = typeof input === 'object' && input.sessionId ? input.runId : undefined;
+        const session = getCoworkSession(sessionId, runId);
         return { success: true, session: session ?? null };
       } catch (error) {
         return {

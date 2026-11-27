@@ -2128,7 +2128,7 @@ interface IElectronAPI {
       error?: string;
     }>;
     resolveSession: (
-      input: string | { sessionId?: string | null; sessionKey?: string | null },
+      input: string | import('../../scheduledTask/types').ScheduledRunSessionRequest,
     ) => Promise<{
       success: boolean;
       session?: import('./cowork').CoworkSession | null;

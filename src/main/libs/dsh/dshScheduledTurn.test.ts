@@ -206,7 +206,7 @@ describe('executeDshScheduledTask', () => {
     };
   }
 
-  test('passes modelOverride and scheduledTaskId to createSession and delivers webhook results', async () => {
+  test('delivers only the requested run from the shared task conversation', async () => {
     const receivedPayloads: Array<Record<string, unknown>> = [];
     const webhookBase = await startLocalServer((_req, res, body) => {
       receivedPayloads.push(JSON.parse(body) as Record<string, unknown>);
@@ -219,7 +219,8 @@ describe('executeDshScheduledTask', () => {
       queueMicrotask(() => runtime.emit('complete', sessionId));
     });
 
-    const createSession = vi.fn(() => ({ id: 'cw-sched-1' }));
+    const prepareScheduledTaskSession = vi.fn(() => 'cw-sched-1');
+    const getScheduledRunSummary = vi.fn(() => 'Service healthy.');
     const task = makeTask({
       delivery: { mode: DeliveryMode.Webhook, to: `${webhookBase}/notify` },
     });
@@ -229,31 +230,24 @@ describe('executeDshScheduledTask', () => {
         hostManager: { isReady: () => true, start: vi.fn(async () => undefined) },
         runtimeAdapter: runtime,
         coworkStore: {
-          createSession,
-          getSession: () => ({
-            id: 'cw-sched-1',
-            cwd: '/tmp/ops',
-            messages: [
-              { id: 'm1', type: 'assistant', content: 'Service healthy.', timestamp: 1 },
-            ],
-          }),
+          prepareScheduledTaskSession,
+          getScheduledRunSummary,
         },
         getDefaultCwd: () => '/tmp/ops',
       },
       task,
       new AbortController().signal,
+      'run-1',
     );
 
-    expect(createSession).toHaveBeenCalledWith(
-      '[定时] Nightly Check',
-      '/tmp/ops',
-      undefined,
-      'auto',
-      undefined,
-      'agent-ops',
-      'openai/gpt-4o-mini',
-      { scheduledTaskId: 'task-exec-1' },
-    );
+    expect(prepareScheduledTaskSession).toHaveBeenCalledWith({
+      taskId: task.id, agentId: 'agent-ops', title: '[定时] Nightly Check',
+      cwd: '/tmp/ops', modelOverride: 'openai/gpt-4o-mini',
+    });
+    expect(runtime.startSession).toHaveBeenCalledWith('cw-sched-1', 'Check status', {
+      agentId: 'agent-ops', autoApprove: true, requestId: 'run-1',
+    });
+    expect(getScheduledRunSummary).toHaveBeenCalledWith('cw-sched-1', 'run-1');
     expect(result).toEqual({
       sessionId: 'cw-sched-1',
       summary: 'Service healthy.',
@@ -275,7 +269,7 @@ describe('executeDshScheduledTask', () => {
     runtime.startSession.mockImplementation(async (sessionId: string) => {
       queueMicrotask(() => runtime.emit('complete', sessionId));
     });
-    const createSession = vi.fn(() => ({ id: 'cw-bound' }));
+    const prepareScheduledTaskSession = vi.fn(() => 'cw-bound');
     const getDefaultCwd = vi.fn(() => join(tmpdir(), 'different-workspace'));
     const task = makeTask({
       payload: { kind: PayloadKind.AgentTurn, message: 'Read project notes', workingDirectory },
@@ -285,23 +279,18 @@ describe('executeDshScheduledTask', () => {
       {
         hostManager: { isReady: () => true, start: vi.fn(async () => undefined) },
         runtimeAdapter: runtime,
-        coworkStore: { createSession, getSession: () => ({ id: 'cw-bound', cwd: workingDirectory, messages: [] }) },
+        coworkStore: { prepareScheduledTaskSession, getScheduledRunSummary: () => '' },
         getDefaultCwd,
       },
       task,
       new AbortController().signal,
+      'run-2',
     );
 
-    expect(createSession).toHaveBeenCalledWith(
-      '[定时] Nightly Check',
-      workingDirectory,
-      undefined,
-      'auto',
-      undefined,
-      'agent-ops',
-      undefined,
-      { scheduledTaskId: 'task-exec-1' },
-    );
+    expect(prepareScheduledTaskSession).toHaveBeenCalledWith({
+      taskId: task.id, agentId: 'agent-ops', title: '[定时] Nightly Check',
+      cwd: workingDirectory, modelOverride: undefined,
+    });
     expect(getDefaultCwd).not.toHaveBeenCalled();
   });
 
@@ -319,7 +308,7 @@ describe('executeDshScheduledTask', () => {
 
       for (const badPath of invalidPaths) {
         const runtime = new Runtime();
-        const createSession = vi.fn(() => ({ id: 'cw-missing' }));
+        const prepareScheduledTaskSession = vi.fn(() => 'cw-missing');
         const getDefaultCwd = vi.fn(() => tmpdir());
         const task = makeTask({
           payload: {
@@ -334,15 +323,16 @@ describe('executeDshScheduledTask', () => {
             {
               hostManager: { isReady: () => true, start: vi.fn(async () => undefined) },
               runtimeAdapter: runtime,
-              coworkStore: { createSession, getSession: () => null },
+              coworkStore: { prepareScheduledTaskSession, getScheduledRunSummary: () => '' },
               getDefaultCwd,
             },
             task,
             new AbortController().signal,
+            'run-3',
           ),
         ).rejects.toThrow(`Scheduled task working directory is unavailable: ${badPath}`);
 
-        expect(createSession).not.toHaveBeenCalled();
+        expect(prepareScheduledTaskSession).not.toHaveBeenCalled();
         expect(getDefaultCwd).not.toHaveBeenCalled();
       }
     } finally {
@@ -352,7 +342,6 @@ describe('executeDshScheduledTask', () => {
 
   test('enforces timeoutSeconds and preserves sessionId on timeout failure', async () => {
     const runtime = new Runtime();
-    const createSession = vi.fn(() => ({ id: 'cw-timeout-1' }));
     const task = makeTask({
       payload: {
         kind: PayloadKind.AgentTurn,
@@ -366,13 +355,14 @@ describe('executeDshScheduledTask', () => {
         hostManager: { isReady: () => true, start: vi.fn(async () => undefined) },
         runtimeAdapter: runtime,
         coworkStore: {
-          createSession,
-          getSession: () => ({ id: 'cw-timeout-1', cwd: '/tmp/ops', messages: [] }),
+          prepareScheduledTaskSession: () => 'cw-timeout-1',
+          getScheduledRunSummary: () => '',
         },
         getDefaultCwd: () => '/tmp/ops',
       },
       task,
       new AbortController().signal,
+      'run-4',
     );
 
     expect(runtime.stopSession).toHaveBeenCalledWith('cw-timeout-1');

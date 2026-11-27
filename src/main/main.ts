@@ -2446,26 +2446,8 @@ const getDshBootstrap = (): DshBootstrap => {
         },
         getContinuityCapsule: sessionId => storeInstance.getContinuityCapsule(sessionId),
         forkSession: options => storeInstance.forkSession(options),
-        createSession: (
-          title,
-          cwd,
-          systemPrompt,
-          executionMode,
-          activeSkillIds,
-          agentId,
-          modelOverride,
-          options,
-        ) =>
-          storeInstance.createSession(
-            title,
-            cwd,
-            systemPrompt,
-            executionMode,
-            activeSkillIds,
-            agentId,
-            modelOverride,
-            options,
-          ),
+        prepareScheduledTaskSession: options => storeInstance.prepareScheduledTaskSession(options),
+        getScheduledRunSummary: (sessionId, runId) => storeInstance.getScheduledRunSummary(sessionId, runId),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
@@ -12250,8 +12232,8 @@ if (!gotTheLock) {
     }),
     getCoworkSessionTitle: (sessionId: string) =>
       getCoworkStore().getSession(sessionId, 0)?.title ?? null,
-    getCoworkSession: (sessionId: string) =>
-      getCoworkStore().getSession(sessionId),
+    getCoworkSession: (sessionId: string, runId?: string) =>
+      runId ? getCoworkStore().getScheduledRunSession(sessionId, runId) : getCoworkStore().getSession(sessionId),
     sendProactiveImMessage: (params: {
       platform: string;
       instanceId?: string;

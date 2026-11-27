@@ -44,6 +44,7 @@ export interface LobsterSchedulerRunResult {
 export type LobsterSchedulerExecutor = (
   task: ScheduledTask,
   signal: AbortSignal,
+  runId: string,
 ) => Promise<LobsterSchedulerRunResult>;
 
 export interface LobsterSchedulerOptions {
@@ -1194,7 +1195,7 @@ export class LobsterScheduler extends EventEmitter {
       if (!this.executor) {
         throw new Error('No scheduler executor configured');
       }
-      runResult = await this.executor(task, controller.signal);
+      runResult = await this.executor(task, controller.signal, runId);
       if (runResult.error) {
         status = TaskStatus.Error;
         errorMsg = runResult.error;

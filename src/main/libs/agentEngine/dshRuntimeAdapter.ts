@@ -77,6 +77,7 @@ import {
 import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/modelContextWindow';
 import { SkinToolName } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
+import { t } from '../../i18n';
 import { getCommandDangerLevel } from '../commandSafety';
 import type { CoworkMessageEditStore } from '../coworkMessageEditStore';
 import type { CoworkMessageVersionStore } from '../coworkMessageVersionStore';
@@ -126,6 +127,7 @@ import type {
 
 export interface DshAdapterSessionRecord {
   id: string;
+  scheduledTaskId?: string | null;
   userQuestionsDisabled?: boolean;
   cwd: string;
   status?: CoworkSessionStatus;
@@ -2392,6 +2394,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Cowork session "${sessionId}" not found`);
     }
 
+    const isolatedScheduledRun = !params.isContinue && Boolean(session.scheduledTaskId);
+    if (isolatedScheduledRun && (this.startingTurns.has(sessionId) || this.activeTurns.has(sessionId))) {
+      throw new Error(t('scheduledConversationBusy'));
+    }
     const abortController = new AbortController();
     const previous = this.startingTurns.get(sessionId);
     if (previous) {
@@ -2550,7 +2556,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
       // a legacy OpenClaw session for the first time.
-      const existingDshSessionId = this.resolveExistingDshSessionId(sessionId);
+      // Scheduled runs share a local transcript, but each trigger starts with an empty model context.
+      const existingDshSessionId = isolatedScheduledRun ? null : this.resolveExistingDshSessionId(sessionId);
       let dshSessionId = existingDshSessionId;
       let lazyBridgePrefix = '';
       if (!dshSessionId) {
@@ -2559,16 +2566,22 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         });
         if (abortController.signal.aborted) return;
         dshSessionId = created.sessionId;
-        this.store.updateSession(sessionId, {
-          claudeSessionId: formatStoredDshSessionId(dshSessionId),
-        });
+        if (isolatedScheduledRun) {
+          this.sessionUnlockedCapabilities.delete(sessionId);
+          if (session.claudeSessionId && isDshBackedSessionId(session.claudeSessionId)) {
+            const previousId = stripDshSessionPrefix(session.claudeSessionId);
+            this.dshToCoworkSession.delete(previousId);
+            this.liveProjectionsByDshSession.delete(previousId);
+          }
+        }
+        this.store.updateSession(sessionId, { claudeSessionId: formatStoredDshSessionId(dshSessionId) });
 
         const hasLegacyHistory = Boolean(
           priorMessages.length > 0
           || session.goal
           || (session.claudeSessionId && !isDshBackedSessionId(session.claudeSessionId)),
         );
-        if (hasLegacyHistory) {
+        if (!isolatedScheduledRun && hasLegacyHistory) {
           const capsule = this.store.getContinuityCapsule?.(sessionId) ?? null;
           lazyBridgePrefix = buildLazyContextBridgePrefix(capsule, priorMessages, session.goal);
         }

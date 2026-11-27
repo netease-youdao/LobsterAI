@@ -897,6 +897,57 @@ test('scheduled task session lookup uses a stable newest-created top-level sessi
     .toBe('newer-session');
 });
 
+test('folds prior runs once by task and agent, retaining original transcripts and pinning', () => {
+  const traceId = 'c'.repeat(32);
+  for (const [id, agent, time] of [
+    ['old', null, 100], ['middle', '', 200], ['latest', 'main', 300],
+    ['other-agent', 'ops', 400], ['other-task', 'main', 500], ['fork', 'main', 600],
+  ] as const) {
+    insertSession(id, agent, 'Same name', time, id === 'old' ? 1 : 0);
+    db.prepare('UPDATE cowork_sessions SET scheduled_task_id = ?, parent_session_id = ? WHERE id = ?')
+      .run(id === 'other-task' ? 'job-2' : 'job', id === 'fork' ? 'old' : null, id);
+    insertMessage(id + '-user', id, 'user', id, id === 'old' ? JSON.stringify({ llmTrace: { traceId } }) : null, 1);
+    insertMessage(id + '-reply', id, 'assistant', 'same reply', id === 'middle' ? '{broken' : null, 2);
+  }
+  const migrated = new CoworkStore(db);
+  expect(migrated.countSessions()).toBe(4);
+  expect(migrated.listSessions(10).map(s => s.id).sort()).toEqual(['fork', 'latest', 'other-agent', 'other-task']);
+  expect(migrated.listFilteredSessions({ pinnedOnly: true }).map(s => s.id)).toEqual(['latest']);
+  const expected = ['old', 'same reply', 'middle', 'same reply', 'latest', 'same reply'];
+  expect(migrated.getSession('latest')?.messages.map(m => m.content)).toEqual(expected);
+  expect(migrated.getSession('old')?.messages.map(m => m.id)).toEqual(['old-user', 'old-reply']);
+  expect(migrated.findUserMessageByTrace(traceId)?.message.id).toBe('old-user');
+  expect(new CoworkStore(db).getSession('latest')?.messages.map(m => m.content)).toEqual(expected);
+  migrated.deleteSession('latest');
+  expect(migrated.getSessionIdByScheduledTaskId('job', 'main')).toBeNull();
+  expect(migrated.getSession('old')?.messages).toHaveLength(2);
+});
+
+test('reuses the conversation after task edits and reads the selected run beyond the chat page', () => {
+  const options = { taskId: 'job', agentId: 'main', title: 'Daily', cwd: '/one', modelOverride: 'a/one' };
+  const id = store.prepareScheduledTaskSession(options);
+  store.updateSession(id, { title: 'My report' });
+  const sameId = store.prepareScheduledTaskSession({ ...options, cwd: '/two', modelOverride: undefined });
+  expect(sameId).toBe(id);
+  expect(store.getSession(id, 0)).toMatchObject({ title: 'My report', cwd: '/two', modelOverride: '' });
+  const message = (seq: number, type: string, content: string, requestId?: string) =>
+    insertMessage('msg-' + seq, id, type, content, requestId ? JSON.stringify({ requestId }) : null, seq, seq);
+  message(1, 'user', 'prompt one', 'run-1');
+  for (let i = 2; i <= 120; i++) message(i, 'assistant', 'first result');
+  message(121, 'user', 'prompt two', 'run-2');
+  message(122, 'assistant', 'second result');
+  message(123, 'user', 'manual follow-up', 'manual');
+  expect(store.getScheduledRunSession(id, 'run-1')?.messages).toHaveLength(120);
+  expect(store.getScheduledRunSession(id, 'run-2')?.messages.map(m => m.id)).toEqual(['msg-121', 'msg-122']);
+  expect(store.getScheduledRunSummary(id, 'run-2')).toBe('second result');
+  message(124, 'user', 'no answer', 'run-3');
+  insertMessage('thinking', id, 'assistant', 'reasoning', '{"isThinking":true}', 125);
+  expect(store.getScheduledRunSummary(id, 'run-3')).toBe('');
+  store.updateSession(id, { status: 'running' });
+  expect(() => store.prepareScheduledTaskSession(options)).toThrow();
+  expect(store.getSession(id, 0)?.cwd).toBe('/two');
+});
+
 test('searchSessions preserves pinned ordering and pagination', () => {
   insertSession('unpinned-old', 'main', 'Shared searchable task', 1000);
   insertSession('unpinned-new', 'main', 'Shared searchable task', 3000);
