@@ -974,21 +974,6 @@ interface IElectronAPI {
   checkApiConfig: () => Promise<{ hasConfig: boolean; error?: string }>;
   generateSessionTitle: (request: GenerateSessionTitleRequest) => Promise<string | null>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
-  dsh: {
-    getState: () => Promise<{
-      dshInstanceId?: string;
-      phase: string;
-      port: number | null;
-      version: string | null;
-      errorCode: string | null;
-      sessionStoreShared?: boolean;
-      install?: { stage: string; receivedBytes: number; totalBytes: number } | null;
-    }>;
-    getConfig: () => Promise<{ enabled: boolean }>;
-    setEnabled: (enabled: boolean) => Promise<{ enabled: boolean }>;
-    openWorkbench: () => Promise<{ url: string }>;
-    stop: () => Promise<{ phase: string; port: number | null; version: string | null; errorCode: string | null }>;
-  };
   decisionModel: {
     getConfig: () => Promise<DecisionModelConfigView>;
     saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;

@@ -48,10 +48,13 @@ import {
 import { McpAuthMode } from '../../shared/mcp/auth';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import {
+  ExperimentalDshCleanupSkipReason,
+  LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY,
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
   MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
   MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
+  MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY,
   MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
   MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
@@ -94,6 +97,7 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
+import { hasLocalExperimentalDshTraces } from './legacyExperimentalDshCleanup';
 import { legacyImBotIdentities, preserveLegacyImBotIdentities } from './legacyImBotIdentities';
 import { readLegacyNeteaseMailToken } from './legacyNeteaseMail';
 import { seedLegacySessionsToDsh } from './legacySessionSeeder';
@@ -3011,6 +3015,9 @@ export function getLegacyOpenClawDisposableCacheDirs(userDataDir: string): strin
     path.join(openclawStateDir, 'tmp'),
     path.join(openclawStateDir, 'worktrees'),
     path.join(userDataDir, 'dsh-runtime'), // Old experimental 160MB runtime cache
+    path.join(userDataDir, 'dsh-launcher'), // Old experimental top-level launcher (v2 uses dsh-profile/dsh-launcher)
+    path.join(userDataDir, 'dsh-observation'), // Old experimental telemetry observer plugin dir
+    path.join(userDataDir, 'Partitions', 'dsh'), // Old experimental persist:dsh partition (v2 uses persist:dsh-ecosystem)
   ];
 }
 
@@ -3140,6 +3147,13 @@ export function runLegacyOpenClawMigration(
         MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
         JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }),
       );
+      if (!hasLocalExperimentalDshTraces(userDataDir, getKv(db, LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY) !== null)) {
+        setKv(
+          db,
+          MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY,
+          JSON.stringify({ completedAt: migratedAt, skipped: ExperimentalDshCleanupSkipReason.FreshInstall }),
+        );
+      }
       return { status: MigrationV2Status.Skipped };
     }
 

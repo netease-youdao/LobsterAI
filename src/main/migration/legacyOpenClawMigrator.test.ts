@@ -2966,9 +2966,25 @@ describe('runLegacyOpenClawMigration', () => {
     const tmpFile = path.join(stateDir, 'tmp', 'scratch.tmp');
     const logsFile = path.join(userDataDir, 'openclaw', 'logs', 'gateway.log');
     const oldDshRuntimeFile = path.join(userDataDir, 'dsh-runtime', 'stale.bin');
+    const oldDshLauncherFile = path.join(userDataDir, 'dsh-launcher', 'launch.mjs');
+    const oldDshObservationFile = path.join(userDataDir, 'dsh-observation', 'observer.mjs');
+    const oldDshPartitionFile = path.join(userDataDir, 'Partitions', 'dsh', 'Preferences');
+    const privateDshSessionFile = path.join(userDataDir, 'dsh', 'sessions', 'keep.jsonl.zst');
     const extFile = path.join(userDataDir, 'third-party-extensions', 'demo', 'index.js');
 
-    for (const file of [mediaFile, compileCacheFile, stateCacheFile, tmpFile, logsFile, oldDshRuntimeFile, extFile]) {
+    for (const file of [
+      mediaFile,
+      compileCacheFile,
+      stateCacheFile,
+      tmpFile,
+      logsFile,
+      oldDshRuntimeFile,
+      oldDshLauncherFile,
+      oldDshObservationFile,
+      oldDshPartitionFile,
+      privateDshSessionFile,
+      extFile,
+    ]) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, 'payload', 'utf8');
     }
@@ -3001,6 +3017,11 @@ describe('runLegacyOpenClawMigration', () => {
     expect(fs.existsSync(tmpFile)).toBe(false);
     expect(fs.existsSync(logsFile)).toBe(false);
     expect(fs.existsSync(oldDshRuntimeFile)).toBe(false);
+    expect(fs.existsSync(oldDshLauncherFile)).toBe(false);
+    expect(fs.existsSync(oldDshObservationFile)).toBe(false);
+    expect(fs.existsSync(oldDshPartitionFile)).toBe(false);
+    // `<userData>/dsh` is preserved (only its managed models are stripped separately).
+    expect(fs.existsSync(privateDshSessionFile)).toBe(true);
     expect(fs.existsSync(mediaFile)).toBe(true);
     expect(fs.existsSync(extFile)).toBe(true);
   });
