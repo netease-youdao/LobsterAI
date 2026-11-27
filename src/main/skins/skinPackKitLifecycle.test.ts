@@ -243,4 +243,25 @@ describe('AI Skin Designer kit lifecycle', () => {
     await expect(lifecycle.uninstallIfHandled('remote-kit')).resolves.toBeUndefined();
     expect(skillManager.stopWatching).not.toHaveBeenCalled();
   });
+
+  test('install and uninstall preserve a previous third-party kit using the same skill ID', async () => {
+    const { lifecycle, skillsRoot, sourceDir, store } = createHarness();
+    const id = SkinPackSkillId.BuiltIn;
+    const userId = `${id}-1`;
+    fs.cpSync(sourceDir!, path.join(skillsRoot, id), { recursive: true });
+    const skills = { skillIds: [id], metadata: { [id]: { id, name: 'Custom skin' } } };
+    store.set(KitStoreKey.Installed, { custom: { id: 'custom', skills } });
+    store.set(SKILLS_STATE_KEY, { [id]: { enabled: false } });
+
+    await lifecycle.installIfHandled({ kitId: SkinPackKitId.BuiltIn, bundleUrl: SkinPackKitBundle.BuiltIn });
+    await lifecycle.uninstallIfHandled(SkinPackKitId.BuiltIn);
+
+    expect(fs.existsSync(path.join(skillsRoot, id))).toBe(false);
+    expect(fs.readFileSync(path.join(skillsRoot, userId, 'SKILL.md')))
+      .toEqual(fs.readFileSync(path.join(sourceDir!, 'SKILL.md')));
+    expect(store.get(SKILLS_STATE_KEY)).toEqual({ [userId]: { enabled: false } });
+    expect(store.get(KitStoreKey.Installed)).toMatchObject({
+      custom: { skills: { skillIds: [userId], metadata: { [userId]: { id: userId, name: 'Custom skin' } } } },
+    });
+  });
 });

@@ -11,6 +11,7 @@ import {
 } from './skinPackKit';
 import {
   installSkinCreatorSkillToUserRoot,
+  isSkinPackKitInstalled,
   removeSkinCreatorSkillFromUserRoot,
   resolveBundledSkinCreatorSkillDir,
 } from './skinPackSkillResources';
@@ -151,13 +152,17 @@ export function createSkinPackKitLifecycle(
       const sourceDir = deps.resolveSkinCreatorSourceDir
         ? deps.resolveSkinCreatorSourceDir()
         : resolveBundledSkinCreatorSkillDir();
-      const installed = installSkinCreatorSkillToUserRoot(skillManager.getSkillsRoot(), sourceDir);
+      const store = deps.getStore();
+      const skillsRoot = skillManager.getSkillsRoot();
+      if (sourceDir && !isSkinPackKitInstalled(store)) {
+        removeSkinCreatorSkillFromUserRoot(skillsRoot, store, sourceDir);
+      }
+      const installed = installSkinCreatorSkillToUserRoot(skillsRoot, sourceDir);
       if (!installed) {
         throw new Error('Bundled AI Skin Creator skill is unavailable');
       }
       skillManager.setSkillEnabled(SkinPackSkillId.BuiltIn, true);
 
-      const store = deps.getStore();
       const installedMap = store.get<InstalledKitsMap>(KitStoreKey.Installed) ?? {};
       installedMap[SkinPackKitId.BuiltIn] = buildInstalledSkinPackKitRecord();
       store.set(KitStoreKey.Installed, installedMap);

@@ -1,8 +1,9 @@
 import { spawnSync } from 'child_process';
-import * as fs from 'fs';
+import fs from 'fs';
+import { syncBuiltinESMExports } from 'module';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   DSH_BASE_BUNDLE_NAME,
@@ -32,6 +33,8 @@ function createTempDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -102,6 +105,45 @@ describe('mergeAppOwnedProfileManifest', () => {
 });
 
 describe('ensureAppOwnedProfile', () => {
+  test('switches both managed bundles to a new app directory and detaches optional channels', () => {
+    const root = createTempDir();
+    const profileDir = path.join(root, 'profile');
+    const installs = ['first', 'second'].map((name) => {
+      const hostBundleDir = path.join(root, name, 'host');
+      const channelsBundleDir = path.join(root, name, 'channels');
+      for (const dir of [hostBundleDir, channelsBundleDir]) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name }));
+      }
+      return { name, profileDir, hostBundleDir, channelsBundleDir };
+    });
+
+    ensureAppOwnedProfile(installs[0]);
+    const remove = vi.spyOn(fs, 'rmSync');
+    syncBuiltinESMExports();
+    ensureAppOwnedProfile(installs[1]);
+    for (const bundle of [DSH_HOST_BUNDLE_NAME, DSH_CHANNELS_BUNDLE_NAME]) {
+      const manifest = path.join(profileDir, 'node_modules', bundle, 'package.json');
+      expect(JSON.parse(fs.readFileSync(manifest, 'utf8'))).toEqual({ name: 'second' });
+    }
+
+    ensureAppOwnedProfile({ profileDir, hostBundleDir: installs[1].hostBundleDir });
+    const channelsLink = path.join(profileDir, 'node_modules', DSH_CHANNELS_BUNDLE_NAME);
+    expect(fs.lstatSync(channelsLink, { throwIfNoEntry: false })).toBeUndefined();
+    // Plain Node can remove a junction recursively without revealing Electron's behavior.
+    for (const bundle of [DSH_HOST_BUNDLE_NAME, DSH_CHANNELS_BUNDLE_NAME]) {
+      expect(remove).not.toHaveBeenCalledWith(
+        path.join(profileDir, 'node_modules', bundle), expect.objectContaining({ recursive: true }),
+      );
+    }
+    for (const install of installs) {
+      for (const dir of [install.hostBundleDir, install.channelsBundleDir]) {
+        expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+          .toBe(JSON.stringify({ name: install.name }));
+      }
+    }
+  });
+
   test('creates valid manifest and empty cordis.patch.yml without clobbering user edits', () => {
     const root = createTempDir();
     const profileDir = path.join(root, 'dsh-profile');
@@ -489,7 +531,7 @@ describe('ensureDshLauncher & buildIsolatedPnpmCacheEnv', () => {
     expect(launchEntry).toBe(resolveDshLauncherPath(dshHomeDir));
     const source = fs.readFileSync(launchEntry, 'utf8');
     expect(source).toContain('runCli');
-    expect(source).toContain(fs.realpathSync(pnpmBin));
+    expect(source).toContain(JSON.stringify(fs.realpathSync(pnpmBin)));
     expect(source).toContain('"pnpm_config_store_dir"');
     expect(source).toContain('"pnpm_config_cache_dir"');
     expect(source).toContain('/shims');

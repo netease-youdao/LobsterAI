@@ -6,7 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { once } = require('node:events');
 const { setTimeout: delay } = require('node:timers/promises');
 const { removeTree } = require('./dsh-remove-tree.cjs');
 
@@ -32,16 +33,18 @@ function electronRuntimeFor(resourcesDir) {
   return path.resolve(resourcesDir, '..', executableName + (process.platform === 'win32' ? '.exe' : ''));
 }
 
-function step(description, command, args, options = {}) {
+// Keep the event loop servicing the live DSH connections during long checks.
+async function step(description, command, args, options = {}) {
   log(`>> ${description}`);
-  const result = spawnSync(command, args, {
+  const child = spawn(command, args, {
     stdio: 'inherit',
     cwd: rootDir,
     shell: process.platform === 'win32' && command === 'npm',
     ...options,
   });
-  if (result.status !== 0) {
-    fail(`${description} exited with code ${result.status}`);
+  const [code, signal] = await once(child, 'close');
+  if (code !== 0) {
+    fail(`${description} exited with ${signal || `code ${code}`}`);
   }
 }
 
@@ -188,16 +191,16 @@ async function main() {
   const args = process.argv.slice(2);
   assert(args.length === 0 || (args.length === 2 && args[0] === '--resources'), 'Usage: npm run dsh:e2e -- [--resources <directory>]');
   if (!process.versions.electron) {
-    step('compile desktop modules', 'npm', ['run', 'compile:electron']);
+    await step('compile desktop modules', 'npm', ['run', 'compile:electron']);
   }
   if (!args.length) {
-    step('build and activate the embedded runtime', 'npm', ['run', 'dsh:runtime:host']);
+    await step('build and activate the embedded runtime', 'npm', ['run', 'dsh:runtime:host']);
   } else if (!process.versions.electron) {
     // Packaged layouts store dsh-runtime inside app.asar, which requires
     // Electron's ASAR-patched fs module (ELECTRON_RUN_AS_NODE=1).
     const electron = electronRuntimeFor(args[1]);
     assert(fs.existsSync(electron), 'Electron executable missing from the selected application layout');
-    step('run packaged E2E inside Electron Node runtime', electron, [__filename, ...args], {
+    await step('run packaged E2E inside Electron Node runtime', electron, [__filename, ...args], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     });
     return;
@@ -262,15 +265,15 @@ async function main() {
     await hosts[1].stop();
     assert.equal((await hosts[0].getClient().callOps(DshOpsAction.Health)).ok, true);
     if (process.platform === 'win32') {
-      step('bundled Git with no system Git', electron, [path.join(__dirname, 'verify-dsh-git-install.cjs'), layout.runtimeDir], { env: childEnv });
-      step('native picker paths', electron, [path.join(__dirname, 'verify-dsh-picker-path-read.cjs'), layout.runtimeDir], { env: childEnv });
+      await step('bundled Git with no system Git', electron, [path.join(__dirname, 'verify-dsh-git-install.cjs'), layout.runtimeDir], { env: childEnv });
+      await step('native picker paths', electron, [path.join(__dirname, 'verify-dsh-picker-path-read.cjs'), layout.runtimeDir], { env: childEnv });
       await assertNativeDirectoryPicker(hosts[0].getClient());
     }
   } finally {
     try { await Promise.all(hosts.map(host => host.stop())); } finally { removeTree(temp); }
   }
   assert.equal(countFiles(layout.runtimeDir), before, 'Removing isolated profiles modified the runtime');
-  step('link-safe profile cleanup', electron, [path.join(__dirname, 'verify-dsh-remove-tree.cjs')], { env: childEnv });
+  await step('link-safe profile cleanup', electron, [path.join(__dirname, 'verify-dsh-remove-tree.cjs')], { env: childEnv });
   log('Embedded Electron hosts, authenticated RPC, profile isolation and cleanup passed.');
 }
 

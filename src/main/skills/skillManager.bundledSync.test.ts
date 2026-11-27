@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 
 import { KitStoreKey } from '../../shared/kit/constants';
 import { CoreSkillId, EMAIL_SKILL_CONFIG_DIR_NAME } from '../../shared/skills/constants';
-import { SkinPackKitId } from '../../shared/skin/kit';
+import { SkinPackKitId, SkinPackSkillId } from '../../shared/skin/kit';
 import type { SqliteStore } from '../sqliteStore';
 import { RETIRED_BUNDLED_SKILL_IDS, RetiredBundledSkillId } from './retiredBundledSkills';
 import { SkillManager } from './skillManager';
@@ -439,4 +439,79 @@ test('hides skin-creator from listSkills unless ai-skin-designer Kit is installe
     [SkinPackKitId.BuiltIn]: { id: SkinPackKitId.BuiltIn, installedAt: Date.now() },
   });
   expect(manager.listSkills().map((s) => s.id)).toEqual(['docx', 'skin-creator']);
+});
+
+test('importing a kit-owned name remains visible and intact after startup sync', async () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const source = writeSkill(path.join(fixture.root, 'external'), id);
+  const userId = `${id}-1`;
+  vi.spyOn(manager, 'startWatching').mockImplementation(() => {});
+  const result = await manager.downloadSkill(source, undefined, { skipSecurityScan: true });
+
+  expect(result.installedIds).toEqual([userId]);
+  expect(result.skills).toContainEqual(expect.objectContaining({ id: userId, isBuiltIn: false }));
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills().map(skill => skill.id)).toEqual([userId]);
+  expect(fs.readFileSync(path.join(userRoot, userId, 'SKILL.md')))
+    .toEqual(fs.readFileSync(path.join(source, 'SKILL.md')));
+});
+
+test('startup preserves a pre-fix custom skin-creator, its files and its disabled state', () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const existing = writeSkill(userRoot, id);
+  fs.writeFileSync(path.join(existing, 'notes.txt'), 'user notes');
+  writeSkill(userRoot, `${id}-1`);
+  kvStore.set('skills_state', { [id]: { enabled: false } });
+
+  manager.syncBundledSkillsToUserData();
+  manager.syncBundledSkillsToUserData();
+
+  expect(manager.listSkills()).toContainEqual(expect.objectContaining({ id: `${id}-2`, enabled: false }));
+  expect(fs.readFileSync(path.join(userRoot, `${id}-2`, 'notes.txt'), 'utf8')).toBe('user notes');
+  expect(fs.existsSync(existing)).toBe(false);
+});
+
+test('startup cleans the old stock skin template but keeps a user-edited reference', () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const source = path.resolve('resources', 'skin-pack', id);
+  const target = path.join(userRoot, id);
+  fs.cpSync(source, target, { recursive: true });
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills()).toEqual([]);
+  expect(fs.existsSync(target)).toBe(false);
+
+  fs.cpSync(source, target, { recursive: true });
+  const reference = path.join('references', 'asset-contract.md');
+  fs.appendFileSync(path.join(target, reference), '\nLocal instructions\n');
+  manager.syncBundledSkillsToUserData();
+  expect(fs.readFileSync(path.join(userRoot, `${id}-1`, reference), 'utf8')).toContain('Local instructions');
+});
+
+test('startup keeps a case-variant legacy ID associated with its disabled preference', () => {
+  const id = SkinPackSkillId.BuiltIn.toUpperCase();
+  writeSkill(userRoot, id);
+  kvStore.set('skills_state', { [id]: { enabled: false } });
+  const collides = fs.existsSync(path.join(userRoot, SkinPackSkillId.BuiltIn));
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills()).toContainEqual(expect.objectContaining({
+    id: collides ? `${id}-1` : id, enabled: false,
+  }));
+});
+
+test('a locked pre-fix upgrade backup keeps its files and preferences until recovery succeeds', () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const source = writeSkill(userRoot, id);
+  const backup = `${source}.upgrading`;
+  fs.renameSync(source, backup);
+  const state = { [id]: { enabled: false } };
+  kvStore.set('skills_state', state);
+  const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('locked'); });
+  expect(() => manager.syncBundledSkillsToUserData()).toThrow('locked');
+  expect(fs.existsSync(path.join(backup, 'SKILL.md'))).toBe(true);
+  expect(kvStore.get('skills_state')).toEqual(state);
+
+  rename.mockRestore();
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills()).toContainEqual(expect.objectContaining({ id: `${id}-1`, enabled: false }));
+  expect(fs.existsSync(backup)).toBe(false);
 });

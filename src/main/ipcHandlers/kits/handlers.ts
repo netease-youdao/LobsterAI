@@ -34,6 +34,7 @@ import {
   uninstallComputerUseRuntime,
 } from '../../computerUse/computerUseRuntime';
 import { cpRecursiveSync } from '../../fsCompat';
+import { resolveSkillInstallTarget } from '../../skills/skillInstallTarget';
 import type { SkillManager } from '../../skills/skillManager';
 import { createSkinPackKitLifecycle } from '../../skins/skinPackKitLifecycle';
 import type { SqliteStore } from '../../sqliteStore';
@@ -361,14 +362,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
 
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let candidateId = folderName;
-        let targetDir = path.resolve(root, candidateId);
-        let suffix = 1;
-        while (reservedBuiltInIds.has(candidateId) || fs.existsSync(targetDir)) {
-          candidateId = `${folderName}-${suffix}`;
-          targetDir = path.resolve(root, candidateId);
-          suffix += 1;
-        }
+        const { targetDir } = resolveSkillInstallTarget(root, folderName, reservedBuiltInIds);
         cpRecursiveSync(skillDir, targetDir);
         normalizeWindowsAttrs(targetDir);
         const installedSkillId = path.basename(targetDir);

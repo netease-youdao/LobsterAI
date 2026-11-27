@@ -34,6 +34,7 @@ import {
   SkillWatchScope,
 } from './skillChangeDiagnostics';
 import { loadSkillFrontmatterYaml } from './skillFrontmatter';
+import { resolveSkillInstallTarget, resolveWithin } from './skillInstallTarget';
 import { readSkillWatchSnapshot, type SkillWatchSnapshot } from './skillWatchSnapshot';
 
 /**
@@ -529,16 +530,6 @@ const normalizeFolderName = (name: string): string => {
 
 const isZipFile = (filePath: string): boolean => path.extname(filePath).toLowerCase() === '.zip';
 
-const resolveWithin = (root: string, target: string): string => {
-  const resolvedRoot = path.resolve(root);
-  const resolvedTarget = path.resolve(root, target);
-  if (resolvedTarget === resolvedRoot) return resolvedTarget;
-  if (!resolvedTarget.startsWith(resolvedRoot + path.sep)) {
-    throw new Error('Invalid target path');
-  }
-  return resolvedTarget;
-};
-
 /**
  * Prefixes of the temp directories that archives and packages are extracted into.
  * A skill directory carrying one of these names is the temp root itself, so its name
@@ -631,21 +622,9 @@ const resolveInstallTarget = (
   root: string,
   folderName: string,
   skillDir: string,
-  reservedIds: ReadonlySet<string> = new Set(),
-): { targetDir: string; alreadyInstalled: boolean } => {
-  let candidateId = folderName;
-  let targetDir = resolveWithin(root, candidateId);
-  let suffix = 1;
-  while (reservedIds.has(candidateId) || fs.existsSync(targetDir)) {
-    if (!reservedIds.has(candidateId) && isSameSkillRelease(skillDir, targetDir)) {
-      return { targetDir, alreadyInstalled: true };
-    }
-    candidateId = `${folderName}-${suffix}`;
-    targetDir = resolveWithin(root, candidateId);
-    suffix += 1;
-  }
-  return { targetDir, alreadyInstalled: false };
-};
+  reservedIds?: ReadonlySet<string>,
+): { targetDir: string; alreadyInstalled: boolean } =>
+  resolveSkillInstallTarget(root, folderName, reservedIds, dir => isSameSkillRelease(skillDir, dir));
 
 /**
  * Copy downloaded skill directories into `root` and return the ids they ended up under.
