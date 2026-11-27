@@ -809,7 +809,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
   const homeHeader = (
     <div
-      className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible ${
+      className={`draggable relative z-[45] flex h-12 shrink-0 items-center justify-between overflow-visible ${
         homePanel.isArtifactPanelVisible ? 'border-b border-border' : ''
       } ${
         homePanel.isArtifactPanelExpanded ? 'bg-background pl-0 pr-4' : 'px-4'
