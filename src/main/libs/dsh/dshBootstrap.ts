@@ -41,7 +41,7 @@ import {
   OpenClawEnginePhase,
 } from '../../../shared/openclawEngine/constants';
 import { CoworkSideChatStore } from '../../coworkSideChatStore';
-import type { CoworkForkSessionOptions, CoworkSession } from '../../coworkStore';
+import type { CoworkForkSessionOptions, CoworkSession, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import {
   type DshChannelInstanceConfig,
@@ -184,16 +184,8 @@ export interface DshBootstrapOptions {
   skillsDir: string;
   coworkStore: DshCoworkStorePort & {
     forkSession?: (options: CoworkForkSessionOptions) => CoworkSession;
-    createSession?: (
-      title: string,
-      cwd: string,
-      systemPrompt?: string,
-      executionMode?: 'auto' | 'local' | 'sandbox',
-      activeSkillIds?: string[],
-      agentId?: string,
-      modelOverride?: string,
-      options?: { scheduledTaskId?: string | null },
-    ) => { id: string };
+    prepareScheduledTaskSession?: CoworkStore['prepareScheduledTaskSession'];
+    getScheduledRunSummary?: CoworkStore['getScheduledRunSummary'];
   };
   getDefaultCwd: (agentId?: string) => string;
   getMemoryEnabled?: () => boolean;
@@ -691,7 +683,7 @@ export class DshBootstrap {
 
     this.scheduler = new LobsterScheduler({
       db: options.db,
-      executor: (task, signal) => this.executeScheduledTask(task, signal),
+      executor: (task, signal, runId) => this.executeScheduledTask(task, signal, runId),
     });
 
     this.scheduler.on('statusUpdate', (event: ScheduledTaskStatusEvent) => {
@@ -1485,6 +1477,7 @@ export class DshBootstrap {
   private async executeScheduledTask(
     task: ScheduledTask,
     signal: AbortSignal,
+    runId: string,
   ): Promise<LobsterSchedulerRunResult> {
     signal.throwIfAborted();
     if (!this.started || !this.hostManager.isReady()) {
@@ -1506,6 +1499,7 @@ export class DshBootstrap {
       },
       task,
       signal,
+      runId,
     );
   }
 }

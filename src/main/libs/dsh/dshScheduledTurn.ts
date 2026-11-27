@@ -2,13 +2,16 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import {
+  DefaultAgentId,
   DeliveryMode,
   PayloadKind,
   RunDeliveryStatus,
 } from '../../../scheduledTask/constants';
 import type { ScheduledTask } from '../../../scheduledTask/types';
+import type { CoworkStore } from '../../coworkStore';
+import { t } from '../../i18n';
 import type { LobsterSchedulerRunResult } from '../../scheduledTask/lobsterScheduler';
-import type { DshCoworkStorePort, DshRuntimeAdapter } from '../agentEngine/dshRuntimeAdapter';
+import type { DshRuntimeAdapter } from '../agentEngine/dshRuntimeAdapter';
 
 type ScheduledRuntime = Pick<DshRuntimeAdapter, 'on' | 'off' | 'startSession' | 'stopSession'>;
 
@@ -18,18 +21,7 @@ export interface ExecuteDshScheduledTaskDeps {
     start(): Promise<void>;
   };
   runtimeAdapter: ScheduledRuntime;
-  coworkStore: Pick<DshCoworkStorePort, 'getSession'> & {
-    createSession?: (
-      title: string,
-      cwd: string,
-      systemPrompt?: string,
-      executionMode?: 'auto' | 'local' | 'sandbox',
-      activeSkillIds?: string[],
-      agentId?: string,
-      modelOverride?: string,
-      options?: { scheduledTaskId?: string | null },
-    ) => { id: string };
-  };
+  coworkStore: Partial<Pick<CoworkStore, 'prepareScheduledTaskSession' | 'getScheduledRunSummary'>>;
   getDefaultCwd: (agentId?: string) => string;
   channelsBridge?: {
     sendProactiveMessage(params: {
@@ -46,6 +38,7 @@ export interface ExecuteDshScheduledTaskDeps {
 export interface RunScheduledTurnOptions {
   timeoutSeconds?: number;
   timeoutMs?: number;
+  requestId?: string;
 }
 
 export interface ScheduledTaskWebhookPayload {
@@ -156,7 +149,7 @@ export async function runScheduledTurn(
       }, timeoutMs);
     }
 
-    void runtime.startSession(sessionId, prompt, { agentId, autoApprove: true }).catch(error => {
+    void runtime.startSession(sessionId, prompt, { agentId, autoApprove: true, requestId: options?.requestId }).catch(error => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -241,7 +234,7 @@ export async function deliverScheduledTaskWebhook(
 
 /**
  * Full execution handler for `LobsterScheduler` backed by DSH:
- * creates a `[定时]` Cowork session carrying `modelOverride` & `scheduledTaskId`,
+ * appends to the task's Cowork conversation using the current workspace and model,
  * runs the auto-approved turn with `timeoutSeconds`, and performs Announce or
  * Webhook delivery.
  */
@@ -249,6 +242,7 @@ export async function executeDshScheduledTask(
   deps: ExecuteDshScheduledTaskDeps,
   task: ScheduledTask,
   signal: AbortSignal,
+  runId: string,
 ): Promise<LobsterSchedulerRunResult> {
   signal.throwIfAborted();
   if (!deps.hostManager.isReady()) {
@@ -272,7 +266,7 @@ export async function executeDshScheduledTask(
       ? payload.timeoutSeconds
       : undefined;
 
-  const agentId = task.agentId || 'main';
+  const agentId = task.agentId || DefaultAgentId;
   const workingDirectory =
     payload.kind === PayloadKind.AgentTurn ? payload.workingDirectory?.trim() : undefined;
   if (workingDirectory) {
@@ -290,17 +284,13 @@ export async function executeDshScheduledTask(
   }
   const cwd = workingDirectory || deps.getDefaultCwd(agentId);
 
-  const sessionId = deps.coworkStore.createSession?.(
-    `[定时] ${task.name}`,
-    cwd,
-    undefined,
-    'auto',
-    undefined,
-    agentId,
-    modelOverride,
-    { scheduledTaskId: task.id },
-  ).id;
-  if (!sessionId) throw new Error('Unable to create a Cowork session for the scheduled task.');
+  const store = deps.coworkStore;
+  if (!store.prepareScheduledTaskSession || !store.getScheduledRunSummary) {
+    throw new Error('Scheduled task conversation store is unavailable.');
+  }
+  const sessionId = store.prepareScheduledTaskSession({
+    taskId: task.id, agentId, title: `[${t('cronSessionPrefix')}] ${task.name}`, cwd, modelOverride,
+  });
 
   let stopped = false;
   try {
@@ -310,7 +300,7 @@ export async function executeDshScheduledTask(
       agentId,
       promptText,
       signal,
-      { timeoutSeconds },
+      { timeoutSeconds, requestId: runId },
     );
   } catch (error) {
     if (signal.aborted) {
@@ -326,11 +316,7 @@ export async function executeDshScheduledTask(
     return { sessionId, stopped: true, deliveryStatus: RunDeliveryStatus.NotRequested };
   }
 
-  const session = deps.coworkStore.getSession(sessionId);
-  const lastAssistant = [...(session?.messages ?? [])]
-    .reverse()
-    .find((m) => m.type === 'assistant' && m.content.trim().length > 0);
-  const summary = lastAssistant?.content.trim() ?? '';
+  const summary = store.getScheduledRunSummary(sessionId, runId);
 
   let deliveryStatus: RunDeliveryStatus = RunDeliveryStatus.NotRequested;
   let deliveryError: string | null = null;

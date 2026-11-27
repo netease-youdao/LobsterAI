@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
 import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import type { ScheduledRunSessionRequest } from '../scheduledTask/types';
 import { AccountMenuMoreIpc } from '../shared/accountMenuMore/constants';
 import {
   type ActivityHostExecuteActionInput,
@@ -1705,7 +1706,7 @@ contextBridge.exposeInMainWorld('electron', {
     countRuns: (taskId: string) => ipcRenderer.invoke(ScheduledTaskIpc.CountRuns, taskId),
     listAllRuns: (limit?: number, offset?: number, filter?: any) =>
       ipcRenderer.invoke(ScheduledTaskIpc.ListAllRuns, limit, offset, filter),
-    resolveSession: (input: string | { sessionId?: string | null; sessionKey?: string | null }) =>
+    resolveSession: (input: string | ScheduledRunSessionRequest) =>
       ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, input),
 
     // Delivery channels

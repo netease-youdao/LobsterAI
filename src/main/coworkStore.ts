@@ -81,12 +81,13 @@ import {
   type ModelThinkingLevel,
   parseModelThinkingLevel,
 } from '../shared/providers/modelThinking';
+import { t } from './i18n';
 import {
   buildCoworkContinuityCapsule,
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
-import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
+import { VISIBLE_COWORK_SESSION_SQL as VISIBLE_SUBAGENT_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
 import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import { CoworkMessageEditStore } from './libs/coworkMessageEditStore';
 import { CoworkMessageVersionStore } from './libs/coworkMessageVersionStore';
@@ -97,6 +98,9 @@ import {
   SessionProjectionNotifications,
 } from './libs/sessionProjectionNotifications';
 import { parseStoredMessageMetadata } from './libs/storedMessageMetadata';
+import { foldScheduledSessions, UNFOLDED_SCHEDULED_SESSION_SQL } from './scheduledTask/foldScheduledSessions';
+
+const VISIBLE_COWORK_SESSION_SQL = `${VISIBLE_SUBAGENT_SESSION_SQL} AND ${UNFOLDED_SCHEDULED_SESSION_SQL}`;
 
 
 /**
@@ -939,6 +943,7 @@ export class CoworkStore {
     });
     this.ensurePermissionPresetColumn();
     this.ensureContinuityCapsuleTable();
+    foldScheduledSessions(db);
     this.messageEdits = new CoworkMessageEditStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
     this.messageVersions = new CoworkMessageVersionStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
   }
@@ -4215,15 +4220,83 @@ export class CoworkStore {
 
     const row = this.getOne<{ id: string }>(
       `SELECT id
-       FROM cowork_sessions
+       FROM cowork_sessions s
        WHERE scheduled_task_id = ?
          AND parent_session_id IS NULL
+         AND ${UNFOLDED_SCHEDULED_SESSION_SQL}
          AND COALESCE(NULLIF(TRIM(agent_id), ''), ?) = ?
        ORDER BY created_at DESC, id DESC
        LIMIT 1`,
       [normalizedTaskId, AgentId.Main, normalizedAgentId],
     );
     return row?.id ?? null;
+  }
+
+  prepareScheduledTaskSession(options: {
+    taskId: string; agentId: string; title: string; cwd: string; modelOverride?: string;
+  }): string {
+    const { taskId, agentId, title, cwd, modelOverride } = options;
+    return this.runSessionTransaction(() => {
+      const existing = this.getSessionIdByScheduledTaskId(taskId, agentId);
+      if (existing) {
+        const session = this.getOne<{ status: string }>('SELECT status FROM cowork_sessions WHERE id = ?', [existing]);
+        if (session?.status === CoworkSessionStatusValue.Running) {
+          throw new Error(t('scheduledConversationBusy'));
+        }
+        this.updateSession(existing, { cwd, modelOverride: modelOverride ?? '', modelPresetId: null });
+        return existing;
+      }
+      return this.createSession(title, cwd, undefined, 'auto', undefined, agentId, modelOverride, {
+        scheduledTaskId: taskId,
+      }).id;
+    });
+  }
+
+  getScheduledRunSession(sessionId: string, runId: string): CoworkSession | null {
+    const session = this.getSession(sessionId, 0);
+    if (!session) return null;
+    const messages = this.getScheduledRunMessages(sessionId, runId);
+    return messages.length ? { ...session, messages, messagesOffset: 0, totalMessages: messages.length } : null;
+  }
+
+  getScheduledRunSummary(sessionId: string, runId: string): string {
+    return this.getScheduledRunMessages(sessionId, runId, true)[0]?.content.trim() ?? '';
+  }
+
+  /** The scheduler run ID is also the request ID on its opening user message. */
+  private getScheduledRunMessages(sessionId: string, runId: string, lastReplyOnly = false): CoworkMessage[] {
+    const anchor = this.getOne<{ sequence: number }>(`
+      SELECT sequence FROM cowork_messages
+      WHERE session_id = ? AND type = 'user'
+        AND CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.requestId') END = ?
+      LIMIT 1`, [sessionId, runId]);
+    let bounds: string;
+    let params: (number | string)[];
+    if (anchor) {
+      bounds = `sequence >= ? AND sequence < COALESCE((
+        SELECT MIN(sequence) FROM cowork_messages WHERE session_id = ? AND type = 'user' AND sequence > ?
+      ), 9223372036854775807)`;
+      params = [anchor.sequence, sessionId, anchor.sequence];
+    } else {
+      // Earlier releases did not use the run ID as the request ID. Their run
+      // ledger still identifies the original conversation and execution window.
+      const run = this.getOne<{ started_at: string; finished_at: string | null }>(`
+        SELECT started_at, finished_at FROM lobster_scheduled_task_runs WHERE id = ? AND session_id = ?
+      `, [runId, sessionId]);
+      if (!run?.finished_at) return [];
+      bounds = 'created_at BETWEEN ? AND ?';
+      params = [Date.parse(run.started_at), Date.parse(run.finished_at)];
+    }
+    const selection = lastReplyOnly
+      ? `AND type = 'assistant' AND trim(content, char(9, 10, 13, 32)) != ''
+         AND COALESCE(CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.isThinking') END, 0) != 1
+         ORDER BY COALESCE(sequence, created_at) DESC, created_at DESC, ROWID DESC LIMIT 1`
+      : 'ORDER BY COALESCE(sequence, created_at), created_at, ROWID';
+    const rows = this.getAll<CoworkMessageRow>(`
+      SELECT id, type, content, metadata, created_at, sequence FROM cowork_messages
+      WHERE session_id = ? AND ${bounds} ${selection}
+    `, [sessionId, ...params]);
+    return rows.map(row => this.parseStoredMessage(sessionId, row));
   }
 
   upsertSubagentChildSession(options: UpsertSubagentChildSessionOptions): CoworkSession {

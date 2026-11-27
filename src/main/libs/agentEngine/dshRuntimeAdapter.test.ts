@@ -553,13 +553,17 @@ describe('DshRuntimeAdapter', () => {
     });
   });
 
-  test('stamps per-turn llmTrace on pre-created user message, binds traceId to DSH, and skips lazy bridge on new sessions', async () => {
+  test.each([false, true])('binds a fresh native context and trace (repeated scheduled run: %s)', async scheduled => {
     const { store, messages } = createInMemoryStore({
       id: 'cw-fresh',
+      ...(scheduled ? { scheduledTaskId: 'daily', claudeSessionId: `${DSH_SESSION_ID_PREFIX}native-previous` } : {}),
       userQuestionsDisabled: true,
       cwd: '/tmp/work',
       title: 'Fresh chat',
       messages: [
+        ...(scheduled ? [{
+          id: 'old-result', type: 'assistant' as const, content: 'Previous private result', timestamp: 1,
+        }] : []),
         {
           id: 'u-1',
           type: 'user',
@@ -599,10 +603,12 @@ describe('DshRuntimeAdapter', () => {
 
     await adapter.startSession('cw-fresh', 'Hello credits', { skipInitialUserMessage: true });
 
-    const llmTrace = getCoworkLlmTrace(messages[0].metadata);
+    const openingMessage = messages.find(message => message.id === 'u-1')!;
+    const llmTrace = getCoworkLlmTrace(openingMessage.metadata);
     expect(llmTrace).not.toBeNull();
     expect(isValidLlmTraceId(llmTrace!.traceId)).toBe(true);
-    expect(messages[0].metadata?.skillIds).toEqual(['web-search']);
+    expect(openingMessage.metadata?.skillIds).toEqual(['web-search']);
+    expect(fakeClient.createSession).toHaveBeenCalledOnce();
     expect(hasLlmUsageContext(llmTrace!.traceId)).toBe(true);
     expect(bindSessionContext).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'dsh-fresh-1',

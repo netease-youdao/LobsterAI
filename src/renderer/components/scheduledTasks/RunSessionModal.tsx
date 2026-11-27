@@ -92,24 +92,11 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
     try {
       let loadedSession: CoworkSession | null = null;
 
-      // 1. Try loading by local session ID first
-      if (sessionId) {
-        const result = await window.electron?.cowork?.getSession(sessionId);
-        if (result?.success && result.session) {
-          const s = result.session;
-          loadedSession = {
-            ...s,
-            messagesOffset: s.messagesOffset ?? 0,
-            totalMessages: s.totalMessages ?? s.messages?.length ?? 0,
-          };
-        }
-      }
-
-      // 2. If not found locally, try resolving via OpenClaw sessionKey
-      if (!loadedSession && sessionKey) {
+      if (sessionId || sessionKey) {
         const result = await window.electron?.scheduledTasks?.resolveSession({
           sessionId,
           sessionKey,
+          runId: run?.id,
         });
         if (result?.success && result.session) {
           const s = result.session;
@@ -139,7 +126,7 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
     } catch {
       return false;
     }
-  }, [runFallbackContent, sessionId, sessionKey]);
+  }, [run?.id, runFallbackContent, sessionId, sessionKey]);
 
   useEffect(() => {
     cancelledRef.current = false;

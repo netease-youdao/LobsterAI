@@ -93,6 +93,12 @@ export interface ScheduledTaskRunWithName extends ScheduledTaskRun {
   taskName: string;
 }
 
+export interface ScheduledRunSessionRequest {
+  sessionId?: string | null;
+  sessionKey?: string | null;
+  runId?: string;
+}
+
 export interface ScheduledTaskInput {
   name: string;
   description: string;
