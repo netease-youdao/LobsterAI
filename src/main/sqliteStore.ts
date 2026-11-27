@@ -5,7 +5,15 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { AgentId, AgentModelSelectionMode, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
+import {
+  AgentId,
+  AgentModelSelectionMode,
+  DefaultAgentAvatarIcon,
+  DefaultAgentProfile,
+  LegacyAgentName,
+  normalizeAgentAvatarIcon,
+  SubagentCollaborationMode,
+} from '../shared/agent';
 import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
@@ -13,10 +21,7 @@ import {
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
 import { repairForkedSessionToolUseIds } from './libs/coworkForkToolUseIds';
-import {
-  openSqliteDatabaseWithRecovery,
-  SqliteBackupManager,
-} from './libs/sqliteBackup/sqliteBackupManager';
+import { migrateAgentCollaboration } from './migration/agentCollaborationMigration';
 
 type ChangePayload<T = unknown> = {
   key: string;
@@ -47,6 +52,67 @@ const extractScheduledTaskIdFromMessageMetadata = (metadata: unknown): string | 
   }
 };
 
+const SQLITE_QUARANTINE_DIR_RELATIVE_PATH = path.join('backups', 'sqlite', 'quarantine');
+
+const applyRecommendedPragmas = (db: Database.Database): void => {
+  // WAL mode persists across connections. NORMAL sync is crash-safe under WAL.
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = -8000'); // 8 MB; negative value = kibibytes
+  db.pragma('wal_autocheckpoint = 1000'); // checkpoint every ~4 MB of WAL writes
+};
+
+const isSqliteCorruptionError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: string; message?: string };
+  if (candidate.code === 'SQLITE_CORRUPT' || candidate.code === 'SQLITE_NOTADB') {
+    return true;
+  }
+  const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+  return (
+    message.includes('database disk image is malformed') ||
+    message.includes('file is not a database') ||
+    message.includes('malformed')
+  );
+};
+
+const quarantineCorruptedDatabaseFiles = (userDataPath: string, dbPath: string): string => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const quarantineDir = path.join(userDataPath, SQLITE_QUARANTINE_DIR_RELATIVE_PATH, stamp);
+  fs.mkdirSync(quarantineDir, { recursive: true });
+  for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (!fs.existsSync(filePath)) continue;
+    fs.renameSync(filePath, path.join(quarantineDir, path.basename(filePath)));
+  }
+  return quarantineDir;
+};
+
+const openSqliteDatabase = (userDataPath: string, dbPath: string): Database.Database => {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath);
+    applyRecommendedPragmas(db);
+    return db;
+  } catch (error) {
+    try {
+      db?.close();
+    } catch {
+      // Ignore close failures before quarantine fallback.
+    }
+    if (!isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    const quarantineDir = quarantineCorruptedDatabaseFiles(userDataPath, dbPath);
+    console.warn(
+      `[SqliteStore] Database corrupted on open; quarantined files to ${quarantineDir} and reinitializing:`,
+      error,
+    );
+    const freshDb = new Database(dbPath);
+    applyRecommendedPragmas(freshDb);
+    return freshDb;
+  }
+};
+
 export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
@@ -64,28 +130,7 @@ export class SqliteStore {
     const basePath = userDataPath ?? app.getPath('userData');
     const dbPath = path.join(basePath, DB_FILENAME);
 
-    let db = openSqliteDatabaseWithRecovery(basePath, dbPath);
-
-    const autoBackupEnabled = SqliteStore.readSqliteAutoBackupEnabled(db);
-    if (autoBackupEnabled) {
-      const backupManager = new SqliteBackupManager(basePath);
-      const health = backupManager.verifyDatabaseHealth(db);
-      if (!health.ok) {
-        const healthReason = 'reason' in health ? health.reason : 'unknown reason';
-        console.warn(`[SqliteBackup] Startup health check failed: ${healthReason}`);
-        try {
-          db.close();
-        } catch {
-          // Ignore close failures before restore.
-        }
-        const restoreResult = backupManager.restoreLatestBackup(dbPath);
-        if (!restoreResult.restored) {
-          console.warn('[SqliteBackup] No valid snapshot was restored; continuing with database reinitialization');
-        }
-        db = openSqliteDatabaseWithRecovery(basePath, dbPath);
-      }
-    }
-
+    const db = openSqliteDatabase(basePath, dbPath);
     const store = new SqliteStore(db, dbPath);
     store.initializeTables(basePath);
     return store;
@@ -118,6 +163,7 @@ export class SqliteStore {
         context_window_owner_key TEXT,
         thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
+        permission_preset TEXT,
         parent_session_id TEXT,
         forked_from_message_id TEXT,
         forked_at INTEGER,
@@ -230,7 +276,9 @@ export class SqliteStore {
         icon TEXT NOT NULL DEFAULT '',
         icon_customized INTEGER,
         skill_ids TEXT NOT NULL DEFAULT '[]',
+        subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}',
         subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
+        subagent_allow_agent_ids_snapshot TEXT NOT NULL DEFAULT '[]',
         enabled INTEGER NOT NULL DEFAULT 1,
         pinned INTEGER NOT NULL DEFAULT 0,
         pin_order INTEGER,
@@ -332,6 +380,21 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_subagent_messages_run_id
       ON subagent_messages(run_id);
     `);
+    // Durable mapping from delegated DSH child sessions to their LobsterAI target agent IDs
+    // and direct parent DSH sessions (supporting cold resume and depth-2 history reads).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS dsh_subagent_agent_bindings (
+        child_session_id TEXT PRIMARY KEY,
+        parent_dsh_session_id TEXT NOT NULL,
+        root_cowork_session_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_dsh_subagent_bindings_root
+      ON dsh_subagent_agent_bindings(root_cowork_session_id);
+    `);
 
     // Migration: add messages_persisted column to subagent_runs
     try {
@@ -378,8 +441,13 @@ export class SqliteStore {
         this.didRunMigration = true;
         console.log('[SqliteStore] added required cowork_sessions.thinking_level column');
       }
+      if (!sessionCols.some(column => column.name.toLowerCase() === 'permission_preset')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+        this.didRunMigration = true;
+        console.log('[SqliteStore] added required cowork_sessions.permission_preset column');
+      }
     } catch (error) {
-      console.error('[SqliteStore] failed to add cowork_sessions.thinking_level:', error);
+      console.error('[SqliteStore] failed to migrate required cowork_sessions columns:', error);
       throw error;
     }
 
@@ -693,12 +761,12 @@ export class SqliteStore {
         this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER;');
         this.didRunMigration = true;
       }
-      if (!agentColNames.includes('subagent_allow_agent_ids')) {
-        this.db.exec("ALTER TABLE agents ADD COLUMN subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]';");
-        this.didRunMigration = true;
-      }
     } catch {
       // Column already exists or migration not needed.
+    }
+
+    if (migrateAgentCollaboration(this.db)) {
+      this.didRunMigration = true;
     }
 
     try {
@@ -925,19 +993,6 @@ export class SqliteStore {
 
   close(): void {
     this.db.close();
-  }
-
-  private static readSqliteAutoBackupEnabled(db: Database.Database): boolean {
-    try {
-      const row = db.prepare("SELECT value FROM kv WHERE key = 'app_config'").get() as
-        | { value: string }
-        | undefined;
-      if (!row?.value) return false;
-      const parsed = JSON.parse(row.value) as { sqliteAutoBackupEnabled?: boolean };
-      return parsed.sqliteAutoBackupEnabled === true;
-    } catch {
-      return false;
-    }
   }
 
   private tryReadLegacyMemoryText(): string {

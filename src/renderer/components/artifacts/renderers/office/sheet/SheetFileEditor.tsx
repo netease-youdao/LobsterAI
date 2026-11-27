@@ -1,22 +1,31 @@
 import './sheetEditor.css';
 
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { i18nService } from '@/services/i18n';
+import { OfficeSaveState } from '@/services/office/core/officeDocument';
 import type { SheetSelectionReference } from '@/services/office/sheet/sheetChatReference';
 import { acquireSheetEditor, type SheetEditorSession } from '@/services/office/sheet/sheetEditorSession';
 import { StructureRefusal } from '@/services/office/sheet/sheetStructureSupport';
+import { formatFormulaPreview, shouldAutoExpandFormulaBar } from '@/services/office/sheet/sheetToolbarLayout';
 import { SheetExportIssue } from '@/services/office/sheet/xlsxExport';
 
 import { SheetHiddenContent, SheetReadOnlyReason } from '../../../../../../shared/office/sheet/sheetFile';
 import {
-type OfficeEditorLabels,   OfficeEditorLoader, OfficeEditorShell, officeList, useOfficeDocumentState, useOfficeEditorMount,
+  type OfficeEditorLabels, OfficeEditorLoader, OfficeEditorShell, officeList, useOfficeDocumentState, useOfficeEditorMount,
 } from '../common/OfficeEditorShell';
-import { useRegisterOfficePreviewZoomControls } from '../common/OfficePreviewActionsContext';
+import {
+  useOfficePreviewActions,
+  useRegisterOfficeOwnsDocumentToolbar,
+  useRegisterOfficePreviewZoomControls,
+} from '../common/OfficePreviewActionsContext';
 import { clampOfficeZoom, OfficeZoom } from '../common/OfficeZoomControls';
+import { SheetHeaderBar } from './SheetHeaderBar';
+import { SheetTabBar } from './SheetTabBar';
 import { SheetToolbar } from './SheetToolbar';
 
 const t = (key: string) => i18nService.t(key);
+const SLOW_SAVE_NOTICE_MS = 800;
 const SHEET_LABELS: OfficeEditorLabels<SheetReadOnlyReason> = {
   editor: 'sheetEditor',
   loading: 'sheetLoading',
@@ -65,14 +74,51 @@ const REFUSAL_NOTICE_MS = 8000;
 
 type AddToChat = (reference: SheetSelectionReference) => void;
 
-function ActiveSheetEditor({ session, onAddToChat }: { session: SheetEditorSession; onAddToChat?: AddToChat }): React.ReactElement {
+function ActiveSheetEditor({
+  session,
+  filePath,
+  onAddToChat,
+}: {
+  session: SheetEditorSession;
+  filePath: string;
+  onAddToChat?: AddToChat;
+}): React.ReactElement {
   const { document } = session;
   const state = useOfficeDocumentState(document);
   useSyncExternalStore(session.subscribe, session.getVersion);
+
+  // Claim the host ArtifactDocumentToolbar so Excel renders one unified top bar without an empty row.
+  useRegisterOfficeOwnsDocumentToolbar(true);
+  const previewActions = useOfficePreviewActions();
+
+  // Read-first default: formatting toolbar and formula bar stay collapsed until opened or needed.
+  const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
+  const [isFormulaBarOpen, setIsFormulaBarOpen] = useState(false);
+  const [showSlowSaving, setShowSlowSaving] = useState(false);
+
   const host = useRef<HTMLDivElement>(null);
   useOfficeEditorMount(session, host);
   const [now, setNow] = useState(() => Date.now());
   const readOnly = state.readOnlyReasons.length > 0;
+  const toolbarDisabled = state.needsResolution || !state.ready;
+
+  useEffect(() => {
+    if (readOnly || state.status !== OfficeSaveState.Saving) {
+      setShowSlowSaving(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setShowSlowSaving(true), SLOW_SAVE_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [readOnly, state.status]);
+
+  // Trigger a layout sync when toggling the formula bar so Univer's canvas matches the updated viewport.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isFormulaBarOpen, isFormatBarOpen]);
+
   // The grid's "Add to chat" reaches the task chat beside it; the latest callback is used.
   const addToChat = useRef(onAddToChat);
   addToChat.current = onAddToChat;
@@ -81,6 +127,7 @@ function ActiveSheetEditor({ session, onAddToChat }: { session: SheetEditorSessi
     session.setChatHandler(chatAvailable ? reference => addToChat.current?.(reference) : undefined);
     return () => session.setChatHandler(undefined);
   }, [session, chatAvailable]);
+
   const refusedAt = session.lastRefusal;
   useEffect(() => {
     if (!refusedAt) return undefined;
@@ -88,6 +135,7 @@ function ActiveSheetEditor({ session, onAddToChat }: { session: SheetEditorSessi
     const timer = setTimeout(() => setNow(Date.now()), REFUSAL_NOTICE_MS + 50);
     return () => clearTimeout(timer);
   }, [refusedAt]);
+
   const zoom = session.workbook?.getActiveSheet().getZoom() ?? 1;
   const zoomControls = useMemo(() => {
     const setZoom = (value: number) => { session.workbook?.getActiveSheet().zoom(clampOfficeZoom(value)); };
@@ -99,24 +147,76 @@ function ActiveSheetEditor({ session, onAddToChat }: { session: SheetEditorSessi
     };
   }, [session, zoom]);
   useRegisterOfficePreviewZoomControls(zoomControls);
+
+  const formulaPreview = formatFormulaPreview(session.activeFormula());
+
+  const handleMountKeyDownCapture = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isFormulaBarOpen) return;
+    if (shouldAutoExpandFormulaBar({
+      key: event.key,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      isComposing: Boolean(event.nativeEvent.isComposing),
+      readOnly,
+      editing: session.isCellEditing(),
+      editorText: session.currentCellEditorText(),
+    })) {
+      setIsFormulaBarOpen(true);
+    }
+  }, [isFormulaBarOpen, readOnly, session]);
+
   // Values this build does not know (from a main process of another version) are left out.
   const hidden = [
     ...document.packageInfo.hidden,
     ...(session.hiddenDrawings ? [SheetHiddenContent.Drawings] : []),
     ...(session.hiddenHyperlinks ? [SheetHiddenContent.Hyperlinks] : []),
   ].filter(item => HIDDEN_LABEL[item]);
+  const hiddenContentNotice = hidden.length
+    ? t('sheetHiddenContent').replace('{items}', officeList(hidden.map(item => HIDDEN_LABEL[item])))
+    : undefined;
 
   return (
-    <OfficeEditorShell document={document} state={state} labels={SHEET_LABELS} className="lobster-sheet-editor"
+    <OfficeEditorShell
+      document={document}
+      state={state}
+      labels={SHEET_LABELS}
+      className={isFormulaBarOpen ? 'lobster-sheet-editor' : 'lobster-sheet-editor lobster-sheet-formula-hidden'}
+      keepToolbarWhenReadOnly
+      hideFooter
       issueLabel={issue => t(ISSUE_LABEL[issue] ?? 'sheetIssueStructure')}
       notices={!readOnly && refusedAt > 0 && now - refusedAt < REFUSAL_NOTICE_MS && (
         <div className="lobster-office-notice" role="status">
           <p>{t(REFUSAL_LABEL[session.lastRefusalReason] ?? 'sheetRefused')}</p>
         </div>
       )}
-      toolbar={<SheetToolbar session={session} disabled={state.needsResolution || !state.ready} />}
-      footerStart={<span>{hidden.length ? t('sheetHiddenContent').replace('{items}', officeList(hidden.map(item => HIDDEN_LABEL[item]))) : ''}</span>}>
-      <div className="lobster-sheet-mount" ref={host} />
+      toolbar={(
+        <div className="lobster-sheet-chrome">
+          <SheetHeaderBar
+            session={session}
+            isFormatBarOpen={isFormatBarOpen}
+            onToggleFormatBar={() => setIsFormatBarOpen(open => !open)}
+            isFormulaBarOpen={isFormulaBarOpen}
+            onToggleFormulaBar={() => setIsFormulaBarOpen(open => !open)}
+            formulaPreview={formulaPreview}
+            disabled={toolbarDisabled}
+            readOnly={readOnly}
+            showSlowSaving={showSlowSaving}
+            filePath={filePath}
+            zoomControls={zoomControls}
+            documentActions={previewActions?.documentActions}
+          />
+          {isFormatBarOpen && !readOnly && <SheetToolbar session={session} disabled={toolbarDisabled} />}
+        </div>
+      )}
+    >
+      <div className="lobster-sheet-mount" ref={host} onKeyDownCapture={handleMountKeyDownCapture} />
+      <SheetTabBar
+        session={session}
+        disabled={toolbarDisabled}
+        readOnly={readOnly}
+        hiddenContentNotice={hiddenContentNotice}
+      />
     </OfficeEditorShell>
   );
 }
@@ -126,7 +226,7 @@ export default function SheetFileEditor({ filePath, preview, onAddToChat }: {
 }): React.ReactElement {
   return (
     <OfficeEditorLoader filePath={filePath} acquire={acquireSheetEditor} labels={SHEET_LABELS} preview={preview}>
-      {session => <ActiveSheetEditor session={session} onAddToChat={onAddToChat} />}
+      {session => <ActiveSheetEditor session={session} filePath={filePath} onAddToChat={onAddToChat} />}
     </OfficeEditorLoader>
   );
 }

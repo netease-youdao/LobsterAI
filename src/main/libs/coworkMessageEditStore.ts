@@ -18,6 +18,7 @@ export interface CoworkMessageEditOperation extends CoworkMessageEditPending {
   originalTranscriptId?: string;
   runId: string;
   prefixEntryIds: string[];
+  dsh?: { originalSessionId: string | null; forkedSessionId: string | null };
 }
 
 export interface ProjectionMessageRow {
@@ -35,6 +36,7 @@ export interface ProjectionSnapshot {
   capsule: Record<string, unknown> | null;
   status: string;
   updatedAt: number;
+  storedSessionId?: string | null;
 }
 
 export function readProjectionSnapshot(db: Database.Database, sessionId: string, fromSequence: number): ProjectionSnapshot {
@@ -109,6 +111,31 @@ export class CoworkMessageEditStore {
     return row ? JSON.parse(row.operation_json) as CoworkMessageEditOperation : null;
   }
 
+  /** The last confirmed assistant event in the preceding turn, in this DSH log. */
+  getDshForkSequence(sessionId: string, messageId: string, storedSessionId: string): number | undefined {
+    const preceding = this.db.prepare(`
+      WITH boundary AS (
+        SELECT sequence FROM cowork_messages WHERE id = ? AND session_id = ? AND type = 'user'
+      )
+      SELECT metadata FROM cowork_messages
+      WHERE session_id = ? AND type = 'assistant' AND sequence < (SELECT sequence FROM boundary)
+        AND sequence > COALESCE((
+          SELECT MAX(sequence) FROM cowork_messages
+          WHERE session_id = ? AND type = 'user' AND sequence < (SELECT sequence FROM boundary)
+        ), -1)
+      ORDER BY sequence DESC
+    `).all(messageId, sessionId, sessionId, sessionId) as Array<Pick<ProjectionMessageRow, 'metadata'>>;
+    for (const message of preceding) {
+      if (!message.metadata) continue;
+      const metadata = JSON.parse(message.metadata) as CoworkMessage['metadata'];
+      if (metadata?.dshSessionId === storedSessionId && !metadata.isThinking && !metadata.isStreaming
+        && typeof metadata.seq === 'number' && Number.isSafeInteger(metadata.seq) && metadata.seq >= 0) {
+        return metadata.seq;
+      }
+    }
+    return undefined;
+  }
+
   prepare(operation: CoworkMessageEditOperation): void {
     this.write(operation.sessionId, () => {
       if (this.pending(operation.sessionId)) throw new Error('A message edit is already pending.');
@@ -161,6 +188,10 @@ export class CoworkMessageEditStore {
       this.db.prepare('DELETE FROM cowork_session_capsules WHERE session_id = ?').run(operation.sessionId);
       this.db.prepare("UPDATE cowork_sessions SET status = 'idle', updated_at = ? WHERE id = ?")
         .run(Date.now(), operation.sessionId);
+      if (operation.dsh) {
+        this.db.prepare('UPDATE cowork_sessions SET claude_session_id = ? WHERE id = ?')
+          .run(operation.dsh.forkedSessionId, operation.sessionId);
+      }
       this.setPhase(operation, CoworkMessageEditPhase.Rewound);
     });
   }
@@ -169,6 +200,10 @@ export class CoworkMessageEditStore {
     this.write(operation.sessionId, () => {
       const snapshot = this.snapshot(operation);
       writeProjectionSnapshot(this.db, operation.sessionId, snapshot.messages[0].sequence, snapshot);
+      if (operation.dsh) {
+        this.db.prepare('UPDATE cowork_sessions SET claude_session_id = ? WHERE id = ?')
+          .run(operation.dsh.originalSessionId, operation.sessionId);
+      }
       this.setPhase(operation, CoworkMessageEditPhase.Restored);
     });
   }

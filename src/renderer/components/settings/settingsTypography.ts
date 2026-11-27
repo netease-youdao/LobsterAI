@@ -29,4 +29,4 @@ export const SETTINGS_DESCRIPTION_TEXT =
   'text-[length:calc(var(--lobster-ui-font-size)_-_2px)] leading-normal';
 
 export const SETTINGS_META_TEXT =
-  'text-[length:calc(var(--lobster-ui-font-size)_-_3px)] leading-normal';
+  'text-[length:max(10px,calc(var(--lobster-ui-font-size)_-_3px))] leading-normal';

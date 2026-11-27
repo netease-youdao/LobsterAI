@@ -6,5 +6,6 @@ export const MainView = {
   Connectors: 'mcp',
   ScheduledTasks: 'scheduledTasks',
   Library: 'library',
+  PluginPanel: 'pluginPanel',
 } as const;
 export type MainView = typeof MainView[keyof typeof MainView];

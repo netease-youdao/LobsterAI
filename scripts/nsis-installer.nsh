@@ -52,9 +52,6 @@ Var lobsterHiddenExecLaunchError
   Var lobsterOldAppExecutablePath
   Var lobsterOldUninstallerPath
   Var lobsterOldAppAsarPath
-  Var lobsterTrustedTarPath
-  Var lobsterTrustedTarStatus
-  Var lobsterTrustedTarSource
   Var lobsterOldInstallOriginalPath
   Var lobsterOldInstallOriginalPathNormalized
   Var lobsterOldInstallRegisteredPath
@@ -196,9 +193,9 @@ FunctionEnd
   !endif
 !macroend
 
-; Resolve only Windows-owned system tools, never PATH entries. Both
-; PowerShell and tar use this single resolver entry so the existence check and
-; the eventual execution refer to the exact same absolute path.
+; Resolve only Windows-owned system tools, never PATH entries. PowerShell
+; uses this single resolver entry so the existence check and the eventual
+; execution refer to the exact same absolute path.
 !ifdef BUILD_UNINSTALLER
 Function un.lobsterResolveTrustedSystemTool
 !else
@@ -212,7 +209,6 @@ Function lobsterResolveTrustedSystemTool
   StrCpy $lobsterResolvedToolSource "none"
 
   StrCmp $lobsterResolveToolKind "powershell" LobsterResolvePowerShell
-  StrCmp $lobsterResolveToolKind "tar" LobsterResolveTar
   StrCpy $lobsterResolvedToolStatus "unsupported-tool"
   Goto LobsterResolveToolDone
 
@@ -236,28 +232,6 @@ Function lobsterResolveTrustedSystemTool
       StrCpy $lobsterResolvedToolPath "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
       StrCpy $lobsterResolvedToolStatus "resolved"
       StrCpy $lobsterResolvedToolSource "system32"
-      Goto LobsterResolveToolDone
-
-  LobsterResolveTar:
-    System::Call 'kernel32::GetFileAttributesW(w "$WINDIR\Sysnative\tar.exe") i .r0'
-    IntCmp $0 -1 LobsterResolveTarSystem32 0 0
-    IntOp $1 $0 & 0x410
-    IntCmp $1 0 LobsterResolveTarSysnativeReady LobsterResolveTarSystem32 LobsterResolveTarSystem32
-    LobsterResolveTarSysnativeReady:
-      StrCpy $lobsterResolvedToolPath "$WINDIR\Sysnative\tar.exe"
-      StrCpy $lobsterResolvedToolStatus "resolved"
-      StrCpy $lobsterResolvedToolSource "sysnative"
-      Goto LobsterResolveToolDone
-
-    LobsterResolveTarSystem32:
-    System::Call 'kernel32::GetFileAttributesW(w "$WINDIR\System32\tar.exe") i .r0'
-    IntCmp $0 -1 LobsterResolveToolDone 0 0
-    IntOp $1 $0 & 0x410
-    IntCmp $1 0 LobsterResolveTarSystem32Ready LobsterResolveToolDone LobsterResolveToolDone
-    LobsterResolveTarSystem32Ready:
-      StrCpy $lobsterResolvedToolPath "$WINDIR\System32\tar.exe"
-      StrCpy $lobsterResolvedToolStatus "resolved"
-      StrCpy $lobsterResolvedToolSource "system32"
 
   LobsterResolveToolDone:
   Pop $1
@@ -274,18 +248,6 @@ FunctionEnd
   StrCpy $lobsterTrustedPowerShellPath $lobsterResolvedToolPath
   StrCpy $lobsterTrustedPowerShellStatus $lobsterResolvedToolStatus
   StrCpy $lobsterTrustedPowerShellSource $lobsterResolvedToolSource
-!macroend
-
-!macro ResolveTrustedTar
-  StrCpy $lobsterResolveToolKind "tar"
-  !ifdef BUILD_UNINSTALLER
-    Call un.lobsterResolveTrustedSystemTool
-  !else
-    Call lobsterResolveTrustedSystemTool
-  !endif
-  StrCpy $lobsterTrustedTarPath $lobsterResolvedToolPath
-  StrCpy $lobsterTrustedTarStatus $lobsterResolvedToolStatus
-  StrCpy $lobsterTrustedTarSource $lobsterResolvedToolSource
 !macroend
 
 ; -- Hidden helper-process launcher --
@@ -481,9 +443,12 @@ FunctionEnd
     !insertmacro DefineLobsterPayloadStagingFunctions
   !endif
 
-  ; Request admin privileges for script execution (tar extract, etc.)
-  ; This does NOT change the default install path -- just ensures UAC elevation.
-  RequestExecutionLevel admin
+  ; Execution level is intentionally NOT overridden here: electron-builder's
+  ; installer.nsi emits RequestExecutionLevel user (PE manifest asInvoker),
+  ; so per-user fresh installs, per-user in-app updates (--updated), and
+  ; silent channel installs (/S) run with zero UAC prompts. Legacy per-machine
+  ; (HKLM / all-users) installs elevate on demand via UAC_RunElevated in
+  ; multiUserUi.nsh and installer.nsi.
 
   ; Declare the installer (and the uninstaller stub it writes) DPI-aware.
   ; electron-builder's template leaves the NSIS manifest without a dpiAware
@@ -551,6 +516,16 @@ FunctionEnd
 ; 30 rounds x 500ms keeps the worst-case gate under ~20s wall time; the
 ; healthy path still converges on the first or second round.
 ;
+; With RequestExecutionLevel user (asInvoker), an existing LobsterAI process
+; running elevated (e.g. launched as administrator or carried over from a
+; pre-asInvoker install) refuses unelevated Stop-Process with Win32
+; ERROR_ACCESS_DENIED (5). When every remaining process hits error 5 across two
+; consecutive rounds, fail fast instead of burning 30 rounds: in interactive
+; installs, elevate the same trusted PowerShell helper on demand (RunAs +
+; hidden ProcessStartInfo + Base64 -EncodedCommand) to stop those processes and
+; report success with exit code 6; in silent (/S) installs never prompt UAC and
+; exit with code 5 so the failure stays zero-UI.
+;
 ; Shared between the installer and the uninstaller via customCheckAppRunning.
 !macro stopLobsterAIProcesses
   DetailPrint "[Installer] Stopping running LobsterAI processes"
@@ -562,25 +537,84 @@ FunctionEnd
   ; directory, including on the helper-not-found path.
   CreateDirectory "$APPDATA\LobsterAI"
   StrCmp $lobsterTrustedPowerShellPath "" StopLobsterAIProcessesDone
-  ; The path-prefix sweep in both helpers below needs the install root and
-  ; this process id. Both travel through the child environment, not string
-  ; interpolation: the install directory is user-selected and may hold shell
-  ; metacharacters. Cleared at StopLobsterAIProcessesLog, which every path
-  ; reaches.
+  ; The path-prefix sweep and on-demand elevated fallback need the install root,
+  ; this process id, and silent mode. All travel through the child environment,
+  ; not string interpolation: the install directory is user-selected and may
+  ; hold shell metacharacters. Cleared at StopLobsterAIProcessesLog, which every
+  ; path reaches. The elevated fallback reuses the running PowerShell's own
+  ; MainModule.FileName rather than $lobsterTrustedPowerShellPath because 32-bit
+  ; NSIS resolves Sysnative, which does not exist inside a 64-bit child process.
+  StrCpy $0 "0"
+  ${If} ${Silent}
+    StrCpy $0 "1"
+  ${EndIf}
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "$INSTDIR")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "$lobsterCurrentProcessPid")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "$0")i'
   Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
     $$root = $$env:LOBSTERAI_STOP_ROOT;\
     if ($$root -and -not $$root.EndsWith([char]92)) { $$root = $$root + [char]92 };\
     $$selfPid = $$env:LOBSTERAI_STOP_SELF_PID;\
     $$sweep = $$root -and $$root.Length -gt 3;\
+    $$deniedRounds = 0;\
     for ($$i = 0; $$i -lt 30; $$i++) {\
       $$procs = @();\
       $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
       $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
       if ($$sweep) { $$procs += Get-Process -ErrorAction SilentlyContinue | Where-Object { $$fp = $$null; try { $$fp = $$_.Path } catch { }; $$fp -and $$fp.StartsWith($$root, [System.StringComparison]::OrdinalIgnoreCase) -and $$_.Id.ToString() -ne $$selfPid } };\
       if ($$procs.Count -eq 0) { exit 0 };\
-      $$procs | Stop-Process -Force -ErrorAction SilentlyContinue;\
+      $$seen = @{};\
+      $$unique = @();\
+      foreach ($$p in $$procs) { if (-not $$seen.ContainsKey($$p.Id)) { $$seen[$$p.Id] = $$true; $$unique += $$p } };\
+      $$denied = $$false;\
+      $$killed = $$false;\
+      foreach ($$p in $$unique) {\
+        try {\
+          Stop-Process -Id $$p.Id -Force -ErrorAction Stop;\
+          $$killed = $$true\
+        } catch {\
+          $$ex = $$_.Exception;\
+          $$code = $$null;\
+          if ($$ex -and ($$ex.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$code = $$ex.NativeErrorCode };\
+          if ($$null -eq $$code -and $$ex -and $$ex.InnerException -and ($$ex.InnerException.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$code = $$ex.InnerException.NativeErrorCode };\
+          if ($$code -eq 5 -or ($$ex -is [System.UnauthorizedAccessException]) -or ($$ex.InnerException -is [System.UnauthorizedAccessException])) { $$denied = $$true }\
+        }\
+      };\
+      if ($$denied -and -not $$killed) {\
+        $$deniedRounds++;\
+        if ($$deniedRounds -ge 2) {\
+          $$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);\
+          $$psExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName;\
+          if ($$isAdmin -or $$env:LOBSTERAI_STOP_SILENT -eq \"1\" -or -not $$psExe) { exit 5 };\
+          $$rootB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$$root));\
+          $$safePid = ($$selfPid -replace \"[^0-9]\", \"\");\
+          $$sq = [char]39;\
+          $$dq = [char]34;\
+          $$elevScript = \"`$$root = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($$sq$$rootB64$$sq)); `$$selfPid = $$sq$$safePid$$sq; `$$sweep = `$$root -and `$$root.Length -gt 3; for (`$$j = 0; `$$j -lt 30; `$$j++) { `$$q = @(); `$$q += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue; `$$q += Get-Process node -ErrorAction SilentlyContinue | Where-Object { `$$_.Path -like $$dq*LobsterAI*$$dq }; if (`$$sweep) { `$$q += Get-Process -ErrorAction SilentlyContinue | Where-Object { `$$fp = `$$null; try { `$$fp = `$$_.Path } catch { }; `$$fp -and `$$fp.StartsWith(`$$root, [System.StringComparison]::OrdinalIgnoreCase) -and `$$_.Id.ToString() -ne `$$selfPid } }; if (`$$q.Count -eq 0) { exit 0 }; `$$q | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }; exit 3\";\
+          $$enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$elevScript));\
+          try {\
+            $$psi = New-Object System.Diagnostics.ProcessStartInfo;\
+            $$psi.FileName = $$psExe;\
+            $$psi.Arguments = \"-NoLogo -NoProfile -NonInteractive -EncodedCommand \" + $$enc;\
+            $$psi.Verb = \"runas\";\
+            $$psi.UseShellExecute = $$true;\
+            $$psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden;\
+            $$elev = [System.Diagnostics.Process]::Start($$psi);\
+            if ($$null -eq $$elev) { exit 5 };\
+            $$elev.WaitForExit();\
+            if ($$elev.ExitCode -eq 0) { exit 6 };\
+            exit $$elev.ExitCode\
+          } catch {\
+            $$n = $$null;\
+            if ($$_.Exception -and ($$_.Exception.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$n = $$_.Exception.NativeErrorCode };\
+            if ($$null -eq $$n -and $$_.Exception -and $$_.Exception.InnerException -and ($$_.Exception.InnerException.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$n = $$_.Exception.InnerException.NativeErrorCode };\
+            if ($$n -eq 1223) { exit 1223 };\
+            exit 5\
+          }\
+        }\
+      } else {\
+        $$deniedRounds = 0\
+      };\
       Start-Sleep -Milliseconds 500;\
     };\
     exit 3"'
@@ -592,8 +626,19 @@ FunctionEnd
     StrCpy $lobsterTargetProcessesStopStatus "process-start-blocked"
   StrCmp $R2 "0" 0 +2
     StrCpy $lobsterTargetProcessesStopStatus "success"
-  StrCmp $R2 "3" 0 StopLobsterAIProcessesLog
-  ; The exit-3 verdict alone never says WHICH process refused to die. Re-snapshot
+  StrCmp $R2 "6" 0 +2
+    StrCpy $lobsterTargetProcessesStopStatus "success"
+  StrCmp $R2 "5" 0 +2
+    StrCpy $lobsterTargetProcessesStopStatus "access-denied"
+  StrCmp $R2 "1223" 0 +2
+    StrCpy $lobsterTargetProcessesStopStatus "uac-declined"
+  StrCmp $R2 "3" StopLobsterAIProcessesLogSurvivors
+  StrCmp $R2 "5" StopLobsterAIProcessesLogSurvivors
+  StrCmp $R2 "1223" StopLobsterAIProcessesLogSurvivors
+  Goto StopLobsterAIProcessesLog
+
+  StopLobsterAIProcessesLogSurvivors:
+  ; The non-zero verdict alone never says WHICH process refused to die. Re-snapshot
   ; and append one process-stop-survivor line per remaining process before the
   ; completion line below. Inputs travel through the child environment, not
   ; string interpolation: the log path contains the user profile directory,
@@ -611,12 +656,15 @@ FunctionEnd
     $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
     $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
     if ($$sweep) { $$procs += Get-Process -ErrorAction SilentlyContinue | Where-Object { $$fp = $$null; try { $$fp = $$_.Path } catch { }; $$fp -and $$fp.StartsWith($$root, [System.StringComparison]::OrdinalIgnoreCase) -and $$_.Id.ToString() -ne $$selfPid } };\
-    foreach ($$p in $$procs) {\
+    $$seen = @{};\
+    $$unique = @();\
+    foreach ($$p in $$procs) { if (-not $$seen.ContainsKey($$p.Id)) { $$seen[$$p.Id] = $$true; $$unique += $$p } };\
+    foreach ($$p in $$unique) {\
       $$fp = \"unknown\";\
       try { if ($$p.Path) { $$fp = $$p.Path } } catch { };\
       Add-Content -LiteralPath $$env:LOBSTERAI_STOP_LOG_PATH -Value \"$$ts phase=process-stop-survivor attempt_id=$$env:LOBSTERAI_STOP_ATTEMPT_ID name=$$($$p.ProcessName) pid=$$($$p.Id) path=$$fp\" -ErrorAction SilentlyContinue;\
     };\
-    exit $$procs.Count"'
+    exit $$unique.Count"'
   !insertmacro LobsterExecHiddenExitCode
   Pop $1
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "")i'
@@ -639,6 +687,7 @@ FunctionEnd
   ; Clearing variables that were never set (helper-not-found path) is a no-op.
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "")i'
   System::Call 'kernel32::GetTickCount()i .r6'
   IntOp $5 $6 - $7
   FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
@@ -822,42 +871,6 @@ FunctionEnd
     Exch $0
   FunctionEnd
 
-  ; Collapse helper output into one bounded log line: keep the LAST 512
-  ; characters (tar prints its fatal reason last) and replace CR/LF/TAB with
-  ; spaces so the key=value log stays one record per line.
-  Function lobsterBuildSingleLineTail
-    Exch $0
-    Push $1
-    Push $2
-    Push $3
-    StrLen $1 $0
-    IntCmp $1 512 LobsterTailSanitize LobsterTailSanitize 0
-      IntOp $1 $1 - 512
-      StrCpy $0 $0 512 $1
-    LobsterTailSanitize:
-    StrCpy $3 ""
-    StrCpy $1 0
-    LobsterTailLoop:
-      StrCpy $2 $0 1 $1
-      StrCmp $2 "" LobsterTailDone
-      StrCmp $2 "$\r" LobsterTailBlank
-      StrCmp $2 "$\n" LobsterTailBlank
-      StrCmp $2 "$\t" LobsterTailBlank
-      StrCpy $3 "$3$2"
-      Goto LobsterTailNext
-      LobsterTailBlank:
-        StrCpy $3 "$3 "
-      LobsterTailNext:
-      IntOp $1 $1 + 1
-      Goto LobsterTailLoop
-    LobsterTailDone:
-    StrCpy $0 $3
-    Pop $3
-    Pop $2
-    Pop $1
-    Exch $0
-  FunctionEnd
-
   ; The functions below reference $appPackageStagingDir, which the patched
   ; installer.nsi declares at file scope. This custom include is parsed
   ; before installer.nsi, so like the relaunch function they are emitted
@@ -905,10 +918,9 @@ FunctionEnd
     LobsterStagingDefaultInsufficient:
     ; The temp drive cannot hold the staged payload. Relocating helps only
     ; when the install directory lives on a different volume with room for
-    ; staging plus the final install (tree + tar extraction) at once.
+    ; staging plus the final install tree at once.
     StrCpy $3 $INSTDIR 3
     IntOp $6 $1 + ${LOBSTER_PAYLOAD_UNPACKED_MB}
-    IntOp $6 $6 + ${LOBSTER_WIN_RESOURCES_TAR_MB}
     StrCpy $5 $2
     StrCmp $3 $4 LobsterStagingNoRoom
     Push "$3"
@@ -1012,12 +1024,10 @@ FunctionEnd
 
   ; -- Staged payload validation --
   ; Nsis7z::Extract pushes no result, so the extracted tree itself is the
-  ; only evidence of success. A full staging drive silently truncates it
-  ; (field case 2026-08-25: win-resources.tar cut at 528 MB, the install
-  ; completed, and the failure surfaced later as a misleading tar error).
+  ; only evidence of success. A full staging drive silently truncates it.
   ; Verify the tree before CopyFiles can commit it: the app executable and
-  ; resources\win-resources.tar must exist, and the tar must byte-match the
-  ; size recorded at build time.
+  ; resources\app.asar (which contains the bundled DSH runtime) must exist,
+  ; and app.asar must byte-match the size recorded at build time.
   !macro LobsterValidateStagedPayload MODE
     Push $0
     Push $1
@@ -1032,8 +1042,8 @@ FunctionEnd
       ; fallback-direct extracts straight into the restored $OUTDIR
       StrCpy $0 "$OUTDIR"
     ${EndIf}
-    !ifdef LOBSTER_WIN_RESOURCES_TAR_BYTES
-      StrCpy $3 "${LOBSTER_WIN_RESOURCES_TAR_BYTES}"
+    !ifdef LOBSTER_APP_ASAR_BYTES
+      StrCpy $3 "${LOBSTER_APP_ASAR_BYTES}"
     !else
       StrCpy $3 "unknown"
     !endif
@@ -1042,19 +1052,19 @@ FunctionEnd
 
     ${IfNot} ${FileExists} "$0\${APP_EXECUTABLE_FILENAME}"
       StrCpy $1 "app-executable-missing"
-    ${ElseIfNot} ${FileExists} "$0\resources\win-resources.tar"
-      StrCpy $1 "resources-tar-missing"
+    ${ElseIfNot} ${FileExists} "$0\resources\app.asar"
+      StrCpy $1 "app-asar-missing"
     ${Else}
-      Push "$0\resources\win-resources.tar"
+      Push "$0\resources\app.asar"
       Call lobsterQueryFileSizeBytes
       Pop $2
       ${If} $2 == "-1"
         ; A just-extracted file that cannot be measured is logged but not
-        ; fatal on its own; the tar extraction phase still verifies content.
+        ; fatal on its own; pre-registration validation still verifies layout.
         StrCpy $1 "size-query-failed"
-      !ifdef LOBSTER_WIN_RESOURCES_TAR_BYTES
-      ${ElseIf} $2 != "${LOBSTER_WIN_RESOURCES_TAR_BYTES}"
-        StrCpy $1 "resources-tar-size-mismatch"
+      !ifdef LOBSTER_APP_ASAR_BYTES
+      ${ElseIf} $2 != "${LOBSTER_APP_ASAR_BYTES}"
+        StrCpy $1 "app-asar-size-mismatch"
       !endif
       ${EndIf}
     ${EndIf}
@@ -1064,7 +1074,7 @@ FunctionEnd
       FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
       FileSeek $9 0 END
       !insertmacro GetTimestamp $8
-      FileWrite $9 "$8 phase=payload-staging-validated attempt_id=$lobsterInstallerAttemptId mode=${MODE} result=$1 root=$0 tar_bytes=$2 expected_bytes=$3$\r$\n"
+      FileWrite $9 "$8 phase=payload-staging-validated attempt_id=$lobsterInstallerAttemptId mode=${MODE} result=$1 root=$0 asar_bytes=$2 expected_bytes=$3$\r$\n"
       FileClose $9
     ${Else}
       FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
@@ -1229,17 +1239,6 @@ FunctionEnd
       StrCpy $lobsterOldInstallRollbackError "0"
       StrCpy $lobsterOldInstallRenameStatus "rolled-back"
 
-      ; A failed update must not leave its broad, install-scope Defender
-      ; exclusion protecting the restored application indefinitely.
-      StrCmp $lobsterTrustedPowerShellPath "" LobsterRollbackDefenderCleanupDone
-      System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_TARGET", t "$lobsterOldInstallOriginalPath")i'
-      Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "try { Remove-MpPreference -ExclusionPath $$env:LOBSTERAI_DEFENDER_TARGET -ErrorAction SilentlyContinue } catch {}"'
-      !insertmacro LobsterExecHiddenToStack
-      Pop $0
-      Pop $1
-      System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_TARGET", t "")i'
-      LobsterRollbackDefenderCleanupDone:
-
       ; The displaced tree is never needed after a verified restore. Pass its
       ; exact path through the child environment instead of interpolating it
       ; into cmd/PowerShell code: custom install directories may contain shell
@@ -1342,6 +1341,53 @@ FunctionEnd
     Call lobsterCleanupRelocatedPayloadStaging
     !insertmacro customRollbackOldInstall "user-abort"
   !macroend
+  ; Verify the installer can write to $INSTDIR (or its parent if $INSTDIR does
+  ; not exist yet) before stopping processes or mutating anything. This catches
+  ; unelevated per-user installs or updates targeting a protected directory such
+  ; as C:\Program Files\LobsterAI (e.g. legacy HKCU installs from the admin era)
+  ; cleanly before any destructive step.
+  !macro LobsterCheckInstallTargetWritable
+    Push $0
+    Push $1
+    Push $2
+    Push $8
+    Push $9
+
+    StrCpy $0 "$INSTDIR"
+    System::Call 'kernel32::GetFileAttributesW(w r0) i .r2'
+    IntCmp $2 -1 0 LobsterWriteProbeTargetReady LobsterWriteProbeTargetReady
+      ${StdUtils.GetParentPath} $0 "$INSTDIR"
+      StrCmp $0 "" LobsterWriteProbeDone
+      System::Call 'kernel32::GetFileAttributesW(w r0) i .r2'
+      IntCmp $2 -1 LobsterWriteProbeDone 0 0
+
+    LobsterWriteProbeTargetReady:
+    ; FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE (0x04000100) removes
+    ; the probe automatically on CloseHandle, leaving zero residue on disk.
+    System::Call 'kernel32::CreateFileW(w "$0\.lobsterai-write-probe-$lobsterInstallerAttemptId", i 0x40000000, i 7, p 0, i 1, i 0x04000100, p 0) p .r2 ?e'
+    Pop $1
+    IntCmp $2 -1 0 LobsterWriteProbeClose LobsterWriteProbeClose
+      ; Only abort on ERROR_ACCESS_DENIED (5); other transient errors fail open.
+      IntCmp $1 5 0 LobsterWriteProbeDone LobsterWriteProbeDone
+      FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
+      FileSeek $9 0 END
+      !insertmacro GetTimestamp $8
+      FileWrite $9 "$8 phase=install-target-unwritable attempt_id=$lobsterInstallerAttemptId instdir=$INSTDIR probe_dir=$0 win32_error=$1 action=abort-install$\r$\n"
+      FileClose $9
+      MessageBox MB_OK|MB_ICONEXCLAMATION "${U+65E0}${U+6CD5}${U+5199}${U+5165}${U+5B89}${U+88C5}${U+76EE}${U+5F55} $INSTDIR${U+FF08}${U+6743}${U+9650}${U+4E0D}${U+8DB3}${U+FF09}${U+3002}${U+8BF7}${U+53F3}${U+952E}${U+5B89}${U+88C5}${U+5305}${U+9009}${U+62E9}${U+201C}${U+4EE5}${U+7BA1}${U+7406}${U+5458}${U+8EAB}${U+4EFD}${U+8FD0}${U+884C}${U+201D}${U+FF0C}${U+6216}${U+9009}${U+62E9}${U+5176}${U+4ED6}${U+6709}${U+5199}${U+5165}${U+6743}${U+9650}${U+7684}${U+5B89}${U+88C5}${U+76EE}${U+5F55}${U+540E}${U+91CD}${U+8BD5}${U+3002}$\r$\n$\r$\nCannot write to the installation folder $INSTDIR (access denied). Right-click the installer and choose Run as administrator, or choose a folder you have permission to write to and try again. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
+      SetErrorLevel 5
+      Quit
+
+    LobsterWriteProbeClose:
+    System::Call 'kernel32::CloseHandle(p r2)'
+
+    LobsterWriteProbeDone:
+    Pop $9
+    Pop $8
+    Pop $2
+    Pop $1
+    Pop $0
+  !macroend
 !endif
 
 ; Replaces electron-builder's built-in CHECK_APP_RUNNING. Inserted:
@@ -1391,6 +1437,8 @@ FunctionEnd
     !insertmacro GetTimestamp $8
     FileWrite $9 "$8 phase=install-preflight-complete attempt_id=$lobsterInstallerAttemptId installer_version=${VERSION} invocation_source=$lobsterInvocationSource updated_flag=$lobsterUpdatedFlag ui_mode=$lobsterUiMode launcher_fallback=$lobsterLauncherFallback scenario=$lobsterInstallScenario instdir=$INSTDIR$\r$\n"
     FileClose $9
+
+    !insertmacro LobsterCheckInstallTargetWritable
 
     StrCmp $lobsterInstallScenario "fresh-install" CustomCheckFreshInstall
 
@@ -1842,11 +1890,6 @@ FunctionEnd
     !insertmacro GetTimestamp $8
     FileWrite $9 "$8 phase=old-install-rename-complete attempt_id=$lobsterInstallerAttemptId status=$lobsterOldInstallRenameStatus reason=$lobsterOldInstallRenameReason attempts=$lobsterOldInstallRenameAttempts win32_error=$lobsterOldInstallRenameError elapsed_ms=$5 source_exists=$2 backup_exists=$3 backup_path=$lobsterOldInstallBackupPath cleanup_mode=deferred$\r$\n"
     FileClose $9
-
-    ; The install-scope Defender exclusion is intentionally added by
-    ; customAfterUninstallOldVersions, after every legacy uninstaller has
-    ; returned. Older uninstallers remove these exclusions during --updated;
-    ; adding here would let them undo the protection before payload extraction.
     Goto CustomCheckInstallerDone
 
     CustomCheckFreshInstall:
@@ -1946,69 +1989,6 @@ FunctionEnd
       FileWrite $9 "$8 phase=old-uninstaller-complete attempt_id=$lobsterInstallerAttemptId root=${ROOT_KEY} status=handled exit=$R0 elapsed_ms=$5$\r$\n"
       FileClose $9
     ${EndIf}
-  !macroend
-
-  ; Runs after every old-install root has either been skipped or fully
-  ; uninstalled, immediately before installApplicationFiles. This ordering is
-  ; important for transition upgrades: already-installed legacy uninstallers
-  ; remove LobsterAI exclusions at the end of their --updated flow.
-  !macro customAfterUninstallOldVersions
-    DetailPrint "[Installer] Applying Windows Defender install-scope exclusion"
-    !insertmacro ResolveTrustedPowerShell
-    FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $9 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $9 "$8 phase=defender-exclusion-start attempt_id=$lobsterInstallerAttemptId point=post-old-uninstaller rename_status=$lobsterOldInstallRenameStatus helper_status=$lobsterTrustedPowerShellStatus$\r$\n"
-    FileClose $9
-    System::Call 'kernel32::GetTickCount()i .r7'
-    StrCmp $lobsterTrustedPowerShellPath "" DefenderPostUninstallHelperMissing
-
-    ${GetParameters} $R9
-    ClearErrors
-    ${GetOptions} $R9 "/NoDefenderExclusion" $R8
-    IfErrors 0 DefenderPostUninstallQueryOnly
-
-    CreateDirectory "$INSTDIR"
-    System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "$INSTDIR")i'
-    Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
-      $$target = $$env:LOBSTERAI_INSTALL_ROOT;\
-      try { $$beforePaths = @((Get-MpPreference -ErrorAction Stop).ExclusionPath); $$before = if ($$beforePaths -contains $$target) { \"present\" } else { \"absent\" } } catch { $$before = \"query-failed\" };\
-      try { Add-MpPreference -ExclusionPath $$target -ErrorAction Stop; $$add = \"added\" } catch { $$add = \"skipped:\" + $$_.Exception.Message.Trim() };\
-      try { $$afterPaths = @((Get-MpPreference -ErrorAction Stop).ExclusionPath); $$after = if ($$afterPaths -contains $$target) { \"present\" } else { \"absent\" } } catch { $$after = \"query-failed\" };\
-      Write-Output (\"before=\" + $$before + \" add=\" + $$add + \" after=\" + $$after)"'
-    !insertmacro LobsterExecHiddenToStack
-    Goto DefenderPostUninstallCommandDone
-
-    DefenderPostUninstallQueryOnly:
-    System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "$INSTDIR")i'
-    Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
-      $$root = $$env:LOBSTERAI_INSTALL_ROOT;\
-      $$targets = @($$root, (Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\app.asar\"), (Join-Path $$root \"resources\win-resources.tar\"));\
-      try { $$beforePaths = @((Get-MpPreference -ErrorAction Stop).ExclusionPath); $$before = @($$targets | Where-Object { $$beforePaths -contains $$_ }).Count } catch { $$before = \"query-failed\" };\
-      try { Remove-MpPreference -ExclusionPath $$targets -ErrorAction Stop; $$remove = \"requested\" } catch { $$remove = \"failed:\" + $$_.Exception.Message.Trim() };\
-      try { $$afterPaths = @((Get-MpPreference -ErrorAction Stop).ExclusionPath); $$after = @($$targets | Where-Object { $$afterPaths -contains $$_ }).Count } catch { $$after = \"query-failed\" };\
-      Write-Output (\"before_count=\" + $$before + \" add=disabled remove=\" + $$remove + \" after_count=\" + $$after)"'
-    !insertmacro LobsterExecHiddenToStack
-
-    DefenderPostUninstallCommandDone:
-    Pop $0
-    Pop $1
-    StrCpy $R2 $0
-    System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "")i'
-    Goto DefenderPostUninstallLog
-
-    DefenderPostUninstallHelperMissing:
-    StrCpy $R2 "helper-not-found"
-    StrCpy $1 "skipped:trusted-powershell-unavailable"
-
-    DefenderPostUninstallLog:
-    System::Call 'kernel32::GetTickCount()i .r6'
-    IntOp $5 $6 - $7
-    FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $9 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $9 "$8 phase=defender-exclusion-complete attempt_id=$lobsterInstallerAttemptId point=post-old-uninstaller exit=$R2 elapsed_ms=$5 output=$1$\r$\n"
-    FileClose $9
   !macroend
 
   ; The remaining hooks are invoked from the version-pinned app-builder-lib
@@ -2352,348 +2332,16 @@ FunctionEnd
   DetailPrint "[Installer] Preparing installation steps"
 
   ; The payload copy into $INSTDIR is committed, so a staging tree relocated
-  ; onto the install drive has served its purpose. Remove it before the tar
-  ; extraction below needs that space back.
+  ; onto the install drive has served its purpose. Remove it now.
   Call lobsterCleanupRelocatedPayloadStaging
 
-  ; -- Extract combined resource archive (win-resources.tar) --
-  ; All large resource directories (cfmind/, SKILLs/, python-win/) are packed
-  ; into a single tar file. NSIS 7z extracts one large file almost instantly;
-  ; we then unpack the tar here using Electron's Node runtime.
-  ;
-  ; The install-scope Defender exclusion was added after every legacy
-  ; uninstaller returned and immediately before the NSIS payload extraction;
-  ; temporary/legacy entries are trimmed at the end of this macro.
-
-  System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "1")i'
-
-  DetailPrint "[Installer] Extracting bundled resources"
-  ; $R2 = current extractor exit code, $R3 = extractor id for logs.
-  ; ($R2 survives GetTimestamp, which clobbers $0 -- see the macro note.)
-  StrCpy $R2 ""
-  StrCpy $R3 "none"
-  StrCpy $R4 "none"
-  !insertmacro ResolveTrustedTar
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=system-tool-resolved attempt_id=$lobsterInstallerAttemptId tool=tar status=$lobsterTrustedTarStatus source=$lobsterTrustedTarSource path=$lobsterTrustedTarPath$\r$\n"
-  FileClose $2
-
-  ; -- Attempt 1: Windows built-in bsdtar (Win10 1803+) --
-  ; Runs a trusted system binary instead of the freshly written app exe,
-  ; which security software tends to freeze for cloud analysis on its first
-  ; execution (the root cause of installers hanging at this phase).
-  StrCmp $lobsterTrustedTarPath "" TarExtractElectron
-  StrCpy $R3 "system-tar"
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-start attempt_id=$lobsterInstallerAttemptId extractor=system-tar helper=$lobsterTrustedTarPath tar=$INSTDIR\resources\win-resources.tar dest=$INSTDIR\resources$\r$\n"
-  FileClose $2
-  System::Call 'kernel32::GetTickCount()i .r7'
-  ; The output is captured: bsdtar reports its fatal reason only on stderr
-  ; ("Truncated tar archive detected while reading data" in the 2026-08-25
-  ; field case), and the details pane this installer never shows was the
-  ; only place the old ExecToLog delivered it. The exit code contract below
-  ; is unchanged; on success tar -xf prints nothing and the output is
-  ; discarded.
-  Push '"$lobsterTrustedTarPath" -xf "$INSTDIR\resources\win-resources.tar" -C "$INSTDIR\resources"'
-  !insertmacro LobsterExecHiddenToStack
-  Pop $0
-  Pop $R6
-  StrCpy $R2 $0
-  System::Call 'kernel32::GetTickCount()i .r6'
-  IntOp $5 $6 - $7
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-exit attempt_id=$lobsterInstallerAttemptId extractor=system-tar raw_kind=numeric-or-adapter-exit exit=$R2 elapsed_ms=$5$\r$\n"
-  FileClose $2
-  ; On any non-success exit, preserve a bounded single-line tail of the
-  ; combined stdout+stderr before the electron fallback overwrites $R2. The
-  ; condition mirrors the dispatch below exactly.
-  StrCmp $R2 "error" TarExtractCaptureOutput
-  IntCmp $R2 0 TarExtractOutputCaptured TarExtractCaptureOutput TarExtractCaptureOutput
-  TarExtractCaptureOutput:
-    Push $R6
-    Call lobsterBuildSingleLineTail
-    Pop $R6
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-output attempt_id=$lobsterInstallerAttemptId extractor=system-tar exit=$R2 text=$R6$\r$\n"
-    FileClose $2
-  TarExtractOutputCaptured:
-  StrCmp $R2 "error" TarExtractElectron
-  IntCmp $R2 0 TarExtractVerify TarExtractElectron TarExtractElectron
-
-  TarExtractElectron:
-  ; -- Attempt 2: bundled Electron Node runtime --
-  ; Wrapped in a 10-minute watchdog: if security software freezes the child
-  ; before it can run, the installer must fail visibly instead of hanging
-  ; forever (a killed installer leaves a half-installed app behind).
-  ;
-  ; Some security tooling permanently breaks the .NET exit-code query inside
-  ; PowerShell ($p.ExitCode stays $null after a successful wait) while the
-  ; child itself completes fine. The child therefore publishes a post-verify
-  ; sentinel file (.unpack-cfmind-ok); a null exit code with the sentinel
-  ; present is treated as success, still gated by TarExtractVerify.
-  StrCpy $R3 "electron"
-  DetailPrint "[Installer] Launching bundled extractor"
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-start attempt_id=$lobsterInstallerAttemptId extractor=electron tar=$INSTDIR\resources\win-resources.tar dest=$INSTDIR\resources$\r$\n"
-  FileClose $2
-  System::Call 'kernel32::GetTickCount()i .r7'
-
-  !insertmacro ResolveTrustedPowerShell
-  StrCmp $lobsterTrustedPowerShellPath "" TarExtractHelperNotFound
-  Delete "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker"
-  ; A stale sentinel from an earlier run must never vouch for this attempt.
-  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_WATCHDOG_MARKER_PATH", t "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_EXE", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_SCRIPT", t "$INSTDIR\resources\unpack-cfmind.cjs")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_ARCHIVE", t "$INSTDIR\resources\win-resources.tar")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_DESTINATION", t "$INSTDIR\resources")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_LOG", t "$APPDATA\LobsterAI\install-timing.log")i'
-  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
-    $$ErrorActionPreference = \"Stop\";\
-    $$marker = $$env:LOBSTERAI_WATCHDOG_MARKER_PATH;\
-    function Write-LobsterWatchdogMarker {\
-      param([string] $$value);\
-      try {\
-        Set-Content -LiteralPath $$marker -Value $$value -NoNewline -ErrorAction Stop\
-      } catch {\
-        Write-Output (\"LOBSTERAI_WATCHDOG_MARKER_WRITE_FAILED:\" + $$value)\
-      }\
-    };\
-    try {\
-      $$extractorArgs = \"`\"\" + $$env:LOBSTERAI_EXTRACTOR_SCRIPT + \"`\" `\"\" + $$env:LOBSTERAI_EXTRACTOR_ARCHIVE + \"`\" `\"\" + $$env:LOBSTERAI_EXTRACTOR_DESTINATION + \"`\" `\"\" + $$env:LOBSTERAI_EXTRACTOR_LOG + \"`\"\";\
-      $$p = Start-Process -FilePath $$env:LOBSTERAI_EXTRACTOR_EXE -ArgumentList $$extractorArgs -NoNewWindow -PassThru\
-    } catch {\
-      Write-LobsterWatchdogMarker \"process-start-blocked\";\
-      Write-Output \"LOBSTERAI_WATCHDOG_START_BLOCKED\";\
-      exit 125\
-    };\
-    if ($$p.WaitForExit(600000)) {\
-      $$p.WaitForExit();\
-      if ($$p.ExitCode -eq $$null) {\
-        $$sentinelOk = $$false;\
-        try {\
-          $$sentinel = Join-Path $$env:LOBSTERAI_EXTRACTOR_DESTINATION \".unpack-cfmind-ok\";\
-          $$sentinelOk = Test-Path -LiteralPath $$sentinel\
-        } catch { $$sentinelOk = $$false };\
-        if ($$sentinelOk) {\
-          Write-LobsterWatchdogMarker \"exit-code-null-sentinel-ok\";\
-          exit 0\
-        };\
-        Write-LobsterWatchdogMarker \"output-validation-failed\";\
-        exit 127\
-      };\
-      exit $$p.ExitCode\
-    };\
-    try {\
-      Stop-Process -Id $$p.Id -Force -ErrorAction Stop;\
-      if (-not $$p.WaitForExit(30000)) {\
-        Write-LobsterWatchdogMarker \"process-termination-failed\";\
-        Write-Output \"LOBSTERAI_WATCHDOG_TERMINATION_FAILED\";\
-        exit 126\
-      }\
-    } catch {\
-      Write-LobsterWatchdogMarker \"process-termination-failed\";\
-      Write-Output \"LOBSTERAI_WATCHDOG_TERMINATION_FAILED\";\
-      exit 126\
-    };\
-    Write-LobsterWatchdogMarker \"process-timeout\";\
-    Write-Output \"LOBSTERAI_WATCHDOG_TIMEOUT\";\
-    exit 124"'
-  !insertmacro LobsterExecHiddenExitCode
-  Pop $0
-  StrCpy $R2 $0
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_WATCHDOG_MARKER_PATH", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_EXE", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_SCRIPT", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_ARCHIVE", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_DESTINATION", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_LOG", t "")i'
-  StrCpy $R4 "none"
-  ClearErrors
-  FileOpen $3 "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker" r
-  IfErrors TarExtractMarkerReadDone
-    FileRead $3 $R4
-    FileClose $3
-  TarExtractMarkerReadDone:
-  Delete "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker"
-  Goto TarExtractWatchdogReturned
-
-  TarExtractHelperNotFound:
-  StrCpy $R2 "helper-not-found"
-  StrCpy $R4 "helper-not-found"
-
-  TarExtractWatchdogReturned:
-  System::Call 'kernel32::GetTickCount()i .r6'
-  IntOp $5 $6 - $7
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-exit attempt_id=$lobsterInstallerAttemptId extractor=electron raw_marker=$R4 exit=$R2 elapsed_ms=$5$\r$\n"
-  FileClose $2
-
-  ; "error" = the launcher couldn't start PowerShell (check before IntCmp, which
-  ; converts non-numeric strings to 0 and would misidentify "error" as success)
-  StrCmp $R2 "error" TarExtractProcessFailed
-  StrCmp $R2 "helper-not-found" TarExtractProcessFailed
-  ; Marker persistence is diagnostic only. A frozen child can also block or
-  ; deny writes to $PLUGINSDIR, so the dedicated wrapper exit must independently
-  ; select the no-concurrent-rollback path.
-  StrCmp $R2 "126" TarExtractTerminationFailed
-  StrCmp $R4 "process-start-blocked" TarExtractProcessFailed
-  StrCmp $R4 "process-termination-failed" TarExtractTerminationFailed
-  StrCmp $R4 "output-validation-failed" TarExtractOutputValidationFailed
-  StrCmp $R4 "process-timeout" 0 TarExtractNumericResult
-  StrCmp $R2 "124" TarExtractTimeout TarExtractOutputValidationFailed
-  TarExtractNumericResult:
-  ; IntCmp tolerates trailing whitespace/CR that StrCmp would reject
-  IntCmp $R2 0 TarExtractVerify TarExtractNonZero TarExtractNonZero
-
-  TarExtractVerify:
-  ; Success requires every large bundled resource to be usable -- an exit code
-  ; alone must never trigger deletion of the only recovery source.
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractVerifyBundleAssets
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractVerifySkills
-  StrCpy $R5 "runtime-entry-missing"
-  Goto TarExtractRequiredResourceMissing
-
-  TarExtractVerifyBundleAssets:
-  IfFileExists "$INSTDIR\resources\cfmind\web-tree-sitter.wasm" TarExtractVerifySkills
-  StrCpy $R5 "runtime-bundle-assets-missing"
-  Goto TarExtractRequiredResourceMissing
-
-  TarExtractVerifySkills:
-  IfFileExists "$INSTDIR\resources\SKILLs\*.*" TarExtractVerifyPython
-  StrCpy $R5 "skills-content-missing"
-  Goto TarExtractRequiredResourceMissing
-
-  TarExtractVerifyPython:
-  IfFileExists "$INSTDIR\resources\python-win\python.exe" TarExtractSucceeded
-  IfFileExists "$INSTDIR\resources\python-win\python3.exe" TarExtractSucceeded
-  StrCpy $R5 "python-entry-missing"
-
-  TarExtractRequiredResourceMissing:
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 reason=$R5-after-extract$\r$\n"
-  FileClose $2
-  ; A bogus system-tar success still gets a shot at the bundled extractor.
-  ;
-  ; /SD IDOK on this and the failure boxes below: NSIS shows MessageBox even
-  ; in /S installs unless a silent default is declared, and the in-app update
-  ; must never block on an orphan dialog.
-  StrCmp $R3 "system-tar" TarExtractElectron
-  MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction completed without all required runtime resources ($R5). The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-  Goto TarExtractFailed
-
-  TarExtractProcessFailed:
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 reason=process-start-failed$\r$\n"
-    FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because the resource extractor could not be started (exit=$R2). The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-    Goto TarExtractFailed
-
-  TarExtractTimeout:
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 reason=timeout$\r$\n"
-    FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction timed out after 10 minutes. The blocked extractor was terminated and the installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-    Goto TarExtractFailed
-
-  TarExtractTerminationFailed:
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 reason=process-termination-failed action=preserve-all-no-concurrent-rollback$\r$\n"
-    FileClose $2
-    System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because the extractor process could not be confirmed terminated. No automatic rollback or cleanup was attempted while that process may still be writing files. Restart Windows before retrying. Recovery files (if any): $lobsterOldInstallBackupPath. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-    SetErrorLevel 3
-    Quit
-
-  TarExtractOutputValidationFailed:
-    ; The watchdog waited out the child but could not read its exit code. On
-    ; machines where security tooling permanently breaks that query the child
-    ; may still have succeeded, so consult its post-verify sentinel before
-    ; declaring failure; TarExtractVerify still makes the final on-disk call.
-    ; (Dual of the TarExtractVerify principle: just as an exit code alone must
-    ; never trigger deletion, an unreadable exit code alone must never abort
-    ; an installation whose payload verifiably exists.)
-    IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-sentinel-rescue attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 sentinel=present$\r$\n"
-    FileClose $2
-    Goto TarExtractVerify
-
-  TarExtractOutputValidationFatal:
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 reason=watchdog-output-validation-failed$\r$\n"
-    FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because the resource extractor watchdog returned an invalid result. The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-    Goto TarExtractFailed
-
-  TarExtractNonZero:
-    FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-    FileSeek $2 0 END
-    !insertmacro GetTimestamp $8
-    FileWrite $2 "$8 phase=tar-extract-error attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 elapsed_ms=$5 reason=numeric-child-exit$\r$\n"
-    FileClose $2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI installation stopped because resource extraction failed (child exit code $R2). The installer will not commit a partial application. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-    Goto TarExtractFailed
-
-  TarExtractSucceeded:
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-complete attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2$\r$\n"
-  FileClose $2
-  ; Completion marker, read by the app for install-integrity diagnostics.
-  FileOpen $2 "$INSTDIR\resources\.win-resources-extracted" w
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 source=installer extractor=$R3$\r$\n"
-  FileClose $2
-  DetailPrint "[Installer] Bundled resources extraction complete"
-  ; Only a verified success may delete these: the preserved archive is what
-  ; lets the app finish an interrupted extraction at first launch. The
-  ; sentinel has served its purpose once the install commits.
+  ; Clean up stale artifacts left behind by older installs (OpenClaw cfmind,
+  ; pre-ASAR unpacked dsh-runtime, and retired win-resources.tar helpers).
+  RMDir /r "$INSTDIR\resources\cfmind"
+  RMDir /r "$INSTDIR\resources\dsh-runtime"
   Delete "$INSTDIR\resources\win-resources.tar"
-  Delete "$INSTDIR\resources\unpack-cfmind.cjs"
-  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
-  Goto TarExtractDone
-
-  TarExtractFailed:
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=tar-extract-failed-archive-preserved attempt_id=$lobsterInstallerAttemptId extractor=$R3 exit=$R2 raw_marker=$R4 action=abort-install$\r$\n"
-  FileClose $2
-  System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
-  !insertmacro customRollbackOldInstall "resource-extraction-failed"
-  StrCmp $lobsterOldInstallRollbackStatus "failed" 0 TarExtractAbort
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The installation failed and automatic rollback did not complete. No recovery copy was deleted. Previous files: $lobsterOldInstallBackupPath. Partial update: $lobsterOldInstallFailedPath. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
-  TarExtractAbort:
-  SetErrorLevel 3
-  Quit
-  TarExtractDone:
+  Delete "$INSTDIR\resources\unpack-dsh-resources.cjs"
+  Delete "$INSTDIR\resources\.unpack-dsh-ok"
 
   ; -- Restore user-created skills from AppData backup --
   ; The backup was created in customCheckAppRunning before extraction began.
@@ -2829,7 +2477,6 @@ FunctionEnd
       ; additional recovery source because the PowerShell transaction deletes
       ; it only after every skill copy succeeds.
       StrCmp $lobsterOldInstallRenameStatus "success" 0 SkillRestoreFailurePreserved
-      System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
       !insertmacro customRollbackOldInstall "skill-restore-failed"
       StrCmp $lobsterOldInstallRollbackStatus "success" SkillRestoreRollbackSucceeded
         MessageBox MB_OK|MB_ICONEXCLAMATION "The LobsterAI update could not restore user skills, and automatic rollback did not complete. No recovery copy was deleted. Previous files: $lobsterOldInstallBackupPath. Partial update: $lobsterOldInstallFailedPath. Details: $APPDATA\LobsterAI\install-timing.log" /SD IDOK
@@ -2879,64 +2526,10 @@ FunctionEnd
     SkillRestoreValidated:
   SkipSkillRestore:
 
-  System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
-
-  ; The unpack script is deleted in TarExtractSucceeded above; after a failed
-  ; extraction it is intentionally kept alongside win-resources.tar.
-
-  ; -- Rebalance Defender exclusions now that extraction is done --
-  ; One helper launch does both halves. First, unconditionally remove the
-  ; install-scope whole-directory entry (also the leftover of an interrupted
-  ; install -- the entry path is always $INSTDIR, so this step self-heals it)
-  ; and the SKILLs entry older installers added. Then, unless the
-  ; /NoDefenderExclusion opt-out is present (the removals never are), re-add
-  ; the permanent entries.
-  ;
-  ; Besides the three runtime trees, the permanent set PRE-PROVISIONS the two
-  ; biggest single files of the NEXT upgrade: win-resources.tar and app.asar.
-  ; Field finding (EICAR-verified on a machine where install-time exclusions
-  ; never worked): Defender applies newly added exclusions asynchronously,
-  ; minutes later -- entries added mid-install protect nothing, while entries
-  ; that have been sitting since the previous install are fully honored.
-  ; Risk: the tar path points at a file that only exists during an install,
-  ; and app.asar is the same trust class as the already-excluded
-  ; app.asar.unpacked. SKILLs stays scannable (user-writable, agent-executed).
-  !insertmacro ResolveTrustedPowerShell
-  StrCpy $R7 "1"
-  ${GetParameters} $R9
-  ClearErrors
-  ${GetOptions} $R9 "/NoDefenderExclusion" $R8
-  IfErrors +2
-    StrCpy $R7 "0"
-  StrCmp $lobsterTrustedPowerShellPath "" DefenderRebalanceHelperMissing
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "$INSTDIR")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_ADD_PERMANENT", t "$R7")i'
-  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
-    $$root = $$env:LOBSTERAI_INSTALL_ROOT;\
-    try { $$trimTargets = @($$root, (Join-Path $$root \"resources\SKILLs\")); Remove-MpPreference -ExclusionPath $$trimTargets -ErrorAction SilentlyContinue; $$trim = \"removed\" } catch { $$trim = \"failed:\" + $$_.Exception.Message.Trim() };\
-    if ($$env:LOBSTERAI_DEFENDER_ADD_PERMANENT -ne \"1\") { $$permanent = \"skipped:opt-out\" } else {\
-      try { $$addTargets = @((Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\app.asar\"), (Join-Path $$root \"resources\win-resources.tar\")); Add-MpPreference -ExclusionPath $$addTargets -ErrorAction Stop; $$permanent = \"added\" } catch { $$permanent = \"skipped:\" + $$_.Exception.Message.Trim() }\
-    };\
-    Write-Output (\"trim=\" + $$trim + \" permanent=\" + $$permanent)"'
-  !insertmacro LobsterExecHiddenToStack
-  Pop $0
-  Pop $1
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_ADD_PERMANENT", t "")i'
-  Goto DefenderRebalanceLog
-  DefenderRebalanceHelperMissing:
-  StrCpy $0 "helper-not-found"
-  StrCpy $1 "skipped:trusted-powershell-unavailable"
-  DefenderRebalanceLog:
-  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $2 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $2 "$8 phase=defender-exclusion-rebalance-complete attempt_id=$lobsterInstallerAttemptId permanent_requested=$R7 exit=$0 output=$1$\r$\n"
-  FileClose $2
-
   ; Validate every scenario before electron-builder writes new registration
-  ; or shortcuts. The archive and unpack script are diagnostic recovery
-  ; material, never a successful validation condition.
+  ; or shortcuts. dsh-runtime lives inside app.asar (validated byte-for-byte
+  ; during staging) with its bundled pnpm and native binaries unpacked under
+  ; app.asar.unpacked\dsh-runtime.
   StrCpy $lobsterNewInstallValidationStatus "failed"
   StrCpy $lobsterNewInstallValidationReason "app-executable-missing"
   IfFileExists "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 NewInstallPrevalidateFailed
@@ -2945,14 +2538,14 @@ FunctionEnd
   StrCpy $lobsterNewInstallValidationReason "app-asar-missing"
   IfFileExists "$INSTDIR\resources\app.asar" 0 NewInstallPrevalidateFailed
 
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateBundleAssets
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSkills
-  StrCpy $lobsterNewInstallValidationReason "runtime-entry-missing"
+  IfFileExists "$INSTDIR\resources\app.asar.unpacked\dsh-runtime\package-manager\pnpm\package.json" NewInstallPrevalidateBundleAssets
+  StrCpy $lobsterNewInstallValidationReason "runtime-unpacked-missing"
   Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateBundleAssets:
     StrCpy $lobsterNewInstallValidationReason "runtime-bundle-assets-missing"
-    IfFileExists "$INSTDIR\resources\cfmind\web-tree-sitter.wasm" NewInstallPrevalidateSkills
+    IfFileExists "$INSTDIR\resources\dsh-bundles\lobsterai-host\package.json" 0 NewInstallPrevalidateFailed
+    IfFileExists "$INSTDIR\resources\dsh-bundles\lobsterai-channels\package.json" NewInstallPrevalidateSkills
     Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateSkills:
@@ -3107,55 +2700,12 @@ FunctionEnd
   System::Call 'shell32::SHChangeNotify(i, i, i, i) v (0x08000000, 0, 0, 0)'
 !macroend
 
-; -- Let LobsterAI.exe accept its own loopback connections --
-; Windows Defender Firewall's "Query user" default drops inbound connections,
-; 127.0.0.1 included, to programs without an inbound allow rule. The engine
-; gateway is LobsterAI.exe listening on 127.0.0.1, so the app could not reach
-; it after a reboot (field case 2026-10). The rule allows TCP only between
-; 127.0.0.1 addresses (netsh rejects ::1 and would fail the whole add), for
-; this install's executable, so nothing becomes reachable from the network.
-; It is replaced by name and program: reinstalls stay idempotent, and
-; per-user installs of other accounts keep their rule.
-; The app adds the same rule (src/main/libs/windowsLoopbackFirewall.ts) when
-; its startup self-test finds loopback dropped. A failure here is logged and
-; never fails the install.
-!macro LobsterApplyLoopbackFirewallRule
-  !insertmacro ResolveTrustedPowerShell
-  System::Call 'kernel32::GetTickCount()i .r7'
-  StrCmp $lobsterTrustedPowerShellPath "" LoopbackFirewallHelperMissing
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")i'
-  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
-    $$netsh = Join-Path $$env:SystemRoot \"System32\netsh.exe\";\
-    $$program = \"program=\" + $$env:LOBSTERAI_FIREWALL_PROGRAM;\
-    & $$netsh advfirewall firewall delete rule \"name=LobsterAI loopback\" dir=in $$program | Out-Null; $$delete = $$LASTEXITCODE;\
-    & $$netsh advfirewall firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any | Out-Null; $$add = $$LASTEXITCODE;\
-    Write-Output (\"delete_exit=\" + $$delete + \" add_exit=\" + $$add); exit $$add"'
-  !insertmacro LobsterExecHiddenToStack
-  Pop $0
-  Pop $1
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "")i'
-  Goto LoopbackFirewallLog
-
-  LoopbackFirewallHelperMissing:
-  StrCpy $0 "helper-not-found"
-  StrCpy $1 "skipped:trusted-powershell-unavailable"
-
-  LoopbackFirewallLog:
-  System::Call 'kernel32::GetTickCount()i .r6'
-  IntOp $5 $6 - $7
-  FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
-  FileSeek $9 0 END
-  !insertmacro GetTimestamp $8
-  FileWrite $9 "$8 phase=loopback-firewall-rule-complete attempt_id=$lobsterInstallerAttemptId exit=$0 elapsed_ms=$5 output=$1$\r$\n"
-  FileClose $9
-!macroend
-
-; Standard post-registry electron-builder hook. All fallible extraction,
-; restoration, Defender rebalancing and validation completed in
-; customBeforeRegistryAddInstallInfo. This hook only commits the already
-; prevalidated directory swap, schedules exact-current-backup cleanup,
-; registers the Open With entries and adds the loopback firewall rule for the
-; committed install.
+; Standard post-registry electron-builder hook. All fallible restoration and
+; validation completed in customBeforeRegistryAddInstallInfo. This hook only
+; commits the already prevalidated directory swap, schedules exact-current-backup
+; cleanup, and registers the Open With entries for the committed install.
+; Loopback firewall rules are added on demand by the app only when its startup
+; loopback self-test detects Windows Firewall blocking 127.0.0.1.
 !macro customInstall
   StrCmp $lobsterNewInstallValidationStatus "success" 0 InstallFinalizeInvariantFailed
   StrCmp $lobsterOldInstallRenameStatus "prevalidated" 0 InstallFinalizeNoRename
@@ -3210,8 +2760,6 @@ FunctionEnd
 
   InstallFinalizeComplete:
   !insertmacro LobsterRegisterOpenWith
-  ; After the old uninstallers, which remove the rule, and after the files exist.
-  !insertmacro LobsterApplyLoopbackFirewallRule
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
   FileSeek $2 0 END
   !insertmacro GetTimestamp $8
@@ -3228,33 +2776,5 @@ FunctionEnd
 
 !macro customUnInstall
   !insertmacro LobsterUnregisterOpenWith
-
-  ; -- Remove Windows Defender Exclusion on uninstall --
-  ; Clean up every exclusion any installer version may have added: the
-  ; current permanent set, the SKILLs entry from older versions, the
-  ; single-file entries from the path-list era, and the install-scope
-  ; whole-directory entry in case an install was interrupted before its
-  ; rebalance step ran.
-  !insertmacro ResolveTrustedPowerShell
-  StrCmp $lobsterTrustedPowerShellPath "" DefenderUninstallCleanupDone
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "$INSTDIR")i'
-  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "try { $$root = $$env:LOBSTERAI_INSTALL_ROOT; $$targets = @($$root, (Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\win-resources.tar\"), (Join-Path $$root \"resources\app.asar\")); Remove-MpPreference -ExclusionPath $$targets -ErrorAction SilentlyContinue } catch {}"'
-  !insertmacro LobsterExecHiddenToStack
-  Pop $0
-  Pop $1
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "")i'
-  DefenderUninstallCleanupDone:
-
-  ; -- Remove this install's loopback firewall rule --
-  ; Matches name and program, like LobsterApplyLoopbackFirewallRule. Updates
-  ; run this uninstaller first; the new installer then adds the rule again.
-  StrCmp $lobsterTrustedPowerShellPath "" LoopbackFirewallUninstallDone
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")i'
-  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "& (Join-Path $$env:SystemRoot \"System32\netsh.exe\") advfirewall firewall delete rule \"name=LobsterAI loopback\" dir=in (\"program=\" + $$env:LOBSTERAI_FIREWALL_PROGRAM) | Out-Null"'
-  !insertmacro LobsterExecHiddenToStack
-  Pop $0
-  Pop $1
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "")i'
-  LoopbackFirewallUninstallDone:
   !insertmacro LobsterReportUninstallAnalytics
 !macroend

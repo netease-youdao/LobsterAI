@@ -8,8 +8,8 @@ import {
 import type { ImportedSheet, WorkbookBaseline } from './xlsxImport';
 import { relationshipsPath, RelationshipType } from './xlsxPackage';
 import {
-  addElementPrefix, appendChildren, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, firstXmlElement, setXmlAttributes, xmlAttribute,
-  type XmlElement, xmlElements,
+  addElementPrefix, appendChildren, decodeXml, elementPrefix, encodeXmlAttribute, encodeXmlText, ensureXmlNamespace, firstXmlElement,
+  namespacePrefixFor, setXmlAttributes, xmlAttribute, xmlAttributes, type XmlElement, xmlElements,
 } from './xlsxXml';
 
 /**
@@ -483,7 +483,8 @@ function dropEmptyExtensions(xml: string): string {
   const extPrefix = list[1].slice(0, list[1].length - 'extLst'.length);
   const inner = result.slice(result.indexOf('>', list.index) + 1, listEnd);
   // Direct `<ext>` children only; extensions may nest their own extension lists.
-  const token = new RegExp(`<(/?)${extPrefix.replace(/[.]/g, '\\.')}ext(?=[\\s/>])[^>]*?(/?)>`, 'g');
+  const escapedExtPrefix = extPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const token = new RegExp(`<(/?)${escapedExtPrefix}ext(?=[\\s/>])[^>]*?(/?)>`, 'g');
   let depth = 0;
   let start = -1;
   const empty: [number, number][] = [];
@@ -1002,6 +1003,7 @@ export function rewriteWorkbookSheets(xml: string, options: {
   preferredActive?: string;
 }): { xml: string; activeSheetId?: string; activeChanged: boolean } {
   const { baseline, plan, order, states, newParts } = options;
+  const workbookElement = firstXmlElement(xml, 'workbook');
   const sheetsElement = firstXmlElement(xml, 'sheets');
   if (!sheetsElement?.inner) return { xml, activeChanged: false };
   const originals = [...xmlElements(sheetsElement.inner, 'sheet')];
@@ -1031,7 +1033,21 @@ export function rewriteWorkbookSheets(xml: string, options: {
     for (const follower of followers.get(sheet.index) ?? []) entries.push({ originalIndex: follower, element: originals[follower] });
   }
 
-  const relationshipAttribute = originals.map(element => [...element.open.matchAll(/\s([\w.-]+:id)\s*=/g)].map(match => match[1])[0]).find(Boolean) ?? 'r:id';
+  const workbookAttrs = workbookElement ? xmlAttributes(workbookElement.open) : undefined;
+  const sheetsAttrs = xmlAttributes(sheetsElement.open);
+  const workbookRelPrefix = workbookElement && namespacePrefixFor(workbookElement.open, OFFICE_REL_NS);
+  const inScopeRelPrefix = namespacePrefixFor(sheetsElement.open, OFFICE_REL_NS)
+    ?? (workbookRelPrefix && !sheetsAttrs.has(`xmlns:${workbookRelPrefix}`) ? workbookRelPrefix : undefined);
+  const existingRelPrefix = originals
+    .map(element => [...element.open.matchAll(/\s([\w.-]+):id\s*=/g)].map(match => match[1])[0])
+    .find(Boolean);
+  const relPrefix = inScopeRelPrefix ?? existingRelPrefix ?? 'r';
+  const relationshipAttribute = `${relPrefix}:id`;
+  const needsWorkbookRelNs = newParts.size > 0 && !inScopeRelPrefix;
+  const canBindOnWorkbook = Boolean(workbookElement)
+    && !sheetsAttrs.has(`xmlns:${relPrefix}`)
+    && (!workbookAttrs?.has(`xmlns:${relPrefix}`) || workbookAttrs.get(`xmlns:${relPrefix}`) === OFFICE_REL_NS);
+  const localRelNs = needsWorkbookRelNs && !canBindOnWorkbook ? ` xmlns:${relPrefix}="${OFFICE_REL_NS}"` : '';
   let nextSheetId = Math.max(0, ...originals.map(element => Number(xmlAttribute(element.open, 'sheetId')) || 0)) + 1;
   const prefix = elementPrefix(originals[0]?.name ?? sheetsElement.name);
   const markup = entries.map(entry => {
@@ -1048,9 +1064,13 @@ export function rewriteWorkbookSheets(xml: string, options: {
       return entry.element.inner === undefined ? open : `${open}${entry.element.inner}</${entry.element.name}>`;
     }
     const part = newParts.get(entry.id!)!;
-    return addElementPrefix(`<sheet name="${encodeXmlAttribute(state!.name)}" sheetId="${nextSheetId++}"${state?.state ? ` state="${state.state}"` : ''} ${relationshipAttribute}="${part.relationshipId}"/>`, prefix);
+    return addElementPrefix(`<sheet${localRelNs} name="${encodeXmlAttribute(state!.name)}" sheetId="${nextSheetId++}"${state?.state ? ` state="${state.state}"` : ''} ${relationshipAttribute}="${part.relationshipId}"/>`, prefix);
   }).join('');
   let result = replaceInner(xml, sheetsElement, markup);
+  // Writers such as openpyxl declare `xmlns:r` on each `<sheet>` rather than `<workbook>`.
+  if (needsWorkbookRelNs && canBindOnWorkbook) {
+    result = ensureXmlNamespace(result, 'workbook', relPrefix, OFFICE_REL_NS).xml;
+  }
 
   // Sheet-scoped names point at sheets by position.
   const newIndexByOriginal = new Map<number, number>();
@@ -1104,6 +1124,37 @@ export function rewriteWorkbookSheets(xml: string, options: {
     if (Object.keys(changes).length) result = result.slice(0, view.start) + setXmlAttributes(view.open, changes) + result.slice(view.start + view.open.length);
   }
   return { xml: result, activeSheetId, activeChanged };
+}
+
+/**
+ * Ensure every `<sheet>` in `workbook.xml` with a prefixed `*:id` attribute has that prefix
+ * declared in scope (`<workbook>`, `<sheets>`, or the `<sheet>` itself). Leaves healthy
+ * workbooks byte-identical and repairs workbooks written without `<workbook xmlns:r="…">`.
+ */
+export function ensureWorkbookSheetNamespaces(xml: string): string {
+  const workbook = firstXmlElement(xml, 'workbook');
+  const sheets = firstXmlElement(xml, 'sheets');
+  if (!workbook || !sheets?.inner) return xml;
+  const inScope = new Set<string>();
+  for (const open of [workbook.open, sheets.open]) {
+    for (const [key] of xmlAttributes(open)) {
+      if (key.startsWith('xmlns:')) inScope.add(key.slice(6));
+    }
+  }
+  const missing = new Set<string>();
+  for (const sheet of xmlElements(sheets.inner, 'sheet')) {
+    const attrs = xmlAttributes(sheet.open);
+    for (const [key] of attrs) {
+      if (!key.endsWith(':id')) continue;
+      const relPrefix = key.slice(0, -3);
+      if (relPrefix && !inScope.has(relPrefix) && !attrs.has(`xmlns:${relPrefix}`)) missing.add(relPrefix);
+    }
+  }
+  let result = xml;
+  for (const relPrefix of missing) {
+    result = ensureXmlNamespace(result, 'workbook', relPrefix, OFFICE_REL_NS).xml;
+  }
+  return result;
 }
 
 /** Relationship and content-type bookkeeping for added and deleted worksheets. */

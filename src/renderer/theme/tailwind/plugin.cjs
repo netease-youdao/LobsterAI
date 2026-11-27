@@ -7,15 +7,22 @@
  * Provides: bg-background, text-foreground, bg-primary, border-border, etc.
  * Also provides legacy claude.* aliases for backward compatibility.
  *
- * Colors are wrapped in color-mix() with the <alpha-value> placeholder so that
- * Tailwind opacity modifiers (e.g. text-foreground/90, bg-surface-raised/30)
- * generate working CSS. Without this, var()-based colors silently drop any
- * class that uses an opacity modifier.
+ * Colors return the bare CSS variable when no Tailwind opacity modifier is
+ * applied (e.g. bg-background, text-foreground), and only wrap in color-mix()
+ * when a fractional opacity modifier is present (e.g. text-foreground/90,
+ * bg-surface-raised/30). Keeping opaque colors off color-mix() ensures
+ * Chromium computes standard rgb(...) values instead of CSS Color 4
+ * color(srgb 0..1), which legacy rich-text paste parsers (such as POPO Docs)
+ * misinterpret as near-black rgb(1, 1, 1) / rgb(0, 0, 0).
  */
 const plugin = require('tailwindcss/plugin');
 
-const withAlpha = (variable) =>
-  `color-mix(in srgb, var(${variable}) calc(<alpha-value> * 100%), transparent)`;
+const withAlpha = (variable) => ({ opacityVariable, opacityValue }) => {
+  if (opacityVariable !== undefined || opacityValue === undefined || opacityValue === '1') {
+    return `var(${variable})`;
+  }
+  return `color-mix(in srgb, var(${variable}) calc(${opacityValue} * 100%), transparent)`;
+};
 
 module.exports = plugin(function () {
   // The plugin itself is a no-op; we only extend the theme below.
@@ -32,6 +39,11 @@ module.exports = plugin(function () {
           hover:       withAlpha('--lobster-primary-hover'),
           muted:       withAlpha('--lobster-primary-muted'),
           dark:        withAlpha('--lobster-primary-hover'),  // backward compat alias
+        },
+        action: {
+          DEFAULT:     withAlpha('--lobster-action'),
+          foreground:  withAlpha('--lobster-action-foreground'),
+          hover:       withAlpha('--lobster-action-hover'),
         },
         accent: {
           DEFAULT:     withAlpha('--lobster-accent'),

@@ -1,7 +1,19 @@
 export const SubagentToolName = {
   Spawn: 'sessions_spawn',
   Yield: 'sessions_yield',
+  DshSpawn: 'subagent',
+  DshFork: 'subagent_fork',
+  DshDelegate: 'delegate_agent',
+  DshWait: 'wait_agent',
 } as const;
+
+export function isDshSubagentSpawn(name: unknown): boolean {
+  return (
+    name === SubagentToolName.DshSpawn
+    || name === SubagentToolName.DshFork
+    || name === SubagentToolName.DshDelegate
+  );
+}
 
 export const SubagentYield = {
   ToolName: SubagentToolName.Yield,

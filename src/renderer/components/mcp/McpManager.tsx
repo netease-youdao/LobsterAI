@@ -4,6 +4,8 @@ import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
+import { McpManagedConnection, McpManagedProvider } from '../../../shared/mcp/constants';
+import { NeteaseMail } from '../../../shared/neteaseMail/constants';
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
@@ -31,11 +33,13 @@ import CardToggle from '../common/CardToggle';
 import ManagementSearchHeader from '../common/ManagementSearchHeader';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
+import ContextCleanupBanner from '../cowork/ContextCleanupBanner';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
+import NeteaseMailConnectionDialog from '../mail/NeteaseMailConnectionDialog';
 import {
   getFormAnalyticsParams,
   getRegistryAnalyticsParams,
@@ -59,10 +63,10 @@ const LAUNCH_STATUS_COLORS: Record<string, string> = {
 };
 
 const isQichachaRegistryEntry = (entry: McpRegistryEntry): boolean =>
-  entry.oauthProvider === 'qichacha';
+  entry.oauthProvider === McpManagedProvider.Qichacha;
 
 const isOAuthRemoteServer = (server: McpServerConfig): boolean =>
-  server.transportType !== 'stdio' && server.auth === McpAuthMode.OAuth;
+  server.registryId !== NeteaseMail.RegistryId && server.transportType !== 'stdio' && server.auth === McpAuthMode.OAuth;
 
 /** How a remote OAuth server's sign-in reads on its card and in its detail. */
 const OAuthPhase = {
@@ -127,15 +131,13 @@ const buildCategoryOptions = (
 const CARD_ACTION_REVEAL_CLASS =
   'invisible group-hover:visible group-focus-within:visible';
 const MCP_CARD_ACTION_CLASS =
-  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-neutral-900 px-3 '
-  + `${MANAGEMENT_META_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
-  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 '
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 '
+  + `${MANAGEMENT_META_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
+  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 '
   + 'focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
 const MCP_DETAIL_ACTION_CLASS =
-  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-5 '
-  + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-action px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 const McpManager: React.FC = () => {
@@ -148,6 +150,7 @@ const McpManager: React.FC = () => {
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isMailConnectionOpen, setIsMailConnectionOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
   const [installingRegistry, setInstallingRegistry] = useState<McpRegistryEntry | null>(null);
   const [connectingRegistryId, setConnectingRegistryId] = useState<string | null>(null);
@@ -183,12 +186,26 @@ const McpManager: React.FC = () => {
     return () => { isActive = false; };
   }, [dispatch]);
 
+  // Reads overlap (focus, sign-in, sign-out, background expiry); a read that
+  // started earlier never overwrites one that started later.
+  const oauthStatusReadRef = useRef(0);
+  const refreshOAuthStates = useCallback(async () => {
+    const read = ++oauthStatusReadRef.current;
+    const states = await mcpService.oauthStatus();
+    if (read !== oauthStatusReadRef.current) return;
+    setOAuthStates(states);
+    setOAuthStatusReady(true);
+  }, []);
+
   useEffect(() => {
     return mcpService.onChanged(async () => {
       const loaded = await mcpService.loadServers();
       dispatch(setMcpServers(loaded));
+      if (loaded.some(isOAuthRemoteServer)) {
+        void refreshOAuthStates();
+      }
     });
-  }, [dispatch]);
+  }, [dispatch, refreshOAuthStates]);
 
   useEffect(() => {
     let isActive = true;
@@ -205,7 +222,6 @@ const McpManager: React.FC = () => {
   }, []);
 
   // Re-read OAuth state whenever the set of OAuth servers (or their identity) changes.
-  // `mcp status` spawns the OpenClaw CLI, so skip it when no server uses OAuth.
   const oauthServerSignature = useMemo(
     () => servers
       .filter(isOAuthRemoteServer)
@@ -213,17 +229,6 @@ const McpManager: React.FC = () => {
       .join('|'),
     [servers],
   );
-
-  // Reads overlap (focus, sign-in, sign-out); a read that started earlier never
-  // overwrites one that started later.
-  const oauthStatusReadRef = useRef(0);
-  const refreshOAuthStates = useCallback(async () => {
-    const read = ++oauthStatusReadRef.current;
-    const states = await mcpService.oauthStatus();
-    if (read !== oauthStatusReadRef.current) return;
-    setOAuthStates(states);
-    setOAuthStatusReady(true);
-  }, []);
 
   useEffect(() => {
     if (!oauthServerSignature) {
@@ -311,6 +316,8 @@ const McpManager: React.FC = () => {
     const isManagedCandidate = command === 'npx' || command === 'npx.cmd';
     if (!server.launchResolution && !isManagedCandidate) return null;
     const status = server.launchResolution?.status;
+    if (server.runtimeConnection === McpManagedConnection.Connecting) return i18nService.t('mcpLaunchConnecting');
+    if (server.runtimeConnection === McpManagedConnection.Connected) return i18nService.t('mcpLaunchConnected');
     if (!status) return i18nService.t('mcpLaunchPending');
     if (status === 'pending') return i18nService.t('mcpLaunchPending');
     if (status === 'installing') return i18nService.t('mcpLaunchInstalling');
@@ -322,6 +329,8 @@ const McpManager: React.FC = () => {
 
   const getLaunchStatusClass = (server: McpServerConfig): string => {
     const status = server.launchResolution?.status || 'pending';
+    if (server.runtimeConnection === McpManagedConnection.Connecting) return LAUNCH_STATUS_COLORS.installing;
+    if (status === 'ready' && server.runtimeConnection !== McpManagedConnection.Connected) return LAUNCH_STATUS_COLORS.pending;
     return LAUNCH_STATUS_COLORS[status] || LAUNCH_STATUS_COLORS.pending;
   };
 
@@ -660,6 +669,7 @@ const McpManager: React.FC = () => {
   };
 
   const handleOpenEditForm = (server: McpServerConfig) => {
+    if (server.registryId === NeteaseMail.RegistryId) { setIsMailConnectionOpen(true); return; }
     reportMcpAction('edit_open', {
       source: 'mcp_manager',
       activeTab,
@@ -737,6 +747,11 @@ const McpManager: React.FC = () => {
   };
 
   const handleInstallFromRegistry = (entry: McpRegistryEntry) => {
+    if (entry.oauthProvider === McpManagedProvider.NeteaseMail) {
+      setDetailTarget(null);
+      setIsMailConnectionOpen(true);
+      return;
+    }
     reportMcpAction('marketplace_install_open', {
       source: 'mcp_manager',
       activeTab,
@@ -967,6 +982,7 @@ const McpManager: React.FC = () => {
   };
 
   const openServerDetail = (server: McpServerConfig) => {
+    if (server.registryId === NeteaseMail.RegistryId) { setIsMailConnectionOpen(true); return; }
     reportMcpAction('open_detail', {
       source: 'mcp_manager',
       activeTab,
@@ -1042,6 +1058,7 @@ const McpManager: React.FC = () => {
     phase: OAuthPhase | null,
     size: 'card' | 'cardHeader' | 'detail',
   ) => {
+    if (server.registryId === NeteaseMail.RegistryId) return <button type="button" className={CARD_SECONDARY_PILL_CLASS} onClick={event => { event.stopPropagation(); setIsMailConnectionOpen(true); }}>{i18nService.t('neteaseMailConnect')}</button>;
     // Negative margins keep the action from increasing the compact facts row's height.
     const placement = size === 'card' ? 'ml-auto -my-1 ' : '';
     const isCardSize = size !== 'detail';
@@ -1078,6 +1095,7 @@ const McpManager: React.FC = () => {
    * until it is authorized, everything else just reads Installed.
    */
   const renderMarketplaceInstalledState = (entry: McpRegistryEntry, size: 'cardHeader' | 'detail') => {
+    if (entry.oauthProvider === McpManagedProvider.NeteaseMail) return <button type="button" className={CARD_SECONDARY_PILL_CLASS} onClick={event => { event.stopPropagation(); setIsMailConnectionOpen(true); }}>{i18nService.t('neteaseMailConnect')}</button>;
     const oauthServer = isOAuthRegistryEntry(entry)
       ? servers.find(server => server.registryId === entry.id && isOAuthRemoteServer(server))
       : undefined;
@@ -1102,6 +1120,7 @@ const McpManager: React.FC = () => {
   };
 
   const getInstallActionLabel = (entry: McpRegistryEntry, isConnecting: boolean): string => {
+    if (entry.oauthProvider === McpManagedProvider.NeteaseMail) return i18nService.t('neteaseMailConnect');
     if (isQichachaRegistryEntry(entry)) {
       return i18nService.t(isConnecting ? 'mcpQichachaConnecting' : 'mcpQichachaConnect');
     }
@@ -1559,12 +1578,14 @@ const McpManager: React.FC = () => {
           <button
             type="button"
             onClick={handleOpenCreateForm}
-            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-action text-action-foreground hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-5 w-5" aria-hidden="true" />
             <span>{i18nService.t('mcpAddServer')}</span>
           </button>
         </ManagementSearchHeader>
+
+        <ContextCleanupBanner className="mb-3" />
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">
@@ -1817,6 +1838,7 @@ const McpManager: React.FC = () => {
       </div>
 
       {renderDetailModal()}
+      {isMailConnectionOpen && <NeteaseMailConnectionDialog onClose={() => setIsMailConnectionOpen(false)} />}
 
       {/* Delete confirmation modal */}
       {pendingDelete && (

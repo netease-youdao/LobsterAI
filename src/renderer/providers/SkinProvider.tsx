@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 
-import type { SkinAssetSlot } from '../../shared/skin/constants';
+import type { SkinAssetSlot, SkinBackdropVisibility } from '../../shared/skin/constants';
 import {
   type ActiveSkin,
   buildSkinAssetUrl,
@@ -29,6 +29,7 @@ interface SkinContextValue {
   refreshVersion: number;
   refresh: () => Promise<void>;
   apply: (skinId: string) => Promise<void>;
+  setBackdropVisibility: (skinId: string, visibility: SkinBackdropVisibility) => Promise<void>;
   deactivate: () => Promise<void>;
   deleteSkin: (skinId: string) => Promise<void>;
   selectThemeMode: (mode: ThemeMode) => Promise<ThemeSelection>;
@@ -218,6 +219,16 @@ export const SkinProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     })
   ), [enqueueAppearanceMutation, refresh]);
 
+  const setBackdropVisibility = useCallback((
+    skinId: string,
+    visibility: SkinBackdropVisibility,
+  ): Promise<void> => (
+    enqueueAppearanceMutation(async () => {
+      await skinService.setBackdropVisibility(skinId, visibility);
+      await refresh();
+    })
+  ), [enqueueAppearanceMutation, refresh]);
+
   useEffect(() => {
     void refresh();
     return skinService.subscribe(() => {
@@ -242,6 +253,7 @@ export const SkinProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     refreshVersion,
     refresh,
     apply,
+    setBackdropVisibility,
     deactivate,
     deleteSkin,
     selectThemeMode,
@@ -258,6 +270,7 @@ export const SkinProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     savedSkins,
     selectThemeById,
     selectThemeMode,
+    setBackdropVisibility,
   ]);
 
   return <SkinContext.Provider value={value}>{children}</SkinContext.Provider>;

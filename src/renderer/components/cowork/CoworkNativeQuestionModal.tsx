@@ -135,7 +135,7 @@ export default function CoworkNativeQuestionModal({
         </div>
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
           <button type="button" onClick={cancel} disabled={submitting} className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised disabled:opacity-50">{t('cancel')}</button>
-          <button type="submit" disabled={!complete || submitting} className="px-4 py-2 text-sm rounded-lg bg-primary hover:bg-primary-hover text-white disabled:opacity-50 disabled:cursor-not-allowed">{t('coworkConfirmSelection')}</button>
+          <button type="submit" disabled={!complete || submitting} className="px-4 py-2 text-sm rounded-lg bg-action hover:bg-action-hover text-action-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{t('coworkConfirmSelection')}</button>
         </div>
       </form>
     </div>

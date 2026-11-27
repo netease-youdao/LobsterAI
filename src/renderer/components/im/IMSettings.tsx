@@ -7,18 +7,20 @@ import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroico
 import { ArrowLeftIcon, CheckCircleIcon, EllipsisVerticalIcon, ExclamationTriangleIcon, PlusIcon, QrCodeIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
+import { RetainedImPlatform } from '@shared/dshEngine/hostConstants';
+import { weixinCredentialErrorKey } from '@shared/im/weixin';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
 import { QRCodeSVG } from 'qrcode.react';
-import React, { useEffect, useMemo, useRef,useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { RootState } from '../../store';
-import { clearError,setDingTalkConfig, setDingTalkInstanceConfig, setDiscordConfig, setDiscordInstanceConfig, setEmailInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setNeteaseBeeChanConfig, setNimConfig, setNimInstanceConfig, setPopoInstanceConfig, setQQConfig, setQQInstanceConfig, setTelegramInstanceConfig, setTelegramOpenClawConfig, setWecomConfig, setWecomInstanceConfig, setWeixinConfig } from '../../store/slices/imSlice';
+import { clearError, setDingTalkConfig, setDingTalkInstanceConfig, setDiscordConfig, setDiscordInstanceConfig, setEmailInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setNeteaseBeeChanConfig, setNimConfig, setNimInstanceConfig, setPopoInstanceConfig, setQQConfig, setQQInstanceConfig, setTelegramInstanceConfig, setTelegramOpenClawConfig, setWecomConfig, setWecomInstanceConfig, setWeixinConfig } from '../../store/slices/imSlice';
 import type { EmailInstanceConfig, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig } from '../../types/im';
 import { MAX_DINGTALK_INSTANCES, MAX_DISCORD_INSTANCES, MAX_EMAIL_INSTANCES, MAX_FEISHU_INSTANCES, MAX_NIM_INSTANCES, MAX_POPO_INSTANCES, MAX_QQ_INSTANCES, MAX_TELEGRAM_INSTANCES, MAX_WECOM_INSTANCES } from '../../types/im';
 import { getAgentDisplayNameById } from '../../utils/agentDisplay';
@@ -29,11 +31,24 @@ import Modal from '../common/Modal';
 import ComposeIcon from '../icons/ComposeIcon';
 import EditIcon from '../icons/EditIcon';
 import TrashIcon from '../icons/TrashIcon';
+import {
+  type RegisterSettingsDirtyGuard,
+  SETTINGS_FORM_SAVED_RESET_MS,
+  SettingsFormFooterMode,
+  SettingsFormStatus,
+} from '../settings/settingsDirtyGuard';
+import { SettingsFormFooter, SettingsFormStatusBadge } from '../settings/SettingsFormFooter';
 import { SETTINGS_ACTION_BUTTON_CLASS, SettingsCard, SettingsItem } from '../settings/SettingsLayout';
 import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT, SETTINGS_SECTION_TITLE_TEXT } from '../settings/settingsTypography';
 import DingTalkInstanceSettings from './DingTalkInstanceSettings';
 import DiscordInstanceSettings from './DiscordInstanceSettings';
 import FeishuInstanceSettings from './FeishuInstanceSettings';
+import {
+  areIMConfigsEqual,
+  hasFeishuCredentials,
+  isIMAutoBindCredentialOverride,
+  resolveIMConnectivityOverride,
+} from './imInstanceDraft';
 import IMPlatformHeader from './IMPlatformHeader';
 import NimInstanceSettings from './NimInstanceSettings';
 import { nimFallbackInstanceSchema, nimFallbackUiHints } from './nimSchemaFallback';
@@ -50,10 +65,6 @@ const verdictColorClass: Record<IMConnectivityTestResult['verdict'], string> = {
   warn: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-300',
   fail: 'bg-red-500/15 text-red-600 dark:text-red-400',
 };
-
-const IM_AUTH_RESTART_ON_SAVE_OPTIONS = {
-  markRestartOnSave: true,
-} as const;
 
 const IMAnalyticsSource = {
   Settings: 'settings_im',
@@ -307,11 +318,6 @@ const reportIMGatewayToggledAction = (
 
 const WeixinRuntimeLastError = {
   Disabled: 'disabled',
-  NotConfigured: 'not configured',
-} as const;
-
-const IMSaveReminderTarget = {
-  Platform: 'platform',
 } as const;
 
 const IMRuntimeDisplayState = {
@@ -369,7 +375,15 @@ function translateIMError(error: string | null): string {
   return error;
 }
 
-const IMSettings: React.FC = () => {
+interface IMSettingsProps {
+  onRegisterDirtyGuard?: RegisterSettingsDirtyGuard;
+  requestNavigation?: (action: () => void) => void;
+}
+
+const IMSettings: React.FC<IMSettingsProps> = ({
+  onRegisterDirtyGuard,
+  requestNavigation,
+}) => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
   const agents = useSelector((state: RootState) => state.agent.agents);
@@ -398,7 +412,14 @@ const IMSettings: React.FC = () => {
   const [instanceMenuTarget, setInstanceMenuTarget] = useState<IMInstanceTarget | null>(null);
   const [renamingInstance, setRenamingInstance] = useState<IMInstanceRenameTarget | null>(null);
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<IMInstanceTarget | null>(null);
-  const [saveReminderTargets, setSaveReminderTargets] = useState<Record<string, boolean>>({});
+  const [instanceDraft, setInstanceDraft] = useState<{
+    platform: Platform;
+    instanceId: string | null;
+    data: Record<string, unknown>;
+  } | null>(null);
+  const [draftStatus, setDraftStatus] = useState<SettingsFormStatus>(SettingsFormStatus.Idle);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
+  const draftSavedTimerRef = useRef<number | null>(null);
   const [isDeletingInstance, setIsDeletingInstance] = useState(false);
   // WeCom quick setup state
   const [wecomQuickSetupStatus, setWecomQuickSetupStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
@@ -514,7 +535,8 @@ const IMSettings: React.FC = () => {
                 appId: pollResult.appId,
                 appSecret: pollResult.appSecret,
                 enabled: true,
-              }, IM_AUTH_RESTART_ON_SAVE_OPTIONS);
+              });
+              await imService.saveAndSyncConfig();
               setActiveFeishuInstanceId(inst.instanceId);
             }
             if (!isMountedRef.current) return;   // re-check after async updateConfig
@@ -631,12 +653,6 @@ const IMSettings: React.FC = () => {
     };
   }, [openclawSchema]);
 
-  // Handle DingTalk multi-instance config
-  const dingtalkMultiConfig = config.dingtalk;
-
-  // Handle Feishu multi-instance config
-  const feishuMultiConfig = config.feishu;
-
   // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
   // These are used by handleFeishuStartQr which creates instances via QR flow
   // @ts-ignore: will be used when QR flow is wired to FeishuInstanceSettings
@@ -665,19 +681,6 @@ const IMSettings: React.FC = () => {
       setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') } }));
     }
   };
-  // Telegram multi-instance config alias
-  const tgMultiConfig = config.telegram;
-
-  const qqMultiConfig = config.qq;
-
-  const discordMultiConfig = config.discord;
-
-
-  // Handle NetEase Bee config change
-  const handleNeteaseBeeChanChange = (field: 'clientId' | 'secret', value: string) => {
-    dispatch(setNeteaseBeeChanConfig({ [field]: value }));
-  };
-
   // Handle Weixin OpenClaw config
   const weixinOpenClawConfig = config.weixin;
   const weixinRuntimeAccountId = status.weixin?.accountId || '';
@@ -691,8 +694,8 @@ const IMSettings: React.FC = () => {
 
   const persistConnectedWeixinConfig = async (accountId: string) => {
     dispatch(setWeixinConfig({ enabled: true, accountId }));
-    setSaveReminderTarget('weixin', null, true);
     dispatch(clearError());
+    await imService.saveAndSyncConfig();
     await imService.loadConfig();
     await imService.loadStatus();
   };
@@ -763,62 +766,6 @@ const IMSettings: React.FC = () => {
   };
 
 
-  const handleSaveConfig = async () => {
-    if (!configLoaded) return;
-
-    // For Telegram, save telegram config directly
-    if (activePlatform === 'telegram') {
-      const success = await imService.persistConfig({ telegram: tgMultiConfig });
-      if (success) reportIMSettingsSaved('telegram', config);
-      return;
-    }
-
-    // For Discord, save discord config directly
-    if (activePlatform === 'discord') {
-      const success = await imService.persistConfig({ discord: discordMultiConfig });
-      if (success) reportIMSettingsSaved('discord', config);
-      return;
-    }
-
-    // For Feishu, save feishu config directly
-    if (activePlatform === 'feishu') {
-      const success = await imService.persistConfig({ feishu: feishuMultiConfig });
-      if (success) reportIMSettingsSaved('feishu', config);
-      return;
-    }
-
-    // For QQ, save qq config directly (OpenClaw mode)
-    if (activePlatform === 'qq') {
-      const success = await imService.persistConfig({ qq: qqMultiConfig });
-      if (success) reportIMSettingsSaved('qq', config);
-      return;
-    }
-
-    // For WeCom, save is handled per-instance in WecomInstanceSettings
-    if (activePlatform === 'wecom') {
-      const success = await imService.persistConfig({ wecom: config.wecom });
-      if (success) reportIMSettingsSaved('wecom', config);
-      return;
-    }
-
-    // For Weixin, save weixin config directly (OpenClaw mode)
-    if (activePlatform === 'weixin') {
-      const success = await imService.persistConfig({ weixin: weixinOpenClawConfig });
-      if (success) reportIMSettingsSaved('weixin', config);
-      return;
-    }
-
-    // For Email, save the full email multi-instance config
-    if (activePlatform === 'email') {
-      const success = await imService.persistConfig({ email: config.email ?? { instances: [] } });
-      if (success) reportIMSettingsSaved('email', config);
-      return;
-    }
-
-    const success = await imService.persistConfig({ [activePlatform]: config[activePlatform] });
-    if (success) reportIMSettingsSaved(activePlatform, config);
-  };
-
   // ==================== Email instance helpers ====================
 
   const handleEmailGetApiKey = async () => {
@@ -873,29 +820,304 @@ const IMSettings: React.FC = () => {
     return result;
   };
 
-  const getSaveReminderTargetKey = (platform: Platform, instanceId?: string | null): string => (
-    `${platform}:${instanceId ?? IMSaveReminderTarget.Platform}`
-  );
+  const clearDraftSavedTimer = useCallback(() => {
+    if (draftSavedTimerRef.current !== null) {
+      window.clearTimeout(draftSavedTimerRef.current);
+      draftSavedTimerRef.current = null;
+    }
+  }, []);
 
-  const setSaveReminderTarget = (platform: Platform, instanceId: string | null, enabled: boolean) => {
-    const key = getSaveReminderTargetKey(platform, instanceId);
-    setSaveReminderTargets((current) => {
-      const next = { ...current };
-      if (enabled) {
-        next[key] = true;
-      } else {
-        delete next[key];
-      }
-      return next;
-    });
+  useEffect(() => () => {
+    clearDraftSavedTimer();
+  }, [clearDraftSavedTimer]);
+
+  const getActiveInstanceIdForPlatform = useCallback((platform: Platform): string | null => {
+    if (platform === 'dingtalk') return activeDingTalkInstanceId;
+    if (platform === 'feishu') return activeFeishuInstanceId;
+    if (platform === 'qq') return activeQQInstanceId;
+    if (platform === 'email') return activeEmailInstanceId;
+    if (platform === 'nim') return activeNimInstanceId;
+    if (platform === 'wecom') return activeWecomInstanceId;
+    if (platform === 'telegram') return activeTelegramInstanceId;
+    if (platform === 'discord') return activeDiscordInstanceId;
+    if (platform === 'popo') return activePopoInstanceId;
+    return null;
+  }, [
+    activeDingTalkInstanceId,
+    activeDiscordInstanceId,
+    activeEmailInstanceId,
+    activeFeishuInstanceId,
+    activeNimInstanceId,
+    activePopoInstanceId,
+    activeQQInstanceId,
+    activeTelegramInstanceId,
+    activeWecomInstanceId,
+  ]);
+
+  const getSavedDetailRecord = useCallback((
+    platform: Platform,
+    instanceId: string | null,
+  ): Record<string, unknown> | null => {
+    if (platform === 'netease-bee') {
+      return config['netease-bee'] as unknown as Record<string, unknown>;
+    }
+    if (!instanceId) return null;
+    if (platform === 'dingtalk') return (config.dingtalk.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'feishu') return (config.feishu.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'qq') return (config.qq.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'nim') return (config.nim.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'wecom') return (config.wecom.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'telegram') return (config.telegram.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'discord') return (config.discord.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    if (platform === 'popo') return (config.popo.instances.find(i => i.instanceId === instanceId) ?? null) as unknown as Record<string, unknown> | null;
+    return null;
+  }, [config]);
+
+  const currentActiveInstanceId = getActiveInstanceIdForPlatform(activePlatform);
+  const currentSavedDetailRecord = getSavedDetailRecord(activePlatform, currentActiveInstanceId);
+  const activeDraftMatchesCurrent = Boolean(
+    instanceDraft
+    && instanceDraft.platform === activePlatform
+    && instanceDraft.instanceId === currentActiveInstanceId,
+  );
+  const isDetailDraftDirty = Boolean(
+    activeDraftMatchesCurrent
+    && instanceDraft
+    && currentSavedDetailRecord
+    && !areIMConfigsEqual(currentSavedDetailRecord, instanceDraft.data),
+  );
+  const missingFeishuCredentials = instanceDraft?.platform === RetainedImPlatform.Feishu
+    && !hasFeishuCredentials(instanceDraft.data.appId, instanceDraft.data.appSecret);
+  const canSaveDetailDraft = isDetailDraftDirty && !missingFeishuCredentials;
+
+  const getEffectiveDetailRecord = <T,>(
+    platform: Platform,
+    instanceId: string | null,
+    saved: T,
+  ): T => {
+    if (
+      instanceDraft
+      && instanceDraft.platform === platform
+      && instanceDraft.instanceId === instanceId
+    ) {
+      return instanceDraft.data as T;
+    }
+    return saved;
   };
 
-  const hasSaveReminderTarget = (platform: Platform, instanceId?: string | null): boolean => (
-    saveReminderTargets[getSaveReminderTargetKey(platform, instanceId)] === true
+  const updateDetailDraft = useCallback((
+    platform: Platform,
+    instanceId: string | null,
+    patch: Record<string, unknown>,
+  ) => {
+    const saved = getSavedDetailRecord(platform, instanceId);
+    if (!saved) return;
+    clearDraftSavedTimer();
+    setDraftSaveError(null);
+    setInstanceDraft((prev) => {
+      const base = prev && prev.platform === platform && prev.instanceId === instanceId
+        ? prev.data
+        : saved;
+      const nextData = { ...base, ...patch };
+      const dirty = !areIMConfigsEqual(saved, nextData);
+      setDraftStatus(dirty ? SettingsFormStatus.Dirty : SettingsFormStatus.Idle);
+      return dirty ? { platform, instanceId, data: nextData } : null;
+    });
+  }, [clearDraftSavedTimer, getSavedDetailRecord]);
+
+  const discardDetailDraft = useCallback(() => {
+    clearDraftSavedTimer();
+    setInstanceDraft(null);
+    setDraftSaveError(null);
+    setDraftStatus(SettingsFormStatus.Idle);
+  }, [clearDraftSavedTimer]);
+
+  const persistAndSyncDetailRecord = useCallback(async (
+    platform: Platform,
+    instanceId: string | null,
+    record: Record<string, unknown>,
+  ): Promise<boolean> => {
+    clearDraftSavedTimer();
+    setDraftStatus(SettingsFormStatus.Saving);
+    setDraftSaveError(null);
+
+    let persisted = false;
+    if (platform === 'netease-bee') {
+      persisted = await imService.persistConfig({ 'netease-bee': record as unknown as IMGatewayConfig['netease-bee'] });
+      if (persisted) {
+        dispatch(setNeteaseBeeChanConfig(record as unknown as Partial<IMGatewayConfig['netease-bee']>));
+      }
+    } else if (instanceId) {
+      if (platform === 'dingtalk') persisted = await imService.persistDingTalkInstanceConfig(instanceId, record);
+      else if (platform === 'feishu') persisted = await imService.persistFeishuInstanceConfig(instanceId, record);
+      else if (platform === 'qq') persisted = await imService.persistQQInstanceConfig(instanceId, record);
+      else if (platform === 'nim') persisted = await imService.persistNimInstanceConfig(instanceId, record);
+      else if (platform === 'wecom') persisted = await imService.persistWecomInstanceConfig(instanceId, record);
+      else if (platform === 'telegram') persisted = await imService.persistTelegramInstanceConfig(instanceId, record);
+      else if (platform === 'discord') persisted = await imService.persistDiscordInstanceConfig(instanceId, record);
+      else if (platform === 'popo') persisted = await imService.persistPopoInstanceConfig(instanceId, record);
+    }
+
+    if (!persisted) {
+      if (isMountedRef.current) {
+        setDraftStatus(SettingsFormStatus.Error);
+        setDraftSaveError(i18nService.t('failedToSaveSettings'));
+      }
+      return false;
+    }
+
+    const synced = await imService.saveAndSyncConfig();
+    if (!synced) {
+      if (isMountedRef.current) {
+        setDraftStatus(SettingsFormStatus.Error);
+        setDraftSaveError(i18nService.t('settingsSavedButOpenClawSyncFailed'));
+      }
+      return false;
+    }
+
+    await imService.loadConfig();
+    await imService.loadStatus();
+    if (!isMountedRef.current) return true;
+
+    reportIMSettingsSaved(platform, imService.getConfig());
+    setInstanceDraft(null);
+    setDraftSaveError(null);
+    setDraftStatus(SettingsFormStatus.Saved);
+    draftSavedTimerRef.current = window.setTimeout(() => {
+      if (isMountedRef.current) {
+        setDraftStatus(SettingsFormStatus.Idle);
+      }
+      draftSavedTimerRef.current = null;
+    }, SETTINGS_FORM_SAVED_RESET_MS);
+    return true;
+  }, [clearDraftSavedTimer, dispatch]);
+
+  const handleSaveCurrentDraft = useCallback(async (): Promise<boolean> => {
+    if (!activeDraftMatchesCurrent || !instanceDraft) {
+      return true;
+    }
+    if (!canSaveDetailDraft) return false;
+    return persistAndSyncDetailRecord(
+      instanceDraft.platform,
+      instanceDraft.instanceId,
+      instanceDraft.data,
+    );
+  }, [activeDraftMatchesCurrent, canSaveDetailDraft, instanceDraft, persistAndSyncDetailRecord]);
+
+  useEffect(() => {
+    if (!onRegisterDirtyGuard) return;
+    if (isDetailDraftDirty) {
+      onRegisterDirtyGuard({
+        isDirty: true,
+        canSave: canSaveDetailDraft,
+        save: handleSaveCurrentDraft,
+        discard: discardDetailDraft,
+      });
+    } else {
+      onRegisterDirtyGuard(null);
+    }
+    return () => {
+      onRegisterDirtyGuard(null);
+    };
+  }, [canSaveDetailDraft, discardDetailDraft, handleSaveCurrentDraft, isDetailDraftDirty, onRegisterDirtyGuard]);
+
+  const guardIMNavigation = useCallback((action: () => void) => {
+    if (!isDetailDraftDirty) {
+      discardDetailDraft();
+      action();
+      return;
+    }
+    if (requestNavigation) {
+      requestNavigation(action);
+      return;
+    }
+    discardDetailDraft();
+    action();
+  }, [discardDetailDraft, isDetailDraftDirty, requestNavigation]);
+
+  const handleInstanceOnSave = useCallback(async (
+    platform: Platform,
+    instanceId: string,
+    effectiveInstance: Record<string, unknown>,
+    override?: Record<string, unknown>,
+  ) => {
+    if (!configLoaded) return;
+    if (isIMAutoBindCredentialOverride(platform, override)) {
+      const nextRecord = { ...effectiveInstance, ...override };
+      dispatch(clearError());
+      await persistAndSyncDetailRecord(platform, instanceId, nextRecord);
+      return;
+    }
+    if (override) {
+      updateDetailDraft(platform, instanceId, override);
+    }
+  }, [configLoaded, dispatch, persistAndSyncDetailRecord, updateDetailDraft]);
+
+  const handleInstanceRename = useCallback(async (
+    platform: Platform,
+    instanceId: string,
+    newName: string,
+  ) => {
+    const update = { instanceName: newName } as any;
+    if (platform === 'dingtalk') {
+      dispatch(setDingTalkInstanceConfig({ instanceId, config: update }));
+      await imService.persistDingTalkInstanceConfig(instanceId, update);
+    } else if (platform === 'feishu') {
+      dispatch(setFeishuInstanceConfig({ instanceId, config: update }));
+      await imService.persistFeishuInstanceConfig(instanceId, update);
+    } else if (platform === 'qq') {
+      dispatch(setQQInstanceConfig({ instanceId, config: update }));
+      await imService.persistQQInstanceConfig(instanceId, update);
+    } else if (platform === 'wecom') {
+      dispatch(setWecomInstanceConfig({ instanceId, config: update }));
+      await imService.persistWecomInstanceConfig(instanceId, update);
+    } else if (platform === 'telegram') {
+      dispatch(setTelegramInstanceConfig({ instanceId, config: update }));
+      await imService.persistTelegramInstanceConfig(instanceId, update);
+    } else if (platform === 'discord') {
+      dispatch(setDiscordInstanceConfig({ instanceId, config: update }));
+      await imService.persistDiscordInstanceConfig(instanceId, update);
+    } else if (platform === 'nim') {
+      dispatch(setNimInstanceConfig({ instanceId, config: update }));
+      await imService.persistNimInstanceConfig(instanceId, update);
+    } else if (platform === 'popo') {
+      dispatch(setPopoInstanceConfig({ instanceId, config: update }));
+      await imService.persistPopoInstanceConfig(instanceId, update);
+    }
+    setInstanceDraft((prev) => (
+      prev && prev.platform === platform && prev.instanceId === instanceId
+        ? { ...prev, data: { ...prev.data, instanceName: newName } }
+        : prev
+    ));
+  }, [dispatch]);
+
+  const resolvedDraftStatus: SettingsFormStatus = draftStatus === SettingsFormStatus.Saving
+    ? SettingsFormStatus.Saving
+    : draftStatus === SettingsFormStatus.Error
+      ? SettingsFormStatus.Error
+      : isDetailDraftDirty
+        ? SettingsFormStatus.Dirty
+        : draftStatus === SettingsFormStatus.Saved
+          ? SettingsFormStatus.Saved
+          : SettingsFormStatus.Idle;
+
+  const renderDetailSaveFooter = (
+    mode: SettingsFormFooterMode = SettingsFormFooterMode.Always,
+  ) => (
+    <SettingsFormFooter
+      status={resolvedDraftStatus}
+      mode={mode}
+      canSave={canSaveDetailDraft}
+      errorMessage={isDetailDraftDirty && missingFeishuCredentials ? i18nService.t('imFeishuCredentialsRequired') : draftSaveError}
+      saveLabel={i18nService.t('settingsSaveAndApply')}
+      onSave={handleSaveCurrentDraft}
+      onDiscard={discardDetailDraft}
+      leading={<SettingsFormStatusBadge status={resolvedDraftStatus} />}
+      className="border-t border-border pt-3"
+    />
   );
 
-  // Toggle IM enabled state as pending settings config. Gateway runtime is
-  // applied by the global Save action.
+  // Immediately persist and hot-sync single-instance IM toggles to DSH.
   const toggleGateway = async (platform: Platform) => {
     // Re-entrancy guard: if a toggle is already in progress for this platform, bail out.
     // This prevents rapid ON→OFF→ON clicks from racing local config writes.
@@ -903,9 +1125,6 @@ const IMSettings: React.FC = () => {
     setTogglingPlatform(platform);
 
     try {
-      // Settings toggles are saved as pending config changes. The global Save
-      // button later asks main to diff IM config and restart the gateway once
-      // when the change affects channel runtime.
       // Pessimistic UI update: wait for IPC to complete before updating Redux state.
       // This prevents UI/backend state divergence when rapidly toggling.
       if (platform === 'telegram') {
@@ -936,10 +1155,12 @@ const IMSettings: React.FC = () => {
       if (platform === 'weixin') {
         const newEnabled = !weixinOpenClawConfig.enabled;
         const operation: IMAnalyticsGatewayOperation = newEnabled ? 'start' : 'stop';
-        const success = await imService.updateConfig({ weixin: { ...weixinOpenClawConfig, enabled: newEnabled } });
+        const success = await imService.updateConfig(
+          { weixin: { ...weixinOpenClawConfig, enabled: newEnabled } },
+          { syncGateway: true, reloadStatus: true },
+        );
         if (success) {
           dispatch(setWeixinConfig({ enabled: newEnabled }));
-          setSaveReminderTarget(platform, null, newEnabled);
           if (newEnabled) dispatch(clearError());
           await imService.loadStatus();
           reportIMGatewayToggledAction(platform, operation, 'success');
@@ -961,11 +1182,13 @@ const IMSettings: React.FC = () => {
       // Map platform to its Redux action
       const setConfigAction = getSetConfigAction(platform);
 
-      // Persist the updated config (construct manually since Redux state hasn't re-rendered yet)
-      const success = await imService.updateConfig({ [platform]: { ...config[platform], enabled: newEnabled } });
+      // Persist the updated config and hot-sync to DSH immediately.
+      const success = await imService.updateConfig(
+        { [platform]: { ...config[platform], enabled: newEnabled } },
+        { syncGateway: true, reloadStatus: true },
+      );
       if (success) {
         dispatch(setConfigAction({ enabled: newEnabled }));
-        setSaveReminderTarget(platform, null, newEnabled);
         if (newEnabled) dispatch(clearError());
         await imService.loadStatus();
         reportIMGatewayToggledAction(platform, operation, 'success');
@@ -987,11 +1210,7 @@ const IMSettings: React.FC = () => {
   const wecomConnected = status.wecom?.instances?.some(i => i.connected) ?? false;
   const weixinConnected = Boolean(weixinOpenClawConfig.enabled && status.weixin?.connected);
   const weixinLastError = status.weixin?.lastError ?? null;
-  const isWeixinCredentialMissingError = Boolean(
-    weixinOpenClawConfig.enabled
-    && weixinAccountId
-    && weixinLastError?.trim().toLowerCase().includes(WeixinRuntimeLastError.NotConfigured)
-  );
+  const weixinCredentialError = weixinCredentialErrorKey(weixinLastError);
   const shouldShowWeixinError = Boolean(
     weixinLastError && weixinLastError.trim().toLowerCase() !== WeixinRuntimeLastError.Disabled
   );
@@ -1040,7 +1259,7 @@ const IMSettings: React.FC = () => {
     if (platform === 'popo') {
       return true; // Credentials provisioned via QR scan or manual input in openclaw.json
     }
-    return config.feishu.instances?.some(i => !!(i.appId && i.appSecret));
+    return config.feishu.instances?.some(i => hasFeishuCredentials(i.appId, i.appSecret));
   };
 
   // Get platform enabled state (persisted toggle state)
@@ -1097,7 +1316,6 @@ const IMSettings: React.FC = () => {
   };
 
   const getPlatformDisplayState = (platform: Platform): IMRuntimeDisplayState => {
-    if (hasSaveReminderTarget(platform)) return IMRuntimeDisplayState.PendingSave;
     if (!isPlatformEnabled(platform)) return IMRuntimeDisplayState.Disabled;
     if (getPlatformConnected(platform)) return IMRuntimeDisplayState.Connected;
     if (getPlatformStarting(platform)) return IMRuntimeDisplayState.Starting;
@@ -1156,31 +1374,8 @@ const IMSettings: React.FC = () => {
     );
   };
 
-  const renderSaveReminder = (platform: Platform) => (
-    <div className="rounded-lg bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300">
-      {i18nService.t('imChannelEnabledPendingSave').replace('{platform}', i18nService.t(platform))}
-    </div>
-  );
-
-  const shouldShowInstanceSaveReminder = (
-    platform: Platform,
-    instance: IMInstanceConfigCard,
-    _instanceStatus?: IMInstanceStatusCard,
-  ): boolean => (
-    hasSaveReminderTarget(platform, instance.instanceId)
-  );
-
-  const renderInstanceSaveReminder = (
-    platform: Platform,
-    instance: IMInstanceConfigCard,
-    _instanceStatus?: IMInstanceStatusCard,
-  ) => (
-    shouldShowInstanceSaveReminder(platform, instance, _instanceStatus) ? renderSaveReminder(platform) : null
-  );
-
   const renderPlatformRuntimeNotice = (platform: Platform) => {
     const displayState = getPlatformDisplayState(platform);
-    if (displayState === IMRuntimeDisplayState.PendingSave) return renderSaveReminder(platform);
 
     if (displayState === IMRuntimeDisplayState.Connecting || displayState === IMRuntimeDisplayState.Starting) {
       return (
@@ -1193,8 +1388,8 @@ const IMSettings: React.FC = () => {
 
     if (displayState === IMRuntimeDisplayState.Failed) {
       return (
-        <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-          {i18nService.t('imChannelConnectionFailed').replace('{platform}', i18nService.t(platform))}
+        <div role="alert" className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+          {weixinCredentialError ? i18nService.t(weixinCredentialError) : translateIMError(weixinLastError)}
         </div>
       );
     }
@@ -1206,7 +1401,6 @@ const IMSettings: React.FC = () => {
     configLoaded
     && weixinOpenClawConfig.enabled
     && !weixinConnected
-    && !hasSaveReminderTarget('weixin')
   );
 
   useEffect(() => {
@@ -1244,204 +1438,21 @@ const IMSettings: React.FC = () => {
     setConnectivityModalPlatform(platform);
     setTestingPlatform(platform);
 
-    // For Telegram, persist telegram config and test (multi-instance)
-    if (platform === 'telegram') {
-      await imService.persistConfig({ telegram: tgMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        telegram: tgMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
-      if (activeTelegramInstanceId && result) {
-        const inst = tgMultiConfig.instances.find(i => i.instanceId === activeTelegramInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setTelegramInstanceConfig({ instanceId: activeTelegramInstanceId, config: { enabled: true } }));
-            await imService.updateTelegramInstanceConfig(activeTelegramInstanceId, { enabled: true });
-            setSaveReminderTarget('telegram', activeTelegramInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
+    const activeId = getActiveInstanceIdForPlatform(platform);
+    const activeDraft = instanceDraft
+      && instanceDraft.platform === platform
+      && instanceDraft.instanceId === activeId
+      ? instanceDraft.data
+      : null;
 
-    // For DingTalk, persist dingtalk config and test (OpenClaw mode)
-    if (platform === 'dingtalk') {
-      await imService.persistConfig({ dingtalk: dingtalkMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        dingtalk: dingtalkMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
-      if (activeDingTalkInstanceId && result) {
-        const inst = dingtalkMultiConfig.instances.find(i => i.instanceId === activeDingTalkInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { enabled: true } }));
-            await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, { enabled: true });
-            setSaveReminderTarget('dingtalk', activeDingTalkInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
+    // Probe using the current unsaved draft directly via configOverride without
+    // writing half-finished edits to SQLite first.
+    const configOverride = resolveIMConnectivityOverride(platform, config, activeId, activeDraft);
+    const result = await runConnectivityTest(platform, configOverride);
 
-    // For QQ, persist qq config and test (OpenClaw mode)
-    if (platform === 'qq') {
-      await imService.persistConfig({ qq: qqMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        qq: qqMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
-      if (activeQQInstanceId && result) {
-        const inst = qqMultiConfig.instances.find(i => i.instanceId === activeQQInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { enabled: true } }));
-            await imService.updateQQInstanceConfig(activeQQInstanceId, { enabled: true });
-            setSaveReminderTarget('qq', activeQQInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
-
-    // For Email, persist email config and test (OpenClaw mode)
-    if (platform === 'email') {
-      await imService.persistConfig({ email: config.email });
-      // Pass only the active instance to avoid testing wrong instance
-      const activeInstance = activeEmailInstanceId
-        ? config.email.instances.find(i => i.instanceId === activeEmailInstanceId)
-        : config.email.instances.find(i => i.enabled) || config.email.instances[0];
-      await runConnectivityTest(platform, {
-        email: { instances: activeInstance ? [activeInstance] : [] },
-      } as Partial<IMGatewayConfig>);
-      return;
-    }
-
-    // For WeCom, persist wecom config and test (OpenClaw mode)
-    if (platform === 'wecom') {
-      const wecomMultiConfig = config.wecom;
-      await imService.persistConfig({ wecom: wecomMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        wecom: wecomMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
-      if (activeWecomInstanceId && result) {
-        const inst = wecomMultiConfig.instances.find(i => i.instanceId === activeWecomInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId, config: { enabled: true } }));
-            await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true });
-            setSaveReminderTarget('wecom', activeWecomInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
-
-    // For Weixin, persist weixin config and test (OpenClaw mode)
-    if (platform === 'weixin') {
-      await imService.persistConfig({ weixin: weixinOpenClawConfig });
-      const result = await runConnectivityTest(platform, {
-        weixin: weixinOpenClawConfig,
-      } as Partial<IMGatewayConfig>);
-      if (!weixinOpenClawConfig.enabled && result) {
-        const authCheck = result.checks.find((c) => c.code === 'auth_check');
-        if (authCheck && authCheck.level === 'pass') {
-          toggleGateway(platform);
-        }
-      }
-      return;
-    }
-
-    // For Feishu, persist feishu config and test (OpenClaw mode)
-    if (platform === 'feishu') {
-      await imService.persistConfig({ feishu: feishuMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        feishu: feishuMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
-      if (activeFeishuInstanceId && result) {
-        const inst = feishuMultiConfig.instances.find(i => i.instanceId === activeFeishuInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: true } }));
-            await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: true });
-            setSaveReminderTarget('feishu', activeFeishuInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
-
-    // For NIM, persist nim config and test (OpenClaw mode)
-    if (platform === 'nim') {
-      const nimMultiConfig = config.nim;
-      await imService.persistConfig({ nim: nimMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        nim: nimMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      if (activeNimInstanceId && result) {
-        const inst = nimMultiConfig.instances.find(i => i.instanceId === activeNimInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setNimInstanceConfig({ instanceId: activeNimInstanceId, config: { enabled: true } }));
-            await imService.updateNimInstanceConfig(activeNimInstanceId, { enabled: true });
-            setSaveReminderTarget('nim', activeNimInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
-
-    // For Discord, persist discord config and test (OpenClaw mode)
-    if (platform === 'discord') {
-      await imService.persistConfig({ discord: discordMultiConfig });
-      const result = await runConnectivityTest(platform, {
-        discord: discordMultiConfig,
-      } as Partial<IMGatewayConfig>);
-      if (activeDiscordInstanceId && result) {
-        const inst = discordMultiConfig.instances.find(i => i.instanceId === activeDiscordInstanceId);
-        if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
-          if (authCheck && authCheck.level === 'pass') {
-            dispatch(setDiscordInstanceConfig({ instanceId: activeDiscordInstanceId, config: { enabled: true } }));
-            await imService.updateDiscordInstanceConfig(activeDiscordInstanceId, { enabled: true });
-            setSaveReminderTarget('discord', activeDiscordInstanceId, true);
-          }
-        }
-      }
-      return;
-    }
-
-    // 1. Persist latest config to backend (without changing enabled state)
-    await imService.persistConfig({
-      [platform]: config[platform],
-    } as Partial<IMGatewayConfig>);
-
-    const isEnabled = isPlatformEnabled(platform);
-
-    // Skip the frontend stop/start cycle: the main process testGateway only
-    // validates config or makes stateless auth probes, so no historical
-    // messages are ingested and the running OpenClaw channel is never touched.
-
-    // Run connectivity test (always passes configOverride so the backend uses
-    // the latest unsaved credential values from the form).
-    const result = await runConnectivityTest(platform, {
-      [platform]: config[platform],
-    } as Partial<IMGatewayConfig>);
-
-    // Auto-enable: if the platform was OFF but auth_check passed, start it automatically.
-    if (!isEnabled && result) {
-      const authCheck = result.checks.find((c) => c.code === 'auth_check');
-      if (authCheck && authCheck.level === 'pass') {
-        toggleGateway(platform);
-      }
+    if (platform === RetainedImPlatform.Weixin && !weixinOpenClawConfig.enabled
+      && result?.checks.some(check => check.code === 'auth_check' && check.level === 'pass')) {
+      await toggleGateway(RetainedImPlatform.Weixin);
     }
   };
 
@@ -1616,7 +1627,7 @@ const IMSettings: React.FC = () => {
 
   const hasInstanceCredentials = (platform: Platform, instance: IMInstanceConfigCard): boolean => {
     if (platform === 'dingtalk') return !!(getStringField(instance, 'clientId') && getStringField(instance, 'clientSecret'));
-    if (platform === 'feishu') return !!(getStringField(instance, 'appId') && getStringField(instance, 'appSecret'));
+    if (platform === RetainedImPlatform.Feishu) return hasFeishuCredentials(instance.appId, instance.appSecret);
     if (platform === 'qq') return !!(getStringField(instance, 'appId') && getStringField(instance, 'appSecret'));
     if (platform === 'email') return !!(getStringField(instance, 'email') && getStringField(instance, 'apiKey'));
     if (platform === 'nim') {
@@ -1700,6 +1711,7 @@ const IMSettings: React.FC = () => {
     if (platform === 'popo') success = await imService.deletePopoInstance(instanceId);
 
     if (success) {
+      await imService.saveAndSyncConfig();
       await imService.loadStatus();
       reportIMInstanceChanged(
         platform,
@@ -1742,16 +1754,16 @@ const IMSettings: React.FC = () => {
     if (enabled && !hasInstanceCredentials(platform, instance)) return;
 
     let success = false;
-    const reloadStatusOptions = { reloadStatus: true };
-    if (platform === 'dingtalk') success = await imService.updateDingTalkInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'feishu') success = await imService.updateFeishuInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'qq') success = await imService.updateQQInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'email') success = await imService.updateEmailInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'nim') success = await imService.updateNimInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'wecom') success = await imService.updateWecomInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'telegram') success = await imService.updateTelegramInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'discord') success = await imService.updateDiscordInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
-    if (platform === 'popo') success = await imService.updatePopoInstanceConfig(instance.instanceId, { enabled }, reloadStatusOptions);
+    const syncOptions = { syncGateway: true, reloadStatus: true };
+    if (platform === 'dingtalk') success = await imService.updateDingTalkInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'feishu') success = await imService.updateFeishuInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'qq') success = await imService.updateQQInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'email') success = await imService.updateEmailInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'nim') success = await imService.updateNimInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'wecom') success = await imService.updateWecomInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'telegram') success = await imService.updateTelegramInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'discord') success = await imService.updateDiscordInstanceConfig(instance.instanceId, { enabled }, syncOptions);
+    if (platform === 'popo') success = await imService.updatePopoInstanceConfig(instance.instanceId, { enabled }, syncOptions);
 
     if (!success) return;
     if (platform === 'dingtalk') dispatch(setDingTalkInstanceConfig({ instanceId: instance.instanceId, config: { enabled } }));
@@ -1763,7 +1775,6 @@ const IMSettings: React.FC = () => {
     if (platform === 'telegram') dispatch(setTelegramInstanceConfig({ instanceId: instance.instanceId, config: { enabled } }));
     if (platform === 'discord') dispatch(setDiscordInstanceConfig({ instanceId: instance.instanceId, config: { enabled } }));
     if (platform === 'popo') dispatch(setPopoInstanceConfig({ instanceId: instance.instanceId, config: { enabled } }));
-    setSaveReminderTarget(platform, instance.instanceId, enabled);
     if (enabled) dispatch(clearError());
     const instancesBefore = getInstancesForPlatform(platform);
     reportIMInstanceChanged(
@@ -1804,10 +1815,6 @@ const IMSettings: React.FC = () => {
     const connectedCount = instanceStatuses.filter((item) => item.connected).length;
     const maxInstances = getMaxInstancesForPlatform(platform);
     const canAdd = instances.length < maxInstances;
-    const hasInstancesNeedingSave = instances.some((instance) => {
-      const instanceStatus = instanceStatuses.find((item) => item.instanceId === instance.instanceId);
-      return shouldShowInstanceSaveReminder(platform, instance, instanceStatus);
-    });
 
     return (
       <div className="space-y-5">
@@ -1845,7 +1852,7 @@ const IMSettings: React.FC = () => {
                     setActiveInstanceForPlatform(platform, instance.instanceId);
                   }
                 }}
-                className="group relative flex min-h-[82px] flex-col justify-center rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
+                className="group relative flex min-h-[82px] flex-col justify-center rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-foreground/20 hover:bg-surface-raised"
               >
                 {isMenuOpen && (
                   <div
@@ -1889,7 +1896,7 @@ const IMSettings: React.FC = () => {
                   </div>
                 )}
                 <div className="flex items-start gap-2.5">
-                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10 p-1">
+                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-raised p-1">
                     <img
                       src={PlatformRegistry.logo(platform)}
                       alt={i18nService.t(platform)}
@@ -1922,7 +1929,7 @@ const IMSettings: React.FC = () => {
                           }
                         }}
                         onBlur={() => void finishRenamingInstanceFromCard(platform, instance)}
-                        className={`block w-full rounded-md border border-primary/50 bg-surface px-1.5 py-0.5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground outline-none`}
+                        className={`block w-full rounded-md border border-foreground/40 bg-surface px-1.5 py-0.5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground outline-none`}
                         autoFocus
                       />
                     ) : (
@@ -1941,7 +1948,7 @@ const IMSettings: React.FC = () => {
                       </span>
                     </div>
                     {lastError && (
-                      <p className="mt-1 line-clamp-1 text-xs text-red-500">
+                      <p className={`mt-1 text-xs text-red-500 ${platform === 'wecom' ? '' : 'line-clamp-1'}`}>
                         {translateIMError(lastError)}
                       </p>
                     )}
@@ -1971,7 +1978,7 @@ const IMSettings: React.FC = () => {
             <button
               type="button"
               onClick={() => void addInstanceForPlatform(platform)}
-              className="flex min-h-[82px] flex-col items-center justify-center rounded-lg border border-dashed border-border-subtle bg-surface text-secondary transition-colors hover:border-primary/50 hover:bg-surface-raised hover:text-primary"
+              className="flex min-h-[82px] flex-col items-center justify-center rounded-lg border border-dashed border-border-subtle bg-surface text-secondary transition-colors hover:border-foreground/30 hover:bg-surface-raised hover:text-foreground"
             >
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-raised">
                 <PlusIcon className="h-4 w-4" />
@@ -1982,8 +1989,6 @@ const IMSettings: React.FC = () => {
             </button>
           )}
         </div>
-
-        {hasInstancesNeedingSave && renderSaveReminder(platform)}
       </div>
     );
   };
@@ -1991,7 +1996,11 @@ const IMSettings: React.FC = () => {
   const renderBackToInstanceList = (platform: Platform) => (
     <button
       type="button"
-      onClick={() => setActiveInstanceForPlatform(platform, null)}
+      onClick={() => {
+        guardIMNavigation(() => {
+          setActiveInstanceForPlatform(platform, null);
+        });
+      }}
       className="-ml-1 inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/25"
       aria-label={i18nService.t('imBackToBotList').replace('{platform}', i18nService.t(platform))}
       title={i18nService.t('imBackToBotList').replace('{platform}', i18nService.t(platform))}
@@ -2019,15 +2028,17 @@ const IMSettings: React.FC = () => {
               type="button"
               key={platform}
               onClick={() => {
-                setActivePlatform(platform);
-                if (isMultiInstancePlatform(platform)) {
-                  setActiveInstanceForPlatform(platform, null);
-                }
+                guardIMNavigation(() => {
+                  setActivePlatform(platform);
+                  if (isMultiInstancePlatform(platform)) {
+                    setActiveInstanceForPlatform(platform, null);
+                  }
+                });
               }}
               aria-current={isActive ? 'page' : undefined}
               title={statusDotClass ? `${i18nService.t(platform)} · ${getPlatformStatusLabel(platform)}` : undefined}
               className={`group flex h-10 w-full flex-shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors ${
-                isActive ? 'bg-primary-muted' : 'hover:bg-surface-raised'
+                isActive ? 'bg-surface-raised' : 'hover:bg-surface-raised/60'
               }`}
             >
               <img
@@ -2083,35 +2094,27 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'dingtalk' && activeDingTalkInstanceId && (() => {
           const selectedInstance = config.dingtalk.instances.find(i => i.instanceId === activeDingTalkInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('dingtalk', activeDingTalkInstanceId, selectedInstance);
           const selectedStatus = status.dingtalk?.instances?.find(s => s.instanceId === activeDingTalkInstanceId);
           return (
             <div className="space-y-4">
               <DingTalkInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 headerLeading={renderBackToInstanceList('dingtalk')}
                 onConfigChange={(update) => {
-                  dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: update }));
+                  updateDetailDraft('dingtalk', activeDingTalkInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  const restartOnSaveOptions = override?.enabled === true && !!override.clientId && !!override.clientSecret
-                    ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
-                    : undefined;
-                  let success = false;
-                  if (selectedInstance.enabled || restartOnSaveOptions) {
-                    success = await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave, restartOnSaveOptions);
-                  } else {
-                    success = await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('dingtalk', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('dingtalk', activeDingTalkInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'dingtalk',
+                    activeDingTalkInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('dingtalk', activeDingTalkInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('dingtalk');
@@ -2120,7 +2123,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
-              {renderInstanceSaveReminder('dingtalk', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}
@@ -2130,35 +2133,27 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'feishu' && activeFeishuInstanceId && (() => {
           const selectedInstance = config.feishu.instances.find(i => i.instanceId === activeFeishuInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('feishu', activeFeishuInstanceId, selectedInstance);
           const selectedStatus = status.feishu?.instances?.find(s => s.instanceId === activeFeishuInstanceId);
           return (
             <div className="space-y-4">
               <FeishuInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 headerLeading={renderBackToInstanceList('feishu')}
                 onConfigChange={(update) => {
-                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update }));
+                  updateDetailDraft('feishu', activeFeishuInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  const restartOnSaveOptions = override?.enabled === true && !!override.appId && !!override.appSecret
-                    ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
-                    : undefined;
-                  let success = false;
-                  if (selectedInstance.enabled || restartOnSaveOptions) {
-                    success = await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave, restartOnSaveOptions);
-                  } else {
-                    success = await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('feishu', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('feishu', activeFeishuInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'feishu',
+                    activeFeishuInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('feishu', activeFeishuInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('feishu');
@@ -2167,7 +2162,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
-              {renderInstanceSaveReminder('feishu', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}
@@ -2177,32 +2172,27 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'qq' && activeQQInstanceId && (() => {
           const selectedInstance = config.qq.instances.find(i => i.instanceId === activeQQInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('qq', activeQQInstanceId, selectedInstance);
           const selectedStatus = status.qq?.instances?.find(s => s.instanceId === activeQQInstanceId);
           return (
             <div className="space-y-4">
               <QQInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 headerLeading={renderBackToInstanceList('qq')}
                 onConfigChange={(update) => {
-                  dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: update }));
+                  updateDetailDraft('qq', activeQQInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  let success = false;
-                  if (selectedInstance.enabled) {
-                    success = await imService.updateQQInstanceConfig(activeQQInstanceId, configToSave);
-                  } else {
-                    success = await imService.persistQQInstanceConfig(activeQQInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('qq', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('qq', activeQQInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'qq',
+                    activeQQInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistQQInstanceConfig(activeQQInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('qq', activeQQInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('qq');
@@ -2210,7 +2200,7 @@ const IMSettings: React.FC = () => {
                 testingPlatform={testingPlatform}
                 connectivityResults={connectivityResults}
               />
-              {renderInstanceSaveReminder('qq', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}
@@ -2253,7 +2243,6 @@ const IMSettings: React.FC = () => {
                       const success = await imService.updateEmailInstanceConfig(inst.instanceId, { enabled: false });
                       if (success) {
                         dispatch(setEmailInstanceConfig({ instanceId: inst.instanceId, config: { enabled: false } }));
-                        setSaveReminderTarget('email', inst.instanceId, false);
                         reportIMInstanceChanged(
                           'email',
                           'disabled',
@@ -2276,7 +2265,6 @@ const IMSettings: React.FC = () => {
                         const success = await imService.updateEmailInstanceConfig(inst.instanceId, { enabled: true });
                         if (success) {
                           dispatch(setEmailInstanceConfig({ instanceId: inst.instanceId, config: { enabled: true } }));
-                          setSaveReminderTarget('email', inst.instanceId, true);
                           dispatch(clearError());
                           reportIMInstanceChanged(
                             'email',
@@ -2337,8 +2325,6 @@ const IMSettings: React.FC = () => {
                 </button>
               </div>
 
-              {renderInstanceSaveReminder('email', inst as unknown as IMInstanceConfigCard, instStatus)}
-
               {/* Email Address */}
               <div>
                 <label className={labelClass}>{i18nService.t('emailAddress')} <span className="text-red-500">*</span></label>
@@ -2376,7 +2362,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowSecrets(prev => ({ ...prev, [`email.${inst.instanceId}.apiKey`]: !prev[`email.${inst.instanceId}.apiKey`] }))}
-                      className="absolute right-2 inset-y-0 flex items-center p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      className="absolute right-2 inset-y-0 flex items-center p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={showSecrets[`email.${inst.instanceId}.apiKey`] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                     >
                       {showSecrets[`email.${inst.instanceId}.apiKey`]
@@ -2387,7 +2373,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void handleEmailGetApiKey()}
-                    className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors whitespace-nowrap"
+                    className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors whitespace-nowrap"
                   >
                     {i18nService.t('getApiKey')}
                   </button>
@@ -2397,7 +2383,7 @@ const IMSettings: React.FC = () => {
 
               {/* Advanced Options */}
               <details className="group">
-                <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+                <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
                   {i18nService.t('imAdvancedSettings')}
                 </summary>
                 <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -2562,32 +2548,27 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'telegram' && activeTelegramInstanceId && (() => {
           const selectedInstance = config.telegram.instances.find(i => i.instanceId === activeTelegramInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('telegram', activeTelegramInstanceId, selectedInstance);
           const selectedStatus = status.telegram?.instances?.find(s => s.instanceId === activeTelegramInstanceId);
           return (
             <div className="space-y-4">
               <TelegramInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 headerLeading={renderBackToInstanceList('telegram')}
                 onConfigChange={(update) => {
-                  dispatch(setTelegramInstanceConfig({ instanceId: activeTelegramInstanceId, config: update }));
+                  updateDetailDraft('telegram', activeTelegramInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  let success = false;
-                  if (selectedInstance.enabled) {
-                    success = await imService.updateTelegramInstanceConfig(activeTelegramInstanceId, configToSave);
-                  } else {
-                    success = await imService.persistTelegramInstanceConfig(activeTelegramInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('telegram', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('telegram', activeTelegramInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'telegram',
+                    activeTelegramInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setTelegramInstanceConfig({ instanceId: activeTelegramInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistTelegramInstanceConfig(activeTelegramInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('telegram', activeTelegramInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('telegram');
@@ -2596,7 +2577,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
-              {renderInstanceSaveReminder('telegram', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}
@@ -2606,32 +2587,27 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'discord' && activeDiscordInstanceId && (() => {
           const selectedInstance = config.discord.instances.find(i => i.instanceId === activeDiscordInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('discord', activeDiscordInstanceId, selectedInstance);
           const selectedStatus = status.discord?.instances?.find(s => s.instanceId === activeDiscordInstanceId);
           return (
             <div className="space-y-4">
               <DiscordInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 headerLeading={renderBackToInstanceList('discord')}
                 onConfigChange={(update) => {
-                  dispatch(setDiscordInstanceConfig({ instanceId: activeDiscordInstanceId, config: update }));
+                  updateDetailDraft('discord', activeDiscordInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  let success = false;
-                  if (selectedInstance.enabled) {
-                    success = await imService.updateDiscordInstanceConfig(activeDiscordInstanceId, configToSave);
-                  } else {
-                    success = await imService.persistDiscordInstanceConfig(activeDiscordInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('discord', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('discord', activeDiscordInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'discord',
+                    activeDiscordInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setDiscordInstanceConfig({ instanceId: activeDiscordInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistDiscordInstanceConfig(activeDiscordInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('discord', activeDiscordInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('discord');
@@ -2640,7 +2616,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
-              {renderInstanceSaveReminder('discord', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}
@@ -2650,37 +2626,28 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'nim' && activeNimInstanceId && (() => {
           const selectedInstance = config.nim.instances.find(i => i.instanceId === activeNimInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('nim', activeNimInstanceId, selectedInstance);
           const selectedStatus = status.nim?.instances?.find(s => s.instanceId === activeNimInstanceId);
           return (
             <div className="space-y-4">
               <NimInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 schemaData={nimSchemaData}
                 headerLeading={renderBackToInstanceList('nim')}
                 onConfigChange={(update) => {
-                  dispatch(setNimInstanceConfig({ instanceId: activeNimInstanceId, config: update }));
+                  updateDetailDraft('nim', activeNimInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  const restartOnSaveOptions = override?.enabled === true
-                    && (!!override.nimToken || !!(override.appKey && override.account && override.token))
-                    ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
-                    : undefined;
-                  let success = false;
-                  if (selectedInstance.enabled || restartOnSaveOptions) {
-                    success = await imService.updateNimInstanceConfig(activeNimInstanceId, configToSave, restartOnSaveOptions);
-                  } else {
-                    success = await imService.persistNimInstanceConfig(activeNimInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('nim', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('nim', activeNimInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'nim',
+                    activeNimInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setNimInstanceConfig({ instanceId: activeNimInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistNimInstanceConfig(activeNimInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('nim', activeNimInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('nim');
@@ -2688,13 +2655,15 @@ const IMSettings: React.FC = () => {
                 testingPlatform={testingPlatform}
                 connectivityResults={connectivityResults}
               />
-              {renderInstanceSaveReminder('nim', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}
 
         {/* 小蜜蜂设置*/}
-        {activePlatform === 'netease-bee' && (
+        {activePlatform === 'netease-bee' && (() => {
+          const effectiveBee = getEffectiveDetailRecord('netease-bee', null, config['netease-bee']);
+          return (
           <div className="space-y-3">
             {/* Client ID */}
             <div className="space-y-1.5">
@@ -2704,18 +2673,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config['netease-bee'].clientId}
-                  onChange={(e) => handleNeteaseBeeChanChange('clientId', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={effectiveBee.clientId}
+                  onChange={(e) => updateDetailDraft('netease-bee', null, { clientId: e.target.value })}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder={i18nService.t('neteaseBeeChanClientIdPlaceholder') || '您的Client ID'}
                 />
-                {config['netease-bee'].clientId && (
+                {effectiveBee.clientId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleNeteaseBeeChanChange('clientId', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], clientId: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      onClick={() => updateDetailDraft('netease-bee', null, { clientId: '' })}
+                      className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -2733,18 +2701,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['netease-bee.secret'] ? 'text' : 'password'}
-                  value={config['netease-bee'].secret}
-                  onChange={(e) => handleNeteaseBeeChanChange('secret', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={effectiveBee.secret}
+                  onChange={(e) => updateDetailDraft('netease-bee', null, { secret: e.target.value })}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config['netease-bee'].secret && (
+                  {effectiveBee.secret && (
                     <button
                       type="button"
-                      onClick={() => { handleNeteaseBeeChanChange('secret', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], secret: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      onClick={() => updateDetailDraft('netease-bee', null, { secret: '' })}
+                      className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -2753,7 +2720,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'netease-bee.secret': !prev['netease-bee.secret'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                    className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                     title={showSecrets['netease-bee.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['netease-bee.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -2765,6 +2732,8 @@ const IMSettings: React.FC = () => {
             <div className="pt-1">
               {renderConnectivityTestButton('netease-bee')}
             </div>
+
+            {renderDetailSaveFooter(SettingsFormFooterMode.DirtyBar)}
 
             {renderPlatformRuntimeNotice('netease-bee')}
 
@@ -2782,7 +2751,8 @@ const IMSettings: React.FC = () => {
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Weixin (微信) Settings */}
         {activePlatform === 'weixin' && (() => {
@@ -2800,15 +2770,6 @@ const IMSettings: React.FC = () => {
             <div className="space-y-5 pt-2">
               {renderPlatformRuntimeNotice('weixin')}
 
-              {/* Error display */}
-              {shouldShowWeixinError && weixinLastError && (
-                <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">
-                  {isWeixinCredentialMissingError
-                    ? i18nService.t('imWeixinCredentialsMissing')
-                    : translateIMError(weixinLastError)}
-                </div>
-              )}
-
               {/* QR login: first-time setup, or a rescan in progress */}
               {(!weixinAccountId || (weixinQrStatus !== 'idle' && weixinQrStatus !== 'success')) && (
                 <div className="flex gap-5 rounded-xl border border-border bg-surface p-5">
@@ -2818,7 +2779,7 @@ const IMSettings: React.FC = () => {
                         <QRCodeSVG value={weixinQrUrl} size={148} />
                       </div>
                     ) : weixinQrStatus === 'loading' ? (
-                      <ArrowPathIcon className="h-6 w-6 animate-spin text-primary" />
+                      <ArrowPathIcon className="h-6 w-6 animate-spin text-foreground" />
                     ) : weixinQrStatus === 'success' ? (
                       <CheckCircleIcon className="h-10 w-10 text-green-500" />
                     ) : (
@@ -2836,7 +2797,7 @@ const IMSettings: React.FC = () => {
                     <ol className="mt-3 space-y-2">
                       {weixinGuideSteps.map((step, index) => (
                         <li key={step} className={`flex items-start gap-2.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                          <span className="mt-px flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-primary-muted text-[11px] font-semibold text-primary">
+                          <span className="mt-px flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-surface-raised text-[11px] font-semibold text-foreground">
                             {index + 1}
                           </span>
                           <span className="min-w-0">{step}</span>
@@ -2860,7 +2821,7 @@ const IMSettings: React.FC = () => {
                           type="button"
                           onClick={() => void handleWeixinQrLogin()}
                           disabled={isWeixinQrBusy}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-4 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {weixinQrStatus === 'loading'
                             ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
@@ -2878,7 +2839,7 @@ const IMSettings: React.FC = () => {
                               console.error('[IM] Failed to open guide URL:', err);
                             });
                           }}
-                          className="text-xs font-medium text-secondary underline-offset-2 transition-colors hover:text-primary hover:underline"
+                          className="text-xs font-medium text-secondary underline-offset-2 transition-colors hover:text-foreground hover:underline"
                         >
                           {i18nService.t('imViewGuide')}
                         </button>
@@ -2953,7 +2914,7 @@ const IMSettings: React.FC = () => {
                               console.error('[IM] Failed to open guide URL:', err);
                             });
                           }}
-                          className="ml-1.5 font-medium text-primary underline-offset-2 hover:underline"
+                          className="ml-1.5 font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                         >
                           {i18nService.t('imViewGuide')}
                         </button>
@@ -2980,26 +2941,23 @@ const IMSettings: React.FC = () => {
             return (
               <div className="space-y-4">
                 <WecomInstanceSettings
-                  instance={activeWecomInstance}
+                  instance={getEffectiveDetailRecord('wecom', activeWecomInstanceId!, activeWecomInstance)}
                   instanceStatus={activeWecomStatus}
                   headerLeading={renderBackToInstanceList('wecom')}
                   onConfigChange={(update) => {
-                    dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: update }));
+                    updateDetailDraft('wecom', activeWecomInstanceId!, update as Record<string, unknown>);
                   }}
                   onSave={async (override) => {
-                    if (!configLoaded) return;
-                    const configToSave = override
-                      ? { ...activeWecomInstance, ...override }
-                      : activeWecomInstance;
-                    const success = await imService.persistWecomInstanceConfig(activeWecomInstanceId!, configToSave);
-                    if (success) reportIMSettingsSaved('wecom', config);
-                    if (typeof override?.enabled === 'boolean') {
-                      setSaveReminderTarget('wecom', activeWecomInstanceId!, override.enabled);
-                    }
+                    const effectiveInstance = getEffectiveDetailRecord('wecom', activeWecomInstanceId!, activeWecomInstance);
+                    await handleInstanceOnSave(
+                      'wecom',
+                      activeWecomInstanceId!,
+                      effectiveInstance as unknown as Record<string, unknown>,
+                      override as Record<string, unknown> | undefined,
+                    );
                   }}
-                  onRename={async (newName) => {
-                    dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: { instanceName: newName } as any }));
-                    await imService.persistWecomInstanceConfig(activeWecomInstanceId!, { instanceName: newName } as any);
+                  onRename={(newName) => {
+                    void handleInstanceRename('wecom', activeWecomInstanceId!, newName);
                   }}
                   onTestConnectivity={() => void handleConnectivityTest('wecom')}
                   onQuickSetup={async () => {
@@ -3008,17 +2966,20 @@ const IMSettings: React.FC = () => {
                     try {
                       const bot = await WecomAIBotSDK.openBotInfoAuthWindow({ source: 'lobster-ai' });
                       if (!isMountedRef.current) return;
-                      dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: { botId: bot.botid, secret: bot.secret, enabled: true } }));
                       dispatch(clearError());
                       const quickSetupSaved = await imService.updateWecomInstanceConfig(
                         activeWecomInstanceId!,
                         { botId: bot.botid, secret: bot.secret, enabled: true },
-                        IM_AUTH_RESTART_ON_SAVE_OPTIONS,
+                        { syncGateway: true, reloadStatus: true },
                       );
-                      if (quickSetupSaved) {
-                        reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
+                      if (!isMountedRef.current) return;
+                      if (!quickSetupSaved) {
+                        setWecomQuickSetupStatus('idle');
+                        return;
                       }
-                      setSaveReminderTarget('wecom', activeWecomInstanceId!, true);
+                      await imService.saveAndSyncConfig();
+                      discardDetailDraft();
+                      reportIMSettingsSaved('wecom', imService.getConfig(), null, 'credential_state,enabled');
                       if (!isMountedRef.current) return;
                       await imService.loadStatus();
                       if (!isMountedRef.current) return;
@@ -3037,7 +2998,7 @@ const IMSettings: React.FC = () => {
                   language={language}
                   renderPairingSection={renderPairingSection}
                 />
-                {renderInstanceSaveReminder('wecom', activeWecomInstance as unknown as IMInstanceConfigCard, activeWecomStatus)}
+                {renderDetailSaveFooter()}
               </div>
             );
           }
@@ -3049,38 +3010,27 @@ const IMSettings: React.FC = () => {
         {activePlatform === 'popo' && activePopoInstanceId && (() => {
           const selectedInstance = config.popo.instances.find(i => i.instanceId === activePopoInstanceId);
           if (!selectedInstance) return null;
+          const effectiveInstance = getEffectiveDetailRecord('popo', activePopoInstanceId, selectedInstance);
           const selectedStatus = status.popo?.instances?.find(s => s.instanceId === activePopoInstanceId);
           return (
             <div className="space-y-4">
               <PopoInstanceSettings
-                instance={selectedInstance}
+                instance={effectiveInstance}
                 instanceStatus={selectedStatus}
                 headerLeading={renderBackToInstanceList('popo')}
                 onConfigChange={(update) => {
-                  dispatch(setPopoInstanceConfig({ instanceId: activePopoInstanceId, config: update }));
+                  updateDetailDraft('popo', activePopoInstanceId, update as Record<string, unknown>);
                 }}
                 onSave={async (override) => {
-                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                  const restartOnSaveOptions = override?.enabled === true
-                    && !!override.appKey
-                    && !!override.appSecret
-                    && !!override.aesKey
-                    ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
-                    : undefined;
-                  let success = false;
-                  if (selectedInstance.enabled || restartOnSaveOptions) {
-                    success = await imService.updatePopoInstanceConfig(activePopoInstanceId, configToSave, restartOnSaveOptions);
-                  } else {
-                    success = await imService.persistPopoInstanceConfig(activePopoInstanceId, configToSave);
-                  }
-                  if (success) reportIMSettingsSaved('popo', config);
-                  if (typeof override?.enabled === 'boolean') {
-                    setSaveReminderTarget('popo', activePopoInstanceId, override.enabled);
-                  }
+                  await handleInstanceOnSave(
+                    'popo',
+                    activePopoInstanceId,
+                    effectiveInstance as unknown as Record<string, unknown>,
+                    override as Record<string, unknown> | undefined,
+                  );
                 }}
-                onRename={async (newName) => {
-                  dispatch(setPopoInstanceConfig({ instanceId: activePopoInstanceId, config: { instanceName: newName } as any }));
-                  await imService.persistPopoInstanceConfig(activePopoInstanceId, { instanceName: newName } as any);
+                onRename={(newName) => {
+                  void handleInstanceRename('popo', activePopoInstanceId, newName);
                 }}
                 onTestConnectivity={() => {
                   void handleConnectivityTest('popo');
@@ -3089,7 +3039,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
-              {renderInstanceSaveReminder('popo', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
+              {renderDetailSaveFooter()}
             </div>
           );
         })()}

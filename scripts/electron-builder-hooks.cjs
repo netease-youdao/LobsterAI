@@ -1,28 +1,24 @@
 'use strict';
 
 const path = require('path');
-const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync, writeFileSync } = require('fs');
+const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, writeFileSync } = require('fs');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
-const { Arch } = require('builder-util');
-const { OPENCLAW_BUNDLE_ASSET_TARGETS } = require('./openclaw-bundle-assets.cjs');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
-const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
-const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
-const {
-  DIST_DIFFS_EXTENSION_DIR,
-  DIST_EXTENSIONS_DIR,
-  resolvePreinstalledPluginDir,
-  summarizeGatewayAsarEntries,
-  verifyRuntimeBundledPlugin,
-} = require('./openclaw-runtime-packaging.cjs');
-const { collectHostPeerLeftovers, measureDirectorySize } = require('./openclaw-plugin-host-peer-leftovers.cjs');
-const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.cjs');
-const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
-const { pruneOpenClawMacPayload } = require('./openclaw-mac-payload.cjs');
 const { configureBetterSqlite3Payload } = require('./better-sqlite3-payload.cjs');
-const { createSkillsPayloadFilter } = require('./skill-payload.cjs');
+const { configureWindowsSkillsPayload } = require('./skill-payload.cjs');
 const { prepareMacSkills, verifyPackagedMacSkills } = require('./skill-mac-dependencies.cjs');
+
+const HEAVY_PRUNED_PACKAGES = [
+  '@deepseek-ai/libreoffice-kit-darwin-arm64',
+  '@deepseek-ai/libreoffice-kit-darwin-x64',
+  '@deepseek-ai/libreoffice-kit-win32-x64',
+  '@deepseek-ai/libreoffice-kit-wasm',
+  'sherpa-onnx-node',
+  'sherpa-onnx-darwin-arm64',
+  'sherpa-onnx-darwin-x64',
+  'sherpa-onnx-win-x64',
+];
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -41,7 +37,7 @@ function resolveTargetArch(context) {
   return 'x64';
 }
 
-function resolveOpenClawRuntimeTargetId(context) {
+function resolveDshRuntimeTargetId(context) {
   const platform = context?.electronPlatformName;
   const arch = resolveTargetArch(context);
 
@@ -49,10 +45,7 @@ function resolveOpenClawRuntimeTargetId(context) {
     return arch === 'x64' ? 'mac-x64' : 'mac-arm64';
   }
   if (platform === 'win32') {
-    return arch === 'arm64' ? 'win-arm64' : 'win-x64';
-  }
-  if (platform === 'linux') {
-    return arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+    return 'win-x64';
   }
 
   return null;
@@ -72,17 +65,17 @@ function readRuntimeBuildInfo(runtimeRoot) {
   }
 }
 
-function getOpenClawRuntimeBuildHint(targetId) {
+function getDshRuntimeBuildHint(targetId) {
   if (!targetId) {
-    return 'npm run openclaw:runtime:host';
+    return 'npm run dsh:runtime:host';
   }
-  return `npm run openclaw:runtime:${targetId}`;
+  return `npm run dsh:runtime:${targetId}`;
 }
 
-function syncCurrentOpenClawRuntimeForTarget(context) {
-  const runtimeBase = path.join(__dirname, '..', 'vendor', 'openclaw-runtime');
+function syncCurrentDshRuntimeForTarget(context) {
+  const runtimeBase = path.join(__dirname, '..', 'vendor', 'dsh-runtime');
   const currentRoot = path.join(runtimeBase, 'current');
-  const targetId = resolveOpenClawRuntimeTargetId(context);
+  const targetId = resolveDshRuntimeTargetId(context);
 
   if (!targetId) {
     return { runtimeRoot: currentRoot, targetId: null };
@@ -97,342 +90,70 @@ function syncCurrentOpenClawRuntimeForTarget(context) {
   if (currentBuildInfo?.target !== targetId) {
     rmSync(currentRoot, { recursive: true, force: true });
     cpSync(targetRoot, currentRoot, { recursive: true, force: true });
-    console.log(`[electron-builder-hooks] Synced OpenClaw runtime ${targetId} -> current`);
+    console.log(`[electron-builder-hooks] Synced DSH runtime ${targetId} -> current`);
   }
 
   return { runtimeRoot: currentRoot, targetId };
 }
 
-function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
-  const pkgPath = path.join(__dirname, '..', 'package.json');
-  let plugins = [];
-  try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    plugins = (pkg.openclaw && pkg.openclaw.plugins) || [];
-  } catch {
-    return; // Cannot read package.json — skip verification
-  }
+function ensureBundledDshRuntime(context) {
+  const projectRoot = path.join(__dirname, '..');
+  const { runtimeRoot, targetId } = syncCurrentDshRuntimeForTarget(context);
+  const buildHint = getDshRuntimeBuildHint(targetId);
 
-  if (!Array.isArray(plugins) || plugins.length === 0) {
-    return;
-  }
-
-  const extensionsDir = path.join(runtimeRoot, 'third-party-extensions');
-  const missing = [];
-
-  for (const plugin of plugins) {
-    if (!plugin.id) continue;
-    const pluginDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
-    if (!existsSync(pluginDir)) {
-      missing.push(plugin.id);
-    } else {
-      verifyRuntimeBundledPlugin(runtimeRoot, plugin);
-    }
-  }
-
-  if (missing.length > 0) {
+  const requiredRuntimePaths = [
+    path.join(runtimeRoot, 'package.json'),
+    path.join(runtimeRoot, 'lib', 'bin.js'),
+    path.join(runtimeRoot, 'node_modules'),
+    path.join(runtimeRoot, 'runtime-build-info.json'),
+  ];
+  const missingRuntime = requiredRuntimePaths.filter((candidate) => !existsSync(candidate));
+  if (missingRuntime.length > 0) {
     throw new Error(
-      '[electron-builder-hooks] Preinstalled OpenClaw plugins missing from runtime: '
-      + missing.join(', ')
-      + `. Run \`${buildHint}\` (which includes openclaw:plugins) before packaging.`,
+      '[electron-builder-hooks] Bundled DSH runtime is incomplete. Missing: '
+      + missingRuntime.join(', ')
+      + `. Run \`${buildHint}\` before packaging.`,
     );
   }
 
-  verifyNoHostPeerLeftovers(extensionsDir, plugins.filter(plugin => plugin.runtimeBundled !== true));
-  verifyNoHostPeerLeftovers(
-    path.join(runtimeRoot, DIST_EXTENSIONS_DIR),
-    plugins.filter(plugin => plugin.runtimeBundled === true),
-  );
-
-  console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
-}
-
-// A plugin whose node_modules still carries the openclaw peer dependency tree
-// adds hundreds of MB to the installer (see openclaw-plugin-host-peer-leftovers.cjs).
-// openclaw:prune removes it; anything left here means the runtime was not
-// rebuilt through the normal chain, so fail instead of shipping it silently.
-const PLUGIN_SIZE_WARN_BYTES = 100 * 1024 * 1024;
-
-function verifyNoHostPeerLeftovers(extensionsDir, plugins) {
-  const problems = [];
-  for (const plugin of plugins) {
-    if (!plugin.id) continue;
-    const pluginDir = path.join(extensionsDir, plugin.id);
-    if (!existsSync(pluginDir)) continue;
-
-    const leftovers = collectHostPeerLeftovers(pluginDir);
-    if (leftovers.length > 0) {
-      const preview = leftovers.slice(0, 3).map((item) => item.location).join(', ');
-      const more = leftovers.length > 3 ? ` and ${leftovers.length - 3} more` : '';
-      problems.push(`${plugin.id}: ${preview}${more}`);
-    }
-
-    const sizeBytes = measureDirectorySize(pluginDir);
-    if (sizeBytes > PLUGIN_SIZE_WARN_BYTES) {
-      console.warn(
-        `[electron-builder-hooks] Preinstalled OpenClaw plugin ${plugin.id} is `
-        + `${(sizeBytes / 1024 / 1024).toFixed(1)} MB; check its node_modules before shipping.`,
-      );
-    }
-  }
-
-  if (problems.length > 0) {
+  const buildInfo = readRuntimeBuildInfo(runtimeRoot);
+  if (targetId && buildInfo?.target && buildInfo.target !== targetId) {
     throw new Error(
-      '[electron-builder-hooks] Preinstalled OpenClaw plugins still contain openclaw peer dependency trees: '
-      + problems.join('; ')
-      + '. Run `npm run openclaw:prune`, or delete vendor/openclaw-plugins/<id> and re-run `npm run openclaw:plugins`.',
-    );
-  }
-}
-
-function hasCompiledLocalExtension(runtimeRoot, extensionId) {
-  const pluginDir = path.join(runtimeRoot, 'third-party-extensions', extensionId);
-  if (!existsSync(path.join(pluginDir, 'openclaw.plugin.json'))
-    || !existsSync(path.join(pluginDir, 'index.js'))) {
-    return false;
-  }
-
-  const packageJsonPath = path.join(pluginDir, 'package.json');
-  if (!existsSync(packageJsonPath)) {
-    return false;
-  }
-
-  try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-    return Array.isArray(pkg.openclaw?.extensions)
-      && pkg.openclaw.extensions.includes('./index.js');
-  } catch {
-    return false;
-  }
-}
-
-function precompileLocalExtensions(runtimeRoot, buildHint) {
-  const scriptPath = path.join(__dirname, 'precompile-openclaw-extensions.cjs');
-  const result = spawnSync(process.execPath, [scriptPath, runtimeRoot], {
-    cwd: path.join(__dirname, '..'),
-    stdio: 'inherit',
-  });
-
-  if (result.status !== 0) {
-    throw new Error(
-      '[electron-builder-hooks] Failed to precompile local OpenClaw extensions. '
+      `[electron-builder-hooks] Bundled DSH runtime target mismatch: expected ${targetId}, got ${buildInfo.target}. `
       + `Run \`${buildHint}\` before packaging.`,
     );
   }
-}
 
-function ensureBundledLocalExtensions(runtimeRoot, buildHint) {
-  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question', 'lobster-media-generation', 'lobster-decision'];
-  const missingCompiledExtensions = requiredLocalExtensions.filter(
-    (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
-  );
-
-  if (missingCompiledExtensions.length === 0) {
-    return;
-  }
-
-  console.log(
-    '[electron-builder-hooks] Restoring local OpenClaw extensions before packaging: '
-    + missingCompiledExtensions.join(', '),
-  );
-  syncLocalOpenClawExtensions(runtimeRoot);
-  precompileLocalExtensions(runtimeRoot, buildHint);
-
-  const stillMissing = requiredLocalExtensions.filter(
-    (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
-  );
-  if (stillMissing.length > 0) {
+  // Verify heavy optional native packages remain pruned so installers stay slim.
+  const leftoverHeavy = HEAVY_PRUNED_PACKAGES.filter((pkgName) => (
+    existsSync(path.join(runtimeRoot, 'node_modules', ...pkgName.split('/')))
+  ));
+  if (leftoverHeavy.length > 0) {
     throw new Error(
-      '[electron-builder-hooks] Bundled OpenClaw runtime is missing compiled local extensions: '
-      + stillMissing.join(', ')
-      + `. Run \`${buildHint}\` before packaging.`,
+      '[electron-builder-hooks] Heavy optional packages found in bundled DSH runtime: '
+      + leftoverHeavy.join(', ')
+      + `. Rebuild with \`${buildHint}\`.`,
     );
   }
-}
 
-function ensureBundledOpenClawRuntime(context) {
-  const { runtimeRoot, targetId } = syncCurrentOpenClawRuntimeForTarget(context);
-  const buildHint = getOpenClawRuntimeBuildHint(targetId);
-
-  ensureBundledLocalExtensions(runtimeRoot, buildHint);
-
-  const requiredExternalPaths = [
-    path.join(runtimeRoot, 'node_modules'),
-    path.join(runtimeRoot, 'openclaw-startup-state-migration.mjs'),
-    path.join(runtimeRoot, 'openclaw-gateway-repair.mjs'),
-    path.join(runtimeRoot, 'lobsterai-repair-plugins.json'),
-    path.join(runtimeRoot, 'openclaw-xai-auth-store.mjs'),
-    path.join(runtimeRoot, 'openclaw-startup-compat.mjs'),
+  // Verify LobsterAI's built-in DSH bundles exist.
+  const requiredBundlePaths = [
+    path.join(projectRoot, 'dsh-bundles', 'lobsterai-host', 'package.json'),
+    path.join(projectRoot, 'dsh-bundles', 'lobsterai-host', 'cordis.patch.yml'),
+    path.join(projectRoot, 'dsh-bundles', 'lobsterai-channels', 'package.json'),
+    path.join(projectRoot, 'dsh-bundles', 'lobsterai-channels', 'cordis.patch.yml'),
   ];
-  const missingExternal = requiredExternalPaths.filter((candidate) => !existsSync(candidate));
-  if (missingExternal.length > 0) {
+  const missingBundles = requiredBundlePaths.filter((candidate) => !existsSync(candidate));
+  if (missingBundles.length > 0) {
     throw new Error(
-      '[electron-builder-hooks] Bundled OpenClaw runtime is incomplete. Missing: '
-      + missingExternal.join(', ')
-      + `. Run \`${buildHint}\` before packaging.`,
-    );
-  }
-
-  // Verify preinstalled plugins are present in the runtime extensions directory
-  verifyPreinstalledPlugins(runtimeRoot, buildHint);
-  verifyOpenClawPluginSdkBridge(runtimeRoot);
-
-  // Verify gateway-bundle.mjs exists and is reasonably sized.
-  // Without it, Windows first-launch falls back to loading ~1100 ESM modules
-  // individually, causing 80-100s startup delay.
-  const gatewayBundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
-  if (!existsSync(gatewayBundlePath)) {
-    throw new Error(
-      '[electron-builder-hooks] gateway-bundle.mjs is missing from '
-      + runtimeRoot
-      + '. Run `npm run openclaw:bundle` before packaging.',
-    );
-  }
-  const gatewayBundleStat = statSync(gatewayBundlePath);
-  if (gatewayBundleStat.size < 1_000_000) {
-    throw new Error(
-      '[electron-builder-hooks] gateway-bundle.mjs is suspiciously small ('
-      + gatewayBundleStat.size
-      + ' bytes, expected ~27MB). Rebuild with: `npm run openclaw:bundle`.',
-    );
-  }
-
-  const missingBundleAssets = OPENCLAW_BUNDLE_ASSET_TARGETS
-    .map((target) => path.join(runtimeRoot, target.targetFile))
-    .filter((candidate) => !existsSync(candidate));
-  if (missingBundleAssets.length > 0) {
-    throw new Error(
-      '[electron-builder-hooks] Bundled OpenClaw runtime is missing gateway bundle assets: '
-      + missingBundleAssets.join(', ')
-      + '. Run `npm run openclaw:bundle` before packaging.',
-    );
-  }
-
-  const gatewayAsarPath = path.join(runtimeRoot, 'gateway.asar');
-  if (existsSync(gatewayAsarPath)) {
-    let summary;
-    try {
-      summary = summarizeGatewayAsarEntries(asar.listPackage(gatewayAsarPath));
-    } catch (error) {
-      throw new Error(
-        '[electron-builder-hooks] Failed to read OpenClaw gateway.asar: '
-        + `${gatewayAsarPath}. ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    if (!summary.hasOpenClawEntry || !summary.hasControlUiIndex || !summary.hasGatewayEntry || summary.hasBundledExtensions) {
-      throw new Error(
-        '[electron-builder-hooks] OpenClaw gateway.asar is incomplete. '
-        + `openclaw.mjs=${summary.hasOpenClawEntry}, control-ui=${summary.hasControlUiIndex}, entry=${summary.hasGatewayEntry}, extensions=${summary.hasBundledExtensions}.`,
-      );
-    }
-
-    const bundledExtensionsDir = path.join(runtimeRoot, DIST_EXTENSIONS_DIR);
-    if (!existsSync(bundledExtensionsDir)) {
-      throw new Error(
-        '[electron-builder-hooks] Bundled OpenClaw runtime is missing bare dist/extensions. '
-        + `Expected ${bundledExtensionsDir} after gateway.asar packing.`,
-      );
-    }
-
-    const diffsExtensionDir = path.join(runtimeRoot, DIST_DIFFS_EXTENSION_DIR);
-    if (existsSync(diffsExtensionDir)) {
-      throw new Error(
-        '[electron-builder-hooks] Bundled OpenClaw runtime still contains the diffs extension. '
-        + `Expected ${diffsExtensionDir} to be removed before packaging.`,
-      );
-    }
-
-    return;
-  }
-
-  const legacyRequiredPaths = [
-    path.join(runtimeRoot, 'openclaw.mjs'),
-    path.join(runtimeRoot, 'dist', 'control-ui', 'index.html'),
-  ];
-
-  const hasLegacyEntry = existsSync(path.join(runtimeRoot, 'dist', 'entry.js'))
-    || existsSync(path.join(runtimeRoot, 'dist', 'entry.mjs'));
-  if (!hasLegacyEntry) {
-    throw new Error(
-      '[electron-builder-hooks] Missing OpenClaw runtime entry. '
-      + `Expected ${path.join(runtimeRoot, 'dist', 'entry.js')} or ${path.join(runtimeRoot, 'dist', 'entry.mjs')}, `
-      + `or ${path.join(runtimeRoot, 'gateway.asar')}.`,
-    );
-  }
-
-  const missingLegacy = legacyRequiredPaths.filter((candidate) => !existsSync(candidate));
-  if (missingLegacy.length > 0) {
-    throw new Error(
-      '[electron-builder-hooks] Bundled OpenClaw legacy runtime is incomplete. Missing: '
-      + missingLegacy.join(', ')
-      + `. Run \`${buildHint}\` before packaging.`,
-    );
-  }
-}
-
-function findPackagedBash(appOutDir) {
-  const candidates = [
-    path.join(appOutDir, 'resources', 'mingit', 'bin', 'bash.exe'),
-    path.join(appOutDir, 'resources', 'mingit', 'usr', 'bin', 'bash.exe'),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-function verifyPackagedPortableGitRuntimeDirs(appOutDir) {
-  const requiredDirs = [
-    path.join(appOutDir, 'resources', 'mingit', 'dev', 'shm'),
-    path.join(appOutDir, 'resources', 'mingit', 'dev', 'mqueue'),
-  ];
-  const createdDirs = [];
-
-  for (const dir of requiredDirs) {
-    if (existsSync(dir)) continue;
-    mkdirSync(dir, { recursive: true });
-    createdDirs.push(dir);
-  }
-
-  const missingDirs = requiredDirs.filter((dir) => !existsSync(dir));
-  if (missingDirs.length > 0) {
-    throw new Error(
-      'Windows package is missing required PortableGit runtime directories. '
-      + `Missing: ${missingDirs.join(', ')}`
-    );
-  }
-
-  if (createdDirs.length > 0) {
-    console.log(
-      '[electron-builder-hooks] Created missing PortableGit runtime directories: '
-      + createdDirs.join(', ')
+      '[electron-builder-hooks] Required DSH bundles are missing: '
+      + missingBundles.join(', '),
     );
   }
 
   console.log(
-    '[electron-builder-hooks] Verified PortableGit runtime directories: '
-    + requiredDirs.join(', ')
+    `[electron-builder-hooks] Verified DSH runtime (${buildInfo?.dshVersion || 'unknown'}, target=${buildInfo?.target || targetId || 'host'}) and bundles.`,
   );
-}
-
-function findPackagedPythonExecutable(appOutDir) {
-  const candidates = [
-    path.join(appOutDir, 'resources', 'python-win', 'python.exe'),
-    path.join(appOutDir, 'resources', 'python-win', 'python3.exe'),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
 }
 
 function applyMacIconFix(appPath) {
@@ -452,52 +173,45 @@ function applyMacIconFix(appPath) {
     return;
   }
 
-  // Check if CFBundleIconName already exists
   const checkResult = spawnSync('plutil', [
-    '-extract', 'CFBundleIconName', 'raw', infoPlistPath
+    '-extract', 'CFBundleIconName', 'raw', infoPlistPath,
   ], { encoding: 'utf-8' });
 
   if (checkResult.status !== 0) {
-    // CFBundleIconName doesn't exist, add it
     console.log('[electron-builder-hooks] Adding CFBundleIconName to Info.plist...');
     const addResult = spawnSync('plutil', [
-      '-insert', 'CFBundleIconName', '-string', 'icon', infoPlistPath
+      '-insert', 'CFBundleIconName', '-string', 'icon', infoPlistPath,
     ], { encoding: 'utf-8' });
 
     if (addResult.status === 0) {
-      console.log('[electron-builder-hooks] ✓ CFBundleIconName added successfully');
+      console.log('[electron-builder-hooks] CFBundleIconName added successfully');
     } else {
       console.warn('[electron-builder-hooks] Failed to add CFBundleIconName:', addResult.stderr);
     }
   } else {
-    console.log('[electron-builder-hooks] ✓ CFBundleIconName already present');
+    console.log('[electron-builder-hooks] CFBundleIconName already present');
   }
 
-  // Clear extended attributes
   spawnSync('xattr', ['-cr', appPath], { encoding: 'utf-8' });
-
-  // Touch the app to update modification time
   spawnSync('touch', [appPath], { encoding: 'utf-8' });
   spawnSync('touch', [resourcesPath], { encoding: 'utf-8' });
 
-  console.log('[electron-builder-hooks] ✓ macOS icon fix applied');
+  console.log('[electron-builder-hooks] macOS icon fix applied');
 }
 
 /**
- * Remove all node_modules/.bin directories from the cfmind tree.
+ * Remove all node_modules/.bin directories from packaged DSH resource trees.
  *
  * macOS codesign rejects symlinks inside app bundles (even valid relative ones).
  * .bin/ directories contain only CLI wrapper symlinks that are never used at
- * runtime, so removing them entirely is safe and fixes signing.
+ * runtime, so removing them entirely is safe and prevents codesign failures.
  */
-function removeAllBinDirsInCfmind(appOutDir) {
-  const cfmindDir = path.join(appOutDir, 'Contents', 'Resources', 'cfmind');
-
-  if (!existsSync(cfmindDir)) {
+function removeAllBinDirsInResourceTree(targetDir, label) {
+  if (!existsSync(targetDir)) {
     return;
   }
 
-  console.log('[electron-builder-hooks] Removing node_modules/.bin directories from cfmind...');
+  console.log(`[electron-builder-hooks] Removing node_modules/.bin directories from ${label}...`);
 
   let removedCount = 0;
   const walk = (dir) => {
@@ -514,29 +228,20 @@ function removeAllBinDirsInCfmind(appOutDir) {
       walk(full);
     }
   };
-  walk(cfmindDir);
+  walk(targetDir);
 
-  console.log(`[electron-builder-hooks] ✓ Removed ${removedCount} .bin director${removedCount === 1 ? 'y' : 'ies'} from cfmind`);
+  console.log(`[electron-builder-hooks] Removed ${removedCount} .bin director${removedCount === 1 ? 'y' : 'ies'} from ${label}`);
 }
 
-/**
- * Check if a command exists in the system PATH.
- */
 function hasCommand(command) {
   const checker = process.platform === 'win32' ? 'where' : 'which';
   const result = spawnSync(checker, [command], { stdio: 'ignore' });
   return result.status === 0;
 }
 
-/**
- * Install dependencies for all skills in the SKILLs directory.
- * This ensures bundled skills include node_modules for users without npm.
- */
 function installSkillDependencies() {
-  // Check if npm is available (should be available during build)
   if (!hasCommand('npm')) {
     console.warn('[electron-builder-hooks] npm not found in PATH, skipping skill dependency installation');
-    console.warn('[electron-builder-hooks]   (This is only a warning - skills will be installed at runtime if needed)');
     return;
   }
 
@@ -561,9 +266,7 @@ function installSkillDependencies() {
     const packageJsonPath = path.join(skillPath, 'package.json');
     const nodeModulesPath = path.join(skillPath, 'node_modules');
 
-    if (!existsSync(packageJsonPath)) {
-      continue; // No package.json, skip
-    }
+    if (!existsSync(packageJsonPath)) continue;
 
     if (existsSync(nodeModulesPath)) {
       console.log(`[electron-builder-hooks]   ${entry}: node_modules exists, skipping`);
@@ -572,27 +275,22 @@ function installSkillDependencies() {
     }
 
     console.log(`[electron-builder-hooks]   ${entry}: installing dependencies...`);
-    // On Windows, use shell: true so cmd.exe resolves npm.cmd correctly
     const isWin = process.platform === 'win32';
     const result = spawnSync('npm', ['install'], {
       cwd: skillPath,
       encoding: 'utf-8',
       stdio: 'pipe',
-      timeout: 5 * 60 * 1000, // 5 minute timeout
+      timeout: 5 * 60 * 1000,
       shell: isWin,
     });
 
     if (result.status === 0) {
-      console.log(`[electron-builder-hooks]   ${entry}: ✓ installed`);
+      console.log(`[electron-builder-hooks]   ${entry}: installed`);
       installedCount++;
     } else {
-      console.error(`[electron-builder-hooks]   ${entry}: ✗ failed`);
-      if (result.error) {
-        console.error(`[electron-builder-hooks]     Error: ${result.error.message}`);
-      }
-      if (result.stderr) {
-        console.error(`[electron-builder-hooks]     ${result.stderr.substring(0, 200)}`);
-      }
+      console.error(`[electron-builder-hooks]   ${entry}: failed`);
+      if (result.error) console.error(`[electron-builder-hooks]     Error: ${result.error.message}`);
+      if (result.stderr) console.error(`[electron-builder-hooks]     ${result.stderr.substring(0, 200)}`);
       failedCount++;
     }
   }
@@ -622,69 +320,88 @@ function directoryTotalFileBytes(rootDir) {
       try {
         total += statSync(fullPath).size;
       } catch {
-        // Unreadable entries are ignored; the result feeds an MB-granularity
-        // estimate that already carries an explicit safety margin.
+        // Ignore unreadable entries.
       }
     }
   }
   return total;
 }
 
+function verifyPackagedDshRuntimeAsar(resourcesDir, { isWindows = false } = {}) {
+  const asarPath = path.join(resourcesDir, 'app.asar');
+  if (!existsSync(asarPath)) {
+    throw new Error(`[electron-builder-hooks] Packed archive not found: ${asarPath}`);
+  }
+
+  for (const rel of [
+    'dsh-runtime/package.json',
+    'dsh-runtime/lib/bin.js',
+    'dsh-runtime/node_modules/@deepseek-ai/dsh-app-boot/package.json',
+  ]) {
+    try {
+      const stat = asar.statFile(asarPath, rel.split('/').join(path.sep));
+      if (!stat || stat.files) {
+        throw new Error('not a file');
+      }
+    } catch (error) {
+      throw new Error(
+        `[electron-builder-hooks] ${rel} is missing from ${asarPath}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const requiredDiskPaths = [
+    path.join(resourcesDir, 'app.asar.unpacked', 'dsh-runtime', 'package-manager', 'pnpm', 'package.json'),
+    path.join(resourcesDir, 'dsh-bundles', 'lobsterai-host', 'package.json'),
+    path.join(resourcesDir, 'dsh-bundles', 'lobsterai-channels', 'package.json'),
+  ];
+  if (isWindows) {
+    requiredDiskPaths.push(path.join(resourcesDir, 'SKILLs'));
+    requiredDiskPaths.push(path.join(resourcesDir, 'python-win'));
+  }
+
+  const missing = requiredDiskPaths.filter((candidate) => !existsSync(candidate));
+  if (missing.length > 0) {
+    throw new Error(
+      `[electron-builder-hooks] Packaged resources are incomplete. Missing: ${missing.join(', ')}`,
+    );
+  }
+
+  if (isWindows) {
+    const hasPythonExe = existsSync(path.join(resourcesDir, 'python-win', 'python.exe'))
+      || existsSync(path.join(resourcesDir, 'python-win', 'python3.exe'));
+    if (!hasPythonExe) {
+      throw new Error(`[electron-builder-hooks] Missing python executable under ${path.join(resourcesDir, 'python-win')}`);
+    }
+  }
+
+  asar.uncacheAll();
+  console.log(`[electron-builder-hooks] Verified app.asar/dsh-runtime, unpacked pnpm, and bundles in ${resourcesDir}`);
+}
+
 /**
  * Emit the build-time payload size metadata consumed by scripts/nsis-installer.nsh
  * (via `!include "${PROJECT_DIR}\build-tar\win-installer-payload-size.nsh"`).
- *
- * The NSIS installer needs two numbers that only exist at packaging time:
- *  - the exact byte size of win-resources.tar, so the installer can detect a
- *    silently truncated Nsis7z staging tree before committing anything
- *    (field case 2026-08-25: a full temp drive truncated the tar mid-file
- *    while Nsis7z::Extract reported nothing);
- *  - the total unpacked payload size in MB, so the installer can preflight
- *    free space on the staging drive and relocate staging to the install
- *    drive when the temp drive cannot hold the extracted tree.
- *
- * MB values are used for the space math because NSIS integers are 32-bit
- * signed and the unpacked tree exceeds 2 GB in bytes. The exact tar byte
- * size stays a string compared verbatim (System::Call reads the on-disk
- * size as a 64-bit decimal string).
  */
 function writeWindowsPayloadSizeFragment(context) {
   const toMb = (bytes) => Math.ceil(bytes / (1024 * 1024));
   const buildTarDir = path.join(__dirname, '..', 'build-tar');
-  const tarPath = path.join(buildTarDir, 'win-resources.tar');
-  if (!existsSync(tarPath)) {
-    throw new Error(
-      `[electron-builder-hooks] ${tarPath} is missing in afterPack; beforePack should have packed it. `
-      + 'The NSIS installer cannot be built without its payload size metadata.',
-    );
-  }
-  const tarBytes = statSync(tarPath).size;
+  mkdirSync(buildTarDir, { recursive: true });
 
-  // The copy electron-builder placed into the app directory (via
-  // win.extraResources) is what actually ships inside the 7z payload. A size
-  // mismatch here means the build machine itself truncated the copy — fail
-  // the build instead of baking the wrong "expected" size into the installer.
-  const packagedTarPath = path.join(context.appOutDir, 'resources', 'win-resources.tar');
-  if (!existsSync(packagedTarPath)) {
+  const packagedAsarPath = path.join(context.appOutDir, 'resources', 'app.asar');
+  if (!existsSync(packagedAsarPath)) {
     throw new Error(
-      `[electron-builder-hooks] ${packagedTarPath} is missing from the packed app; `
-      + 'win.extraResources should have copied build-tar/win-resources.tar there.',
+      `[electron-builder-hooks] ${packagedAsarPath} is missing from the packed app; `
+      + 'cannot generate NSIS payload size metadata.',
     );
   }
-  const packagedTarBytes = statSync(packagedTarPath).size;
-  if (packagedTarBytes !== tarBytes) {
-    throw new Error(
-      `[electron-builder-hooks] win-resources.tar size mismatch: build-tar copy is ${tarBytes} bytes `
-      + `but the packed app copy is ${packagedTarBytes} bytes. The build machine likely ran out of disk `
-      + 'space while copying extraResources.',
-    );
-  }
+  const asarBytes = statSync(packagedAsarPath).size;
 
   const unpackedBytes = directoryTotalFileBytes(context.appOutDir);
-  if (tarBytes <= 0 || unpackedBytes < tarBytes) {
+  if (asarBytes <= 0 || unpackedBytes < asarBytes) {
     throw new Error(
-      `[electron-builder-hooks] Implausible payload sizes (tar=${tarBytes} bytes, unpacked=${unpackedBytes} bytes); `
-      + 'the app directory must contain at least the tar it ships.',
+      `[electron-builder-hooks] Implausible payload sizes (asar=${asarBytes} bytes, unpacked=${unpackedBytes} bytes); `
+      + 'the app directory must contain at least app.asar.',
     );
   }
 
@@ -692,87 +409,43 @@ function writeWindowsPayloadSizeFragment(context) {
   const fragment = [
     '; Generated by scripts/electron-builder-hooks.cjs (afterPack). Do not edit or commit.',
     '; Consumed by scripts/nsis-installer.nsh for staging preflight and payload validation.',
-    `!define LOBSTER_WIN_RESOURCES_TAR_BYTES "${tarBytes}"`,
-    `!define LOBSTER_WIN_RESOURCES_TAR_MB "${toMb(tarBytes)}"`,
+    `!define LOBSTER_APP_ASAR_BYTES "${asarBytes}"`,
     `!define LOBSTER_PAYLOAD_UNPACKED_MB "${toMb(unpackedBytes)}"`,
     '',
   ].join('\r\n');
   writeFileSync(fragmentPath, fragment);
   console.log(
     '[electron-builder-hooks] Wrote NSIS payload size fragment: '
-    + `tar=${tarBytes} bytes (${toMb(tarBytes)} MB), unpacked=${toMb(unpackedBytes)} MB -> ${fragmentPath}`,
+    + `asar=${asarBytes} bytes (${toMb(asarBytes)} MB), unpacked=${toMb(unpackedBytes)} MB -> ${fragmentPath}`,
   );
 }
 
 async function beforePack(context) {
   configureBetterSqlite3Payload(context);
-  ensureBundledOpenClawRuntime(context);
+  ensureBundledDshRuntime(context);
   if (isMacTarget(context)) {
     prepareMacSkills(context);
   } else {
     installSkillDependencies();
   }
 
-  if (isWindowsTarget(context)) {
-    // Pack all large resource directories into a single tar for faster NSIS
-    // installation.  NSIS extracts thousands of small files very slowly on NTFS;
-    // a single tar archive is extracted by 7z almost instantly, and we unpack
-    // it in the NSIS customInstall macro using Electron's Node runtime.
-    const buildTarDir = path.join(__dirname, '..', 'build-tar');
-    mkdirSync(buildTarDir, { recursive: true });
-
-    const outputTar = path.join(buildTarDir, 'win-resources.tar');
-    const runtimeRoot = path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current');
-    const sources = [
-      {
-        label: 'OpenClaw runtime',
-        dir: runtimeRoot,
-        prefix: 'cfmind',
-        ...createOpenClawWindowsPayload(runtimeRoot, resolveOpenClawRuntimeTargetId(context)),
-      },
-      {
-        label: 'SKILLs',
-        dir: path.join(__dirname, '..', 'SKILLs'),
-        prefix: 'SKILLs',
-        filter: createSkillsPayloadFilter(path.join(__dirname, '..', 'SKILLs')),
-      },
-      {
-        label: 'Python runtime',
-        dir: path.join(__dirname, '..', 'resources', 'python-win'),
-        prefix: 'python-win',
-      },
-    ];
-
-    console.log(`[electron-builder-hooks] Packing combined Windows tar: ${outputTar}`);
-    const t0 = Date.now();
-
-    // Remove old tar if exists
-    if (existsSync(outputTar)) rmSync(outputTar);
-
-    const { totalFiles, skipped } = packMultipleSources(sources, outputTar);
-    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    const sizeMB = (statSync(outputTar).size / (1024 * 1024)).toFixed(1);
-    console.log(
-      `[electron-builder-hooks] Combined tar packed in ${elapsed}s: `
-      + `${totalFiles} files, ${skipped} skipped, ${sizeMB} MB`
-    );
-  }
-
   if (!isWindowsTarget(context)) {
     return;
   }
 
+  const projectRoot = path.join(__dirname, '..');
+  configureWindowsSkillsPayload(context, path.join(projectRoot, 'SKILLs'));
+
   console.log('[electron-builder-hooks] Windows target detected, ensuring portable Python runtime is prepared...');
   await ensurePortablePythonRuntime({ required: true });
-  const runtimeRoot = path.join(__dirname, '..', 'resources', 'python-win');
-  const runtimeHealth = checkRuntimeHealth(runtimeRoot, { requirePip: true });
+  const pythonRuntimeRoot = path.join(__dirname, '..', 'resources', 'python-win');
+  const runtimeHealth = checkRuntimeHealth(pythonRuntimeRoot, { requirePip: true });
   if (!runtimeHealth.ok) {
     throw new Error(
       'Portable Python runtime health check failed before pack. Missing files: '
-      + runtimeHealth.missing.join(', ')
+      + runtimeHealth.missing.join(', '),
     );
   }
-
 }
 
 async function afterPack(context) {
@@ -781,9 +454,7 @@ async function afterPack(context) {
   }
 
   if (isWindowsTarget(context)) {
-    // afterPack runs after extraResources are in place and before the NSIS
-    // targets archive appOutDir, so the sizes measured here are exactly what
-    // the installer will stage at install time.
+    verifyPackagedDshRuntimeAsar(path.join(context.appOutDir, 'resources'), { isWindows: true });
     writeWindowsPayloadSizeFragment(context);
   }
 
@@ -792,25 +463,15 @@ async function afterPack(context) {
     const appPath = path.join(context.appOutDir, `${appName}.app`);
 
     if (existsSync(appPath)) {
-      // Universal merging requires matching native file paths in both inputs.
-      // Keep its existing layout, including the intermediate per-arch hooks.
-      const universalBuild = context.arch === Arch.universal
-        || context.packager.info?.options?.targets?.get(context.packager.platform)?.has(Arch.universal);
-      if (!universalBuild) {
-        pruneOpenClawMacPayload(appPath, resolveOpenClawRuntimeTargetId(context));
-      }
-      // Remove all .bin directories (symlinks) before signing to prevent codesign failures
-      removeAllBinDirsInCfmind(appPath);
+      const resourcesDir = path.join(appPath, 'Contents', 'Resources');
+      verifyPackagedDshRuntimeAsar(resourcesDir);
+      removeAllBinDirsInResourceTree(path.join(resourcesDir, 'app.asar.unpacked'), 'app.asar.unpacked');
+      removeAllBinDirsInResourceTree(path.join(resourcesDir, 'dsh-bundles'), 'dsh-bundles');
       applyMacIconFix(appPath);
     } else {
-      console.warn(`[electron-builder-hooks] App not found at ${appPath}, skipping icon fix`);
+      console.warn(`[electron-builder-hooks] App not found at ${appPath}, skipping macOS post-pack steps`);
     }
   }
-
-  // Windows binaries need no extra handling here: with win.sign configured,
-  // electron-builder routes the app exe, uninstaller and installer through
-  // scripts/win-sign.cjs, and the NSIS target's CopyElevateHelper signs
-  // resources/elevate.exe itself (see app-builder-lib nsisUtil.js).
 }
 
 module.exports = {

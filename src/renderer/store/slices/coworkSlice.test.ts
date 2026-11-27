@@ -181,7 +181,7 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
     workingDirectory: '/tmp',
     systemPrompt: '',
     executionMode: 'local',
-    agentEngine: 'openclaw',
+    agentEngine: 'dsh',
     memoryEnabled: true,
     memoryImplicitUpdateEnabled: true,
     memoryLlmJudgeEnabled: false,

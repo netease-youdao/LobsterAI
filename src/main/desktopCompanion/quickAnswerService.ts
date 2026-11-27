@@ -44,8 +44,10 @@ interface Running {
 interface QuickAnswerDeps {
   reportAnalytics?: CompanionAnalyticsReporter;
   getSessionKey(): string | null;
-  /** Loopback token for providers OpenClaw reaches through a local proxy. */
+  /** Loopback token for providers reached through the local model auth proxy. */
   getProxyToken?(): string | null;
+  /** Loopback proxy origin (e.g. `http://127.0.0.1:<port>`) for proxy-backed providers. */
+  getProxyBaseUrl?(): string | null;
   resolveModel?(): OneShotTargetResolution;
   resolvePreset?: OneShotPresetResolver;
   fetch?: typeof fetch;
@@ -82,7 +84,10 @@ export class CompanionQuickAnswerService {
     }
     const resolution = this.deps.resolveModel
       ? this.deps.resolveModel()
-      : resolveOneShotTarget({ getProxyToken: () => this.deps.getProxyToken?.() ?? null });
+      : resolveOneShotTarget({
+        getProxyToken: () => this.deps.getProxyToken?.() ?? null,
+        getProxyBaseUrl: () => this.deps.getProxyBaseUrl?.() ?? null,
+      });
     if ('error' in resolution) {
       finish?.(Outcome.Blocked, Reason.NoModel);
       return {

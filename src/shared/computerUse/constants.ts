@@ -1,3 +1,4 @@
+import { ASK_USER_QUESTION_TIMEOUT_MS } from '../cowork/constants';
 import type { LocalizedText } from '../kit/constants';
 
 export const ComputerUseKitId = {
@@ -16,6 +17,14 @@ export const ComputerUseMcpServerName = {
 } as const;
 export type ComputerUseMcpServerName =
   typeof ComputerUseMcpServerName[keyof typeof ComputerUseMcpServerName];
+
+/**
+ * Per-tool-call timeout for the built-in Computer Use MCP server.
+ * Must exceed `/askuser` per-app approval wait (`ASK_USER_QUESTION_TIMEOUT_MS`)
+ * plus post-approval action / `wait_for_text` (up to 45s) execution headroom so
+ * DSH's `dsh-mcp-client` does not abort Computer Use calls at its 60s default.
+ */
+export const COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS = ASK_USER_QUESTION_TIMEOUT_MS + 60_000;
 
 // The macOS skill bundle only carries SKILL.md, so the arm64 and x64 runtimes share it.
 export const ComputerUseKitBundle = {

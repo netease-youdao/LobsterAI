@@ -7,8 +7,9 @@ import {
   getMessageModelLabelParts,
   getTurnEndTimestamp,
   getVisibleAssistantItems,
-  withTurnModelPreset,
+  resolveTurnModelMetadata,
 } from './messageDisplayUtils';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 
 /** The normal reply footer also serves turns stopped during thinking or a tool call. */
 const AssistantTurnFooter: React.FC<{
@@ -16,7 +17,8 @@ const AssistantTurnFooter: React.FC<{
   turnUsageSlot: React.ReactNode;
   mapDisplayText?: (value: string) => string;
   onForkMessage?: (messageId: string) => void;
-}> = ({ turn, turnUsageSlot, mapDisplayText, onForkMessage }) => {
+  compactMeta?: boolean;
+}> = ({ turn, turnUsageSlot, mapDisplayText, onForkMessage, compactMeta = false }) => {
   const messages = turn.assistantItems.flatMap((item): CoworkMessage[] => (
     item.type === 'tool_group'
       ? [item.group.toolUse, ...(item.group.toolResult ? [item.group.toolResult] : [])]
@@ -30,7 +32,7 @@ const AssistantTurnFooter: React.FC<{
   const lastModelMessage = [...messages].reverse().find(message => (
     message.type === 'assistant' && getMessageModelLabelParts(message.metadata)
   ));
-  const assistantMetadata = withTurnModelPreset(lastModelMessage?.metadata, userMetadata);
+  const turnMetadata = resolveTurnModelMetadata(lastModelMessage?.metadata, userMetadata, getConversationTurnUsage(turn));
   const copyContent = getVisibleAssistantItems(turn.assistantItems)
     .flatMap(item => item.type === 'assistant' && !item.message.metadata?.isThinking ? [item.message] : [])
     .map(message => getAssistantMessageCopyContent(mapDisplayText ? mapDisplayText(message.content) : message.content))
@@ -41,10 +43,11 @@ const AssistantTurnFooter: React.FC<{
     <AssistantMessageMeta
       message={anchor}
       timestamp={getTurnEndTimestamp(turn) ?? anchor.timestamp}
-      turnMetadata={assistantMetadata ?? userMetadata}
+      turnMetadata={turnMetadata}
       turnUsageSlot={turnUsageSlot}
       copyContent={copyContent}
       onFork={onForkMessage}
+      compactMeta={compactMeta}
     />
   );
 };

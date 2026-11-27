@@ -18,6 +18,22 @@ export const McpIpcChannel = {
 } as const;
 export type McpIpcChannel = typeof McpIpcChannel[keyof typeof McpIpcChannel];
 
+export const McpManagedProvider = { Qichacha: 'qichacha', NeteaseMail: 'netease-mail' } as const;
+export type McpManagedProvider = typeof McpManagedProvider[keyof typeof McpManagedProvider];
+export const McpManagedConnection = {
+  Connecting: 'connecting',
+  Connected: 'connected',
+} as const;
+export type McpManagedConnection = typeof McpManagedConnection[keyof typeof McpManagedConnection];
+
+export const McpMarketplaceSource = {
+  Remote: 'remote',
+  LocalFile: 'local-file',
+} as const;
+export type McpMarketplaceSource = typeof McpMarketplaceSource[keyof typeof McpMarketplaceSource];
+
+export const MCP_PACKAGES_DIR_NAME = 'mcp-packages';
+
 /** Node.js env names that matter when launching stdio MCP servers. */
 export const McpNodeEnv = {
   // Dropped by OpenClaw's stdio env policy; the server form warns about it.

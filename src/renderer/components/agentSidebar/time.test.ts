@@ -42,3 +42,12 @@ test('formatAgentTaskRelativeTime switches to week month and year units', () => 
   expect(formatAgentTaskRelativeTime(now - 30 * 86400000).compact).toBe('1 月');
   expect(formatAgentTaskRelativeTime(now - 360 * 86400000).compact).toBe('1 年');
 });
+
+test('formatAgentTaskRelativeTime provides an exact date-time string in full', () => {
+  const sample = new Date(2026, 10, 24, 17, 11).getTime();
+  vi.spyOn(Date, 'now').mockReturnValue(sample + 2 * 3600000);
+
+  const result = formatAgentTaskRelativeTime(sample);
+  expect(result.full).toBe('2026/11/24 17:11');
+  expect(result.full).not.toBe(result.compact);
+});

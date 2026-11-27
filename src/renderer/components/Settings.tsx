@@ -1,4 +1,4 @@
-import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, QuestionMarkCircleIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, QuestionMarkCircleIcon, ShieldCheckIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -6,12 +6,13 @@ import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
+  BrowserDisplayMode,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
+  normalizeBrowserCdpUrl,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
-import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
-import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
+import { CoworkTempDirKind } from '../../shared/cowork/constants';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
 import {
   normalizeNotificationSettings,
@@ -19,9 +20,10 @@ import {
 } from '../../shared/notifications/constants';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
-  applyModelRuntimeProfileMetadata,
+  applyModelRuntimeProfileDefaults,
   buildModelCapabilityOverrides,
-  findKimiK3ReservedCustomParamKeys,
+  migrateKimiK3LegacyCustomParams,
+  ModelRuntimeProfile,
   ModelRuntimeProfileSource,
   OpenClawApi,
   ProviderAuthType,
@@ -29,17 +31,15 @@ import {
   ProviderRegistry,
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
-  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import { isUrlOnDomain } from '../../shared/url/hostname';
-import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
+import { defaultConfig, FontPreferences, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
 import { i18nService, LanguageType } from '../services/i18n';
-import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { resolveOpenClawRepairError, resolveOpenClawRepairHistoryWarning } from '../services/openclawRepair';
 import { clearPendingPublishingConversionAttribution } from '../services/publishingConversionAttribution';
@@ -56,51 +56,58 @@ import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
   CoworkAgentEngine,
-  CoworkMemoryStats,
   CoworkTempDirPreview,
-  CoworkUserMemoryEntry,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
-  OpenClawSessionKeepAlive,
 } from '../types/cowork';
-import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
-import DreamingRecoveryNotice from './cowork/DreamingRecoveryNotice';
-import DreamingSettingsSection from './cowork/DreamingSettingsSection';
-import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
 import { useDesktopCompanionState } from './desktopCompanion/useDesktopCompanionState';
-import DshExperimentalSettings from './DshExperimentalSettings';
+import { DshPluginEcosystemView } from './dsh/DshPluginEcosystemView';
 import ErrorMessage from './ErrorMessage';
 import FeedbackDialog from './feedback/FeedbackDialog';
 import BrainIcon from './icons/BrainIcon';
 import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
-import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
-import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
-import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
+import {
+  AboutEngineAcknowledgement,
+  AboutOpenSourceAction,
+  AboutOpenSourceRows,
+  AboutOpenSourceStarPrompt,
+} from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
+import DataMigrationDialogs from './settings/DataMigrationDialogs';
+import DataMigrationRestoreReportCard from './settings/DataMigrationRestoreReportCard';
+import DataPrivacySettingsSection from './settings/DataPrivacySettingsSection';
+import FontSizeSettingRow from './settings/FontSizeSettingRow';
+import GeneralSettingsSection from './settings/GeneralSettingsSection';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
+import ManualDataMigrationAction from './settings/ManualDataMigrationAction';
+import MemorySettings from './settings/MemorySettings';
+import ModelDiscoveryDialog from './settings/ModelDiscoveryDialog';
+import ModelEditorDialog from './settings/ModelEditorDialog';
 import {
   buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
   buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
   CONNECTIVITY_TEST_TOKEN_BUDGET,
+  CONTEXT_WINDOW_MAX,
+  CONTEXT_WINDOW_MIN,
   CUSTOM_PROVIDER_KEYS,
   getDefaultActiveProvider,
   getDefaultProviders,
   getEffectiveApiFormat,
-  getOpenClawProviderIdForConfig,
   getProviderDefaultBaseUrl,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
   MAX_OUTPUT_TOKENS_MAX,
   MAX_OUTPUT_TOKENS_MIN,
+  parseContextWindowInput,
   parseMaxOutputTokensInput,
   type ProviderConfig,
   providerKeys,
@@ -108,14 +115,35 @@ import {
   type ProvidersConfig,
   type ProviderType,
   resolveBaseUrl,
-  resolveModelSupportsImageForProvider,
   shouldAutoSwitchProviderBaseUrl,
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
-import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
-import OpenClawUserConfigRow from './settings/OpenClawUserConfigRow';
+import {
+  applyImmediateProviderMutation,
+  buildAvailableModelsFromProviders,
+  discardProviderConnectionDraft,
+  isProviderConnectionDirty,
+  normalizeProvidersForSettingsSave,
+  resolvePrimaryProviderForSettingsSave,
+} from './settings/modelSettingsPersistence';
+import ModelSettingsSection, { DeleteProviderConfirmDialog } from './settings/ModelSettingsSection';
 import ProviderTransferDialog from './settings/ProviderTransferDialog';
+import {
+  type RegisterSettingsDirtyGuard,
+  resolveDirtyGuardAction,
+  SETTINGS_FORM_SAVED_RESET_MS,
+  SettingsDirtyGuardAction,
+  type SettingsDirtyGuardEntry,
+  SettingsFormStatus,
+} from './settings/settingsDirtyGuard';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
+import { SETTINGS_ACTION_BUTTON_CLASS, SETTINGS_PRIMARY_BUTTON_CLASS, SettingsSwitch } from './settings/SettingsLayout';
+import {
+  filterVisibleSettingsTabs,
+  normalizeSettingsTab,
+  type SettingsTab,
+  SettingsTabId,
+} from './settings/settingsTabs';
 import {
   SETTINGS_DESCRIPTION_TEXT,
   SETTINGS_ITEM_TITLE_TEXT,
@@ -124,19 +152,15 @@ import {
   SETTINGS_PAGE_TITLE_TEXT,
   SETTINGS_SECTION_TITLE_TEXT,
 } from './settings/settingsTypography';
+import UnsavedChangesConfirmDialog from './settings/UnsavedChangesConfirmDialog';
+import { useDataMigration } from './settings/useDataMigration';
+import { useModelDiscovery } from './settings/useModelDiscovery';
 import { useProviderTransfer } from './settings/useProviderTransfer';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
-import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'desktopCompanion' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'help' | 'about';
-
-const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => resolve());
-  });
-});
+type TabType = SettingsTab;
 
 const getAutoLaunchErrorMessage = (errorCode?: string): string => {
   if (errorCode === AppSettingsAutoLaunchErrorCode.RequiresApproval) {
@@ -160,37 +184,6 @@ const formatBackupSize = (sizeBytes?: number): string => {
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 };
 
-const normalizeProvidersForSettingsSave = (providers: ProvidersConfig): ProvidersConfig => (
-  Object.fromEntries(
-    Object.entries(providers).map(([providerKey, providerConfig]) => {
-      const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
-      const hasValidAuth = hasProviderAuthConfigured(providerKey as ProviderType, providerConfig);
-      return [
-        providerKey,
-        {
-          ...providerConfig,
-          enabled: providerConfig.enabled && hasValidAuth,
-          apiFormat,
-          ...(providerKey === ProviderName.Copilot ? { apiKey: '' } : {}),
-          baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
-        },
-      ];
-    })
-  ) as ProvidersConfig
-);
-
-const resolvePrimaryProviderForSettingsSave = (
-  providers: ProvidersConfig,
-  activeProvider: ProviderType,
-): ProviderConfig => {
-  const firstEnabledProvider = Object.entries(providers).find(
-    ([_, config]) => config.enabled
-  );
-  return firstEnabledProvider
-    ? firstEnabledProvider[1]
-    : providers[activeProvider];
-};
-
 // The global shortcut stays in companion preferences so existing bindings are preserved.
 const SettingsShortcutAction = { ...ShortcutAction, QuickPanel: 'quickPanel' } as const;
 type SettingsShortcutAction = typeof SettingsShortcutAction[keyof typeof SettingsShortcutAction];
@@ -205,26 +198,26 @@ type ShortcutCommandDefinition = {
 };
 
 const SETTINGS_TAB_SHORTCUT_ACTIONS: Partial<Record<SettingsShortcutAction, TabType>> = {
-  [ShortcutAction.OpenSettingsGeneral]: 'general',
-  [ShortcutAction.OpenSettingsAppearance]: 'appearance',
+  [ShortcutAction.OpenSettingsGeneral]: SettingsTabId.General,
+  [ShortcutAction.OpenSettingsAppearance]: SettingsTabId.Appearance,
   [ShortcutAction.OpenSettingsDesktopCompanion]: OpenSettingsTab.DesktopCompanion,
-  [ShortcutAction.OpenSettingsAgentEngine]: 'coworkAgentEngine',
-  [ShortcutAction.OpenSettingsModel]: 'model',
-  [ShortcutAction.OpenSettingsIm]: 'im',
-  [ShortcutAction.OpenSettingsBrowser]: 'browserWebAccess',
-  [ShortcutAction.OpenSettingsEmail]: 'email',
-  [ShortcutAction.OpenSettingsMemory]: 'coworkMemory',
-  [ShortcutAction.OpenSettingsDreaming]: 'coworkDreaming',
-  [ShortcutAction.OpenSettingsPlugins]: 'plugins',
-  [ShortcutAction.OpenSettingsShortcuts]: 'shortcuts',
-  [ShortcutAction.OpenSettingsAbout]: 'about',
+  [ShortcutAction.OpenSettingsAgentEngine]: SettingsTabId.CoworkAgentEngine,
+  [ShortcutAction.OpenSettingsModel]: SettingsTabId.Model,
+  [ShortcutAction.OpenSettingsIm]: SettingsTabId.Im,
+  [ShortcutAction.OpenSettingsBrowser]: SettingsTabId.BrowserWebAccess,
+  [ShortcutAction.OpenSettingsEmail]: SettingsTabId.Email,
+  [ShortcutAction.OpenSettingsMemory]: SettingsTabId.CoworkMemory,
+  [ShortcutAction.OpenSettingsDreaming]: SettingsTabId.CoworkDreaming,
+  [ShortcutAction.OpenSettingsPlugins]: SettingsTabId.Plugins,
+  [ShortcutAction.OpenSettingsDataPrivacy]: SettingsTabId.DataPrivacy,
+  [ShortcutAction.OpenSettingsShortcuts]: SettingsTabId.Shortcuts,
+  [ShortcutAction.OpenSettingsAbout]: SettingsTabId.About,
 };
 
 const SettingsAnalyticsSource = {
   AgentEngine: 'settings_agent_engine',
   Appearance: 'settings_appearance',
   Browser: 'settings_browser',
-  Dreaming: 'settings_dreaming',
   General: 'settings_general',
   Memory: 'settings_memory',
   Model: 'settings_model',
@@ -248,34 +241,12 @@ type MemorySettingAnalyticsSummary = {
   memoryLlmJudgeEnabled: boolean;
 };
 
-type DreamingSettingAnalyticsSummary = {
-  changedKeys: string;
-  dreamingEnabled: boolean;
-  frequencyType: 'preset' | 'custom';
-};
-
 type ShortcutSettingAnalyticsSummary = {
   changedCount: number;
   configuredCount: number;
   disabledCount: number;
   resetToDefault: boolean;
 };
-
-type PluginSettingsAnalyticsSummary = {
-  changedKeys: string;
-  configCount: number;
-  disabledToggleCount: number;
-  enabledToggleCount: number;
-  toggleCount: number;
-};
-
-const DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS = new Set([
-  '0 3 * * *',
-  '0 0 * * *',
-  '0 0,12 * * *',
-  '0 */6 * * *',
-  '0 3 * * 0',
-]);
 
 type CustomModelSettingsAnalyticsSummary = {
   changedKeys: string;
@@ -429,15 +400,27 @@ const buildBrowserSettingAnalyticsParams = (
 ): {
   blockedHostnameCount: number;
   changedKeys: string;
-  networkMode: string;
+  displayMode: string;
   previousBlockedHostnameCount?: number;
 } | null => {
   const changedKeys = new Set<string>();
-  if (previousConfig.networkMode !== nextConfig.networkMode) {
-    changedKeys.add('network_mode');
+  if (previousConfig.displayMode !== nextConfig.displayMode) {
+    changedKeys.add('display_mode');
   }
-  if (previousConfig.blockedHostnames.length !== nextConfig.blockedHostnames.length) {
+  if (previousConfig.credentialUseMode !== nextConfig.credentialUseMode) {
+    changedKeys.add('credential_use_mode');
+  }
+  if (previousConfig.credentialSaveMode !== nextConfig.credentialSaveMode) {
+    changedKeys.add('credential_save_mode');
+  }
+  if (JSON.stringify(previousConfig.blockedHostnames) !== JSON.stringify(nextConfig.blockedHostnames)) {
     changedKeys.add('blocked_hostnames');
+  }
+  if (previousConfig.executablePath !== nextConfig.executablePath) {
+    changedKeys.add('executable_path');
+  }
+  if (previousConfig.cdpUrl !== nextConfig.cdpUrl) {
+    changedKeys.add('cdp_url');
   }
 
   if (changedKeys.size === 0) {
@@ -447,106 +430,8 @@ const buildBrowserSettingAnalyticsParams = (
   return {
     blockedHostnameCount: nextConfig.blockedHostnames.length,
     changedKeys: Array.from(changedKeys).sort().join(','),
-    networkMode: nextConfig.networkMode,
+    displayMode: nextConfig.displayMode,
     previousBlockedHostnameCount: previousConfig.blockedHostnames.length,
-  };
-};
-
-const buildMemorySettingAnalyticsSummary = (
-  previousConfig: {
-    embeddingEnabled: boolean;
-    embeddingModel: string;
-    embeddingProvider: string;
-    embeddingRemoteApiKey: string;
-    embeddingRemoteBaseUrl: string;
-    embeddingVectorWeight: number;
-    memoryEnabled: boolean;
-    memoryLlmJudgeEnabled: boolean;
-  },
-  nextConfig: {
-    embeddingEnabled: boolean;
-    embeddingModel: string;
-    embeddingProvider: string;
-    embeddingRemoteApiKey: string;
-    embeddingRemoteBaseUrl: string;
-    embeddingVectorWeight: number;
-    memoryEnabled: boolean;
-    memoryLlmJudgeEnabled: boolean;
-  },
-): MemorySettingAnalyticsSummary | null => {
-  const changedKeys = new Set<string>();
-  if (previousConfig.memoryEnabled !== nextConfig.memoryEnabled) {
-    changedKeys.add('memory_enabled');
-  }
-  if (previousConfig.memoryLlmJudgeEnabled !== nextConfig.memoryLlmJudgeEnabled) {
-    changedKeys.add('llm_judge_enabled');
-  }
-  if (previousConfig.embeddingEnabled !== nextConfig.embeddingEnabled) {
-    changedKeys.add('embedding_enabled');
-  }
-  if (previousConfig.embeddingProvider !== nextConfig.embeddingProvider) {
-    changedKeys.add('embedding_provider');
-  }
-  if (previousConfig.embeddingModel !== nextConfig.embeddingModel) {
-    changedKeys.add('embedding_model');
-  }
-  if (previousConfig.embeddingRemoteBaseUrl !== nextConfig.embeddingRemoteBaseUrl) {
-    changedKeys.add('embedding_base_url');
-  }
-  if (previousConfig.embeddingRemoteApiKey !== nextConfig.embeddingRemoteApiKey) {
-    changedKeys.add('embedding_api_key');
-  }
-  if (previousConfig.embeddingVectorWeight !== nextConfig.embeddingVectorWeight) {
-    changedKeys.add('embedding_vector_weight');
-  }
-
-  if (changedKeys.size === 0) {
-    return null;
-  }
-
-  return {
-    changedKeys: Array.from(changedKeys).sort().join(','),
-    embeddingEnabled: nextConfig.embeddingEnabled,
-    embeddingProvider: nextConfig.embeddingProvider,
-    embeddingVectorWeight: nextConfig.embeddingVectorWeight,
-    hasEmbeddingApiKey: nextConfig.embeddingRemoteApiKey.trim().length > 0,
-    hasEmbeddingBaseUrl: nextConfig.embeddingRemoteBaseUrl.trim().length > 0,
-    hasEmbeddingModel: nextConfig.embeddingModel.trim().length > 0,
-    memoryEnabled: nextConfig.memoryEnabled,
-    memoryLlmJudgeEnabled: nextConfig.memoryLlmJudgeEnabled,
-  };
-};
-
-const resolveDreamingFrequencyType = (frequency: string): 'preset' | 'custom' => (
-  DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS.has(frequency) ? 'preset' : 'custom'
-);
-
-const buildDreamingSettingAnalyticsSummary = (
-  previousConfig: {
-    dreamingEnabled: boolean;
-    dreamingFrequency: string;
-  },
-  nextConfig: {
-    dreamingEnabled: boolean;
-    dreamingFrequency: string;
-  },
-): DreamingSettingAnalyticsSummary | null => {
-  const changedKeys = new Set<string>();
-  if (previousConfig.dreamingEnabled !== nextConfig.dreamingEnabled) {
-    changedKeys.add('dreaming_enabled');
-  }
-  if (previousConfig.dreamingFrequency !== nextConfig.dreamingFrequency) {
-    changedKeys.add('dreaming_frequency');
-  }
-
-  if (changedKeys.size === 0) {
-    return null;
-  }
-
-  return {
-    changedKeys: Array.from(changedKeys).sort().join(','),
-    dreamingEnabled: nextConfig.dreamingEnabled,
-    frequencyType: resolveDreamingFrequencyType(nextConfig.dreamingFrequency),
   };
 };
 
@@ -587,31 +472,6 @@ const buildShortcutSettingAnalyticsSummary = (
   };
 };
 
-const buildPluginSettingsAnalyticsSummary = (
-  pendingChanges: PluginPendingChanges | null,
-): PluginSettingsAnalyticsSummary | null => {
-  if (!pendingChanges) {
-    return null;
-  }
-  const toggleCount = pendingChanges.toggles.length;
-  const configCount = pendingChanges.configs.length;
-  if (toggleCount === 0 && configCount === 0) {
-    return null;
-  }
-  const changedKeys = [
-    ...(toggleCount > 0 ? ['toggle'] : []),
-    ...(configCount > 0 ? ['config'] : []),
-  ].join(',');
-
-  return {
-    changedKeys,
-    configCount,
-    disabledToggleCount: pendingChanges.toggles.filter(change => !change.enabled).length,
-    enabledToggleCount: pendingChanges.toggles.filter(change => change.enabled).length,
-    toggleCount,
-  };
-};
-
 const reportGeneralSettingChanged = (
   settingKey: string,
   settingValue: SettingsAnalyticsValue,
@@ -644,7 +504,7 @@ const reportBrowserSettingChanged = (
   params: {
     blockedHostnameCount: number;
     changedKeys: string;
-    networkMode: string;
+    displayMode: string;
     previousBlockedHostnameCount?: number;
   },
 ): void => {
@@ -676,28 +536,6 @@ const reportMemoryEntryChanged = (
     source: SettingsAnalyticsSource.Memory,
     operation,
     entryCount,
-  });
-};
-
-const reportDreamingSettingChanged = (
-  summary: DreamingSettingAnalyticsSummary,
-): void => {
-  console.debug('[Settings] reporting dreaming setting analytics');
-  void reportYdAnalyzer({
-    action: LogReporterAction.DreamingSettingChanged,
-    source: SettingsAnalyticsSource.Dreaming,
-    ...summary,
-  });
-};
-
-const reportPluginSettingsSaved = (
-  summary: PluginSettingsAnalyticsSummary,
-): void => {
-  console.debug('[Settings] reporting plugin settings analytics');
-  void reportYdAnalyzer({
-    action: LogReporterAction.PluginSettingsSaved,
-    source: SettingsAnalyticsSource.Plugins,
-    ...summary,
   });
 };
 
@@ -809,14 +647,13 @@ const SETTINGS_TAB_SHORTCUT_COMMANDS: ShortcutCommandDefinition[] = [
   { key: ShortcutAction.OpenSettingsGeneral, tabLabelKey: 'general' },
   { key: ShortcutAction.OpenSettingsAppearance, tabLabelKey: 'appearance' },
   { key: ShortcutAction.OpenSettingsDesktopCompanion, tabLabelKey: 'desktopCompanionTitle' },
-  { key: ShortcutAction.OpenSettingsAgentEngine, tabLabelKey: 'coworkAgentEngine' },
   { key: ShortcutAction.OpenSettingsModel, tabLabelKey: 'settingsCustomModel' },
   { key: ShortcutAction.OpenSettingsIm, tabLabelKey: 'imBot' },
   { key: ShortcutAction.OpenSettingsBrowser, tabLabelKey: 'browserWebAccessTab' },
-  { key: ShortcutAction.OpenSettingsEmail, tabLabelKey: 'emailTab' },
   { key: ShortcutAction.OpenSettingsMemory, tabLabelKey: 'coworkMemoryTitle' },
-  { key: ShortcutAction.OpenSettingsDreaming, tabLabelKey: 'coworkMemoryTabDreaming' },
+  { key: ShortcutAction.OpenSettingsEmail, tabLabelKey: 'emailTab' },
   { key: ShortcutAction.OpenSettingsPlugins, tabLabelKey: 'pluginsTab' },
+  { key: ShortcutAction.OpenSettingsDataPrivacy, tabLabelKey: 'dataPrivacyTab' },
   { key: ShortcutAction.OpenSettingsAbout, tabLabelKey: 'about' },
 ].map(command => ({
   ...command,
@@ -919,23 +756,6 @@ const SettingsSlidersIcon: React.FC<{ className?: string }> = ({ className }) =>
   </svg>
 );
 
-const DreamingTabIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    width="34"
-    height="34"
-    viewBox="0 0 34 34"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    className={className}
-    aria-hidden="true"
-  >
-    <path
-      d="M27.9219 21.9648L29.014 22.4621L29.8552 20.6145L27.831 20.7683L27.9219 21.9648ZM16.0762 5.03516L17.1683 5.53234L18.0095 3.68449L15.9851 3.83862L16.0762 5.03516ZM27.9219 21.9648L26.8297 21.4676C25.1281 25.205 21.3674 27.8 17 27.8V29V30.2C22.3442 30.2 26.9378 27.0221 29.014 22.4621L27.9219 21.9648ZM17 29V27.8C11.0353 27.8 6.2 22.9647 6.2 17H5H3.8C3.8 24.2902 9.70984 30.2 17 30.2V29ZM5 17H6.2C6.2 11.3157 10.5923 6.65614 16.1673 6.23169L16.0762 5.03516L15.9851 3.83862C9.16855 4.35759 3.8 10.0512 3.8 17H5ZM16.0762 5.03516L14.984 4.53798C14.2262 6.20275 13.8 8.052 13.8 10H15H16.2C16.2 8.40537 16.5483 6.8944 17.1683 5.53234L16.0762 5.03516ZM15 10H13.8C13.8 17.2902 19.7098 23.2 27 23.2V22V20.8C21.0353 20.8 16.2 15.9647 16.2 10H15ZM27 22V23.2C27.3413 23.2 27.679 23.1868 28.0128 23.1614L27.9219 21.9648L27.831 20.7683C27.5562 20.7892 27.2791 20.8 27 20.8V22Z"
-      fill="currentColor"
-    />
-  </svg>
-);
-
 // A desktop screen with the floating orb docked on its corner.
 const FloatingOrbTabIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg
@@ -958,6 +778,7 @@ const FloatingOrbTabIcon: React.FC<{ className?: string }> = ({ className }) => 
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
+  initialMemoryAgentId?: string;
   notice?: string;
   noticeI18nKey?: string;
   noticeExtra?: string;
@@ -1245,14 +1066,14 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
           className={`w-28 rounded-lg border px-2.5 py-1 text-xs cursor-pointer select-none text-center outline-none transition-colors
             dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
             ${open
-              ? 'border-claude-accent ring-1 ring-claude-accent/30'
-              : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
+              ? 'border-foreground/40 ring-1 ring-foreground/10'
+              : 'border-border hover:border-foreground/25'
             }`}
         >
           {currentLabel}
         </div>
         {open && (
-          <div className="absolute right-0 mt-1 z-50 min-w-[160px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset shadow-elevated py-1">
+          <div className="absolute right-0 mt-1 z-50 min-w-[160px] rounded-xl border border-border bg-surface shadow-elevated py-1">
             {SEND_SHORTCUT_OPTIONS.map((option) => {
               const label = isMacPlatform ? option.labelMac : option.label;
               const isActive = value === option.value;
@@ -1263,12 +1084,12 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
                   onClick={() => { onChange(option.value); setOpen(false); }}
                   className={`flex items-center justify-between w-full px-3 py-1.5 text-xs transition-colors
                     ${isActive
-                      ? 'dark:text-claude-accent text-claude-accent font-medium'
-                      : 'dark:text-claude-darkText text-claude-text'
-                    } hover:bg-claude-accent/10`}
+                      ? 'bg-surface-raised text-foreground font-medium'
+                      : 'text-foreground'
+                    } hover:bg-surface-raised`}
                 >
                   <span>{label}</span>
-                  {isActive && <span className="text-claude-accent">✓</span>}
+                  {isActive && <span className="text-foreground">✓</span>}
                 </button>
               );
             })}
@@ -1280,128 +1101,11 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
-const SettingsSwitch: React.FC<{
-  checked: boolean;
-  label: string;
-  disabled?: boolean;
-  onClick: () => void | Promise<void>;
-}> = ({ checked, label, disabled, onClick }) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    aria-label={label}
-    onClick={() => {
-      void onClick();
-    }}
-    disabled={disabled}
-    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-      disabled ? 'opacity-50 cursor-not-allowed' : ''
-    } ${
-      checked
-        ? 'bg-primary'
-        : 'bg-gray-300 dark:bg-gray-600'
-    }`}
-  >
-    <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-        checked ? 'translate-x-6' : 'translate-x-1'
-      }`}
-    />
-  </button>
-);
-
-const SettingsToggleRow: React.FC<{
-  title: string;
-  description: string;
-  checked: boolean;
-  disabled?: boolean;
-  onToggle: () => void | Promise<void>;
-}> = ({ title, description, checked, disabled, onToggle }) => (
-  <div>
-    <div className="flex items-center justify-between gap-4">
-      <h4 className={`min-w-0 flex-1 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-        {title}
-      </h4>
-      <SettingsSwitch
-        checked={checked}
-        label={title}
-        disabled={disabled}
-        onClick={onToggle}
-      />
-    </div>
-    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-      {description}
-    </p>
-  </div>
-);
-
-// Groups related settings rows into a labeled card (label above a bordered,
-// divider-separated card). Used to categorize the General settings tab.
-const SettingsGroup: React.FC<{
-  title: string;
-  children: React.ReactNode;
-  footer?: React.ReactNode;
-}> = ({ title, children, footer }) => (
-  <section className="space-y-2.5">
-    <h4 className="px-1 text-xs font-semibold uppercase tracking-wider text-secondary">
-      {title}
-    </h4>
-    <div className="divide-y divide-border rounded-xl border border-border bg-surface">
-      {children}
-    </div>
-    {footer}
-  </section>
-);
-
-// A single padded row inside a SettingsGroup card.
-const SettingsRow: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="px-4 py-3.5">{children}</div>
-);
-
-const SettingsNumberInputRow: React.FC<{
-  id: string;
-  title: string;
-  description: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (value: number) => void;
-}> = ({ id, title, description, value, min, max, onChange }) => (
-  <div className="flex items-center justify-between gap-4">
-    <div className="min-w-0 flex-1">
-      <label htmlFor={id} className={`block ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-        {title}
-      </label>
-      <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-        {description}
-      </p>
-    </div>
-    <div className="flex shrink-0 items-center gap-2">
-      <input
-        id={id}
-        type="number"
-        min={min}
-        max={max}
-        step={1}
-        value={value}
-        onChange={(event) => {
-          onChange(normalizeFontPreference(event.currentTarget.value, value, min, max));
-        }}
-        onBlur={(event) => {
-          onChange(normalizeFontPreference(event.currentTarget.value, value, min, max));
-        }}
-        className="h-8 w-16 rounded-lg border border-border bg-surface px-2 text-center text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20"
-      />
-      <span className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>px</span>
-    </div>
-  </div>
-);
-
 const Settings: React.FC<SettingsProps> = ({
   onClose,
   onStartAiSkin,
   initialTab,
+  initialMemoryAgentId,
   initialTabRequestId,
   notice,
   noticeI18nKey,
@@ -1417,17 +1121,16 @@ const Settings: React.FC<SettingsProps> = ({
     selectThemeMode,
   } = useSkin();
   // 状态
-  const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
+  const [activeTab, setActiveTab] = useState<TabType>(() => normalizeSettingsTab(initialTab));
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
   const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
   const [codeFontSize, setCodeFontSize] = useState<number>(FontPreferences.CodeFontSizeDefault);
   const [language, setLanguage] = useState<LanguageType>('zh');
-  const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(true);
+  const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
-  const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
   const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
   const [taskCompletionNotificationMode, setTaskCompletionNotificationMode] =
     useState<TaskCompletionNotificationMode>(TaskCompletionNotificationMode.Unfocused);
@@ -1435,14 +1138,16 @@ const Settings: React.FC<SettingsProps> = ({
   const [questionNotificationsEnabled, setQuestionNotificationsEnabled] = useState(true);
   const [browserWebAccess, setBrowserWebAccess] = useState<BrowserWebAccessConfig>(() => ({
     ...defaultBrowserWebAccessConfig,
-    webFetch: { ...defaultBrowserWebAccessConfig.webFetch },
+    blockedHostnames: [...defaultBrowserWebAccessConfig.blockedHostnames],
   }));
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [quitConfirmation, setQuitConfirmationState] = useState(true);
   const [isUpdatingQuitConfirmation, setIsUpdatingQuitConfirmation] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isUpdatingUseSystemProxy, setIsUpdatingUseSystemProxy] = useState(false);
+  const [isUpdatingShortcut, setIsUpdatingShortcut] = useState(false);
+  const [showResetShortcutsConfirm, setShowResetShortcutsConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const buildNoticeMessage = useCallback((): string | null => {
     if (noticeI18nKey) {
@@ -1457,11 +1162,20 @@ const Settings: React.FC<SettingsProps> = ({
   const [isTestResultModalOpen, setIsTestResultModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<ProviderType | null>(null);
-  const initialThemeIdRef = useRef<string>(themeService.getDefaultThemeId());
-  const initialUiFontSizeRef = useRef<number>(FontPreferences.UiFontSizeDefault);
-  const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
-  const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
-  const didSaveRef = useRef(false);
+  const dirtyGuardRef = useRef<SettingsDirtyGuardEntry | null>(null);
+  const [pendingGuardedAction, setPendingGuardedAction] = useState<(() => void) | null>(null);
+  const [isSavingPendingGuard, setIsSavingPendingGuard] = useState(false);
+  const [pendingGuardError, setPendingGuardError] = useState<string | null>(null);
+  const fontSizeSaveTimerRef = useRef<number | null>(null);
+  const pendingFontSizesRef = useRef<{ uiFontSize: number; codeFontSize: number } | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const handleDefaultThemeChanged = (event: Event) => {
@@ -1479,11 +1193,6 @@ const Settings: React.FC<SettingsProps> = ({
       window.removeEventListener(ThemeServiceEvent.DefaultChanged, handleDefaultThemeChanged);
     };
   }, []);
-
-  // Plugin settings handle (deferred save)
-  const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
-  // Unsaved edits from the experimental decision model card (deferred save)
-  const decisionModelDraftRef = useRef<DecisionModelConfigUpdate | null>(null);
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
@@ -1521,8 +1230,66 @@ const Settings: React.FC<SettingsProps> = ({
     { loggedIn: false } | { loggedIn: true; email?: string } | null
   >(null);
 
-  // Add state for providers configuration
+  // Add state for providers configuration (displayed state vs persisted baseline)
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const [savedProviders, setSavedProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const providersRef = useRef<ProvidersConfig>(providers);
+  providersRef.current = providers;
+  const visibleProviderConfigRef = useRef<ProviderConfig | undefined>(undefined);
+  visibleProviderConfigRef.current = activeTab === SettingsTabId.Model ? providers[activeProvider] : undefined;
+  const savedProvidersRef = useRef<ProvidersConfig>(savedProviders);
+  savedProvidersRef.current = savedProviders;
+  const [connectionFormStatus, setConnectionFormStatus] = useState<SettingsFormStatus>(SettingsFormStatus.Idle);
+  const [connectionSaveError, setConnectionSaveError] = useState<string | null>(null);
+  const connectionSavedTimerRef = useRef<number | null>(null);
+
+  const clearConnectionSavedTimer = useCallback(() => {
+    if (connectionSavedTimerRef.current !== null) {
+      window.clearTimeout(connectionSavedTimerRef.current);
+      connectionSavedTimerRef.current = null;
+    }
+  }, []);
+
+  const persistProvidersSnapshot = useCallback(async (
+    nextProvidersToPersist: ProvidersConfig,
+    primaryHint: ProviderType,
+  ): Promise<ProvidersConfig> => {
+    const previousSaved = savedProvidersRef.current;
+    const normalizedProviders = normalizeProvidersForSettingsSave(nextProvidersToPersist);
+    const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, primaryHint);
+
+    await configService.updateConfig({
+      api: {
+        key: primaryProvider.apiKey,
+        baseUrl: primaryProvider.baseUrl,
+      },
+      providers: normalizedProviders,
+    });
+
+    apiService.setConfig({
+      apiKey: primaryProvider.apiKey,
+      baseUrl: primaryProvider.baseUrl,
+    });
+    dispatch(setAvailableModels(buildAvailableModelsFromProviders(normalizedProviders)));
+
+    savedProvidersRef.current = normalizedProviders;
+    if (mountedRef.current) {
+      setSavedProviders(normalizedProviders);
+    }
+
+    if (usageAnalyticsEnabled) {
+      const summary = buildCustomModelSettingsAnalyticsSummary(
+        normalizeProvidersForSettingsSave(previousSaved),
+        normalizedProviders,
+      );
+      if (summary) {
+        reportCustomModelSettingsSaved(summary);
+      }
+    }
+
+    return normalizedProviders;
+  }, [dispatch, usageAnalyticsEnabled]);
+
   const providerTransfer = useProviderTransfer({
     providers,
     onError: setError,
@@ -1531,12 +1298,34 @@ const Settings: React.FC<SettingsProps> = ({
       setIsTestResultModalOpen(false);
       setTestResult(null);
       setNoticeMessage(i18nService.t(legacy ? 'providersLegacyImported' : 'providersImported'));
+      void persistProvidersSnapshot(next, activeProvider).catch((saveError) => {
+        console.error('[Settings] failed to persist imported providers:', saveError);
+        setError(saveError instanceof Error ? saveError.message : i18nService.t('failedToSaveSettings'));
+      });
     },
   });
   const isImportingProviders = providerTransfer.reading || providerTransfer.busy;
   const isExportingProviders = providerTransfer.busy;
-
-
+  const modelDiscovery = useModelDiscovery({
+    activeProvider,
+    providers,
+    setProviders,
+    onModelsUpdated: (provider, nextModels) => {
+      const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+        savedProvidersRef.current,
+        providersRef.current,
+        provider,
+        (cfg) => ({ ...cfg, models: nextModels }),
+      );
+      setProviders(nextCurrent);
+      if (nextSaved) {
+        void persistProvidersSnapshot(nextSaved, provider).catch((saveError) => {
+          console.error('[Settings] failed to persist discovered models:', saveError);
+          setError(saveError instanceof Error ? saveError.message : i18nService.t('failedToSaveSettings'));
+        });
+      }
+    },
+  });
 
   // authType defaults to undefined on first open, which should behave as OAuth mode
   const minimaxIsOAuthMode = providers.minimax.authType !== 'apikey';
@@ -1548,8 +1337,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
-  // 内容区下方仍有未滚出的内容时，在底部按钮区上方显示渐隐遮罩
-  const [footerFadeVisible, setFooterFadeVisible] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
   const openClawGatewayCopiedTimerRef = useRef<number | null>(null);
@@ -1558,11 +1345,10 @@ const Settings: React.FC<SettingsProps> = ({
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(() => ({ ...defaultConfig.shortcuts! }));
   const { state: companionState, error: companionLoadError } = useDesktopCompanionState();
-  const [quickPanelShortcutDraft, setQuickPanelShortcutDraft] = useState<string | null>(null);
   const shortcutBindings = useMemo(() => ({
     ...shortcuts,
-    [SettingsShortcutAction.QuickPanel]: quickPanelShortcutDraft ?? companionState?.preferences.shortcut ?? '',
-  }), [shortcuts, quickPanelShortcutDraft, companionState?.preferences.shortcut]);
+    [SettingsShortcutAction.QuickPanel]: companionState?.preferences.shortcut ?? '',
+  }), [shortcuts, companionState?.preferences.shortcut]);
   const [shortcutSearchQuery, setShortcutSearchQuery] = useState('');
 
   // GitHub Copilot device code auth state
@@ -1580,7 +1366,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
-  const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
+  const [newModelContextWindow, setNewModelContextWindow] = useState<string>('');
   const [newModelMaxTokens, setNewModelMaxTokens] = useState<string>('');
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
@@ -1783,10 +1569,9 @@ const Settings: React.FC<SettingsProps> = ({
 
   const coworkConfig = useSelector(selectCoworkConfig);
 
-  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
+  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'dsh');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
-  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
   const [tempStorageUsageBytes, setTempStorageUsageBytes] = useState<number | null>(null);
   const [tempStorageCleanableBytes, setTempStorageCleanableBytes] = useState<number | null>(null);
   const [isCleaningTempStorage, setIsCleaningTempStorage] = useState<boolean>(false);
@@ -1801,79 +1586,41 @@ const Settings: React.FC<SettingsProps> = ({
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
   const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
-  const [embeddingLocalModelPath, setEmbeddingLocalModelPath] = useState<string>(coworkConfig.embeddingLocalModelPath ?? '');
   const [embeddingVectorWeight, setEmbeddingVectorWeight] = useState<number>(coworkConfig.embeddingVectorWeight ?? 0.7);
   const [embeddingRemoteBaseUrl, setEmbeddingRemoteBaseUrl] = useState<string>(coworkConfig.embeddingRemoteBaseUrl ?? '');
   const [embeddingRemoteApiKey, setEmbeddingRemoteApiKey] = useState<string>(coworkConfig.embeddingRemoteApiKey ?? '');
-  const [dreamingEnabled, setDreamingEnabled] = useState<boolean>(coworkConfig.dreamingEnabled ?? false);
-  const [dreamingFrequency, setDreamingFrequency] = useState<string>(coworkConfig.dreamingFrequency ?? '0 3 * * *');
-  const [dreamingModel, setDreamingModel] = useState<string>(coworkConfig.dreamingModel ?? '');
-  const [dreamingTimezone, setDreamingTimezone] = useState<string>(coworkConfig.dreamingTimezone ?? '');
-  const [memoryTab, setMemoryTab] = useState<'entries' | 'embedding'>('entries');
-  const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
-    coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
-  );
-  const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
-  const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
-  const [coworkMemoryListLoading, setCoworkMemoryListLoading] = useState<boolean>(false);
-  const [coworkMemoryQuery, setCoworkMemoryQuery] = useState<string>('');
-  const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
-  const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
-  const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
-  const [coworkMemoryRawMode, setCoworkMemoryRawMode] = useState<boolean>(false);
-  const [coworkMemoryRawText, setCoworkMemoryRawText] = useState<string>('');
-  const [coworkMemoryRawSaving, setCoworkMemoryRawSaving] = useState<boolean>(false);
-  const [coworkMemoryExpandedIds, setCoworkMemoryExpandedIds] = useState<Set<string>>(new Set());
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
   const [showOpenClawRepairConfirm, setShowOpenClawRepairConfirm] = useState<boolean>(false);
   const [isRepairingOpenClaw, setIsRepairingOpenClaw] = useState<boolean>(false);
   const [openClawRepairResult, setOpenClawRepairResult] = useState<OpenClawGatewayRepairResult | null>(null);
   const [openClawGatewayCopied, setOpenClawGatewayCopied] = useState<boolean>(false);
-  const [isBackingUpOpenClawData, setIsBackingUpOpenClawData] = useState<boolean>(false);
-  const [isRestoringOpenClawData, setIsRestoringOpenClawData] = useState<boolean>(false);
-  const [openClawDataBackupResult, setOpenClawDataBackupResult] = useState<{ path: string; sizeBytes?: number } | null>(null);
-  const [showOpenClawDataRestoreConfirm, setShowOpenClawDataRestoreConfirm] = useState<boolean>(false);
 
   useEffect(() => {
-    setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
+    setCoworkAgentEngine(coworkConfig.agentEngine || 'dsh');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
-    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
     setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? false);
     setOpenClawSkillReviewEnabled(coworkConfig.openClawSkillReviewEnabled ?? false);
     setOpenClawMemoryFlushEnabled(coworkConfig.openClawMemoryFlushEnabled ?? false);
     setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
     setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
     setEmbeddingModel(coworkConfig.embeddingModel ?? '');
-    setEmbeddingLocalModelPath(coworkConfig.embeddingLocalModelPath ?? '');
     setEmbeddingVectorWeight(coworkConfig.embeddingVectorWeight ?? 0.7);
     setEmbeddingRemoteBaseUrl(coworkConfig.embeddingRemoteBaseUrl ?? '');
     setEmbeddingRemoteApiKey(coworkConfig.embeddingRemoteApiKey ?? '');
-    setDreamingEnabled(coworkConfig.dreamingEnabled ?? false);
-    setDreamingFrequency(coworkConfig.dreamingFrequency ?? '0 3 * * *');
-    setDreamingModel(coworkConfig.dreamingModel ?? '');
-    setDreamingTimezone(coworkConfig.dreamingTimezone ?? '');
-    setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
-    coworkConfig.openClawSessionPolicy?.keepAlive,
-    coworkConfig.skipMissedJobs,
     coworkConfig.openClawHeartbeatEnabled,
     coworkConfig.openClawSkillReviewEnabled,
     coworkConfig.openClawMemoryFlushEnabled,
     coworkConfig.embeddingEnabled,
     coworkConfig.embeddingProvider,
     coworkConfig.embeddingModel,
-    coworkConfig.embeddingLocalModelPath,
     coworkConfig.embeddingVectorWeight,
     coworkConfig.embeddingRemoteBaseUrl,
     coworkConfig.embeddingRemoteApiKey,
-    coworkConfig.dreamingEnabled,
-    coworkConfig.dreamingFrequency,
-    coworkConfig.dreamingModel,
-    coworkConfig.dreamingTimezone,
   ]);
 
   const refreshTempStorageUsage = useCallback(async () => {
@@ -1889,7 +1636,7 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'general') return;
+    if (activeTab !== SettingsTabId.DataPrivacy) return;
     void refreshTempStorageUsage();
   }, [activeTab, refreshTempStorageUsage]);
 
@@ -1974,27 +1721,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     let active = true;
-    void window.electron.openclaw.dataMigration.getLastRestoreResult().then((response) => {
-      if (!active || !response.success || !response.result) return;
-      if (response.result.status === DataMigrationRestoreStatus.Success) {
-        setNoticeMessage(i18nService.t('openClawDataMigrationSuccess'));
-        return;
-      }
-      const message = response.result.error
-        ? `${i18nService.t('openClawDataMigrationFailed')}: ${response.result.error}`
-        : i18nService.t('openClawDataMigrationFailed');
-      setError(message);
-    }).catch((loadError) => {
-      if (!active) return;
-      setError(loadError instanceof Error ? loadError.message : i18nService.t('openClawDataMigrationFailed'));
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
     void coworkService.getOpenClawEngineStatus().then((status) => {
       if (!active || !status) return;
       setOpenClawEngineStatus(status);
@@ -2027,10 +1753,6 @@ const Settings: React.FC<SettingsProps> = ({
         FontPreferences.CodeFontSizeMax,
       );
       const defaultThemeId = themeService.getDefaultThemeId();
-      initialThemeIdRef.current = defaultThemeId;
-      initialUiFontSizeRef.current = resolvedUiFontSize;
-      initialCodeFontSizeRef.current = resolvedCodeFontSize;
-      initialLanguageRef.current = config.language;
       setTheme(config.theme);
       setThemeId(defaultThemeId);
       setUiFontSize(resolvedUiFontSize);
@@ -2040,7 +1762,6 @@ const Settings: React.FC<SettingsProps> = ({
         resolveArtifactAutoPreviewEnabled(config.artifactAutoPreviewEnabled),
       );
       setUseSystemProxy(config.useSystemProxy ?? false);
-      setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
       setUsageAnalyticsEnabled(config.usageAnalyticsEnabled !== false);
       {
         const notificationSettings = normalizeNotificationSettings(config.notificationSettings);
@@ -2076,206 +1797,105 @@ const Settings: React.FC<SettingsProps> = ({
       });
 
       // Set up providers based on saved config
-      if (config.api) {
+      if (config.api && !config.providers) {
         // For backward compatibility with older config
         // Initialize active provider based on baseUrl
         const normalizedApiBaseUrl = config.api.baseUrl.toLowerCase();
-        if (normalizedApiBaseUrl.includes('openai')) {
-          setActiveProvider('openai');
-          setProviders(prev => ({
-            ...prev,
-            openai: {
-              ...prev.openai,
+        const legacyProviderKey: ProviderType | null = normalizedApiBaseUrl.includes('openai')
+          ? 'openai'
+          : normalizedApiBaseUrl.includes('deepseek')
+            ? 'deepseek'
+            : (normalizedApiBaseUrl.includes('moonshot.ai') || normalizedApiBaseUrl.includes('moonshot.cn'))
+              ? 'moonshot'
+              : normalizedApiBaseUrl.includes('bigmodel.cn')
+                ? 'zhipu'
+                : normalizedApiBaseUrl.includes('minimax')
+                  ? 'minimax'
+                  : isUrlOnDomain(normalizedApiBaseUrl, 'openapi.youdao.com')
+                    ? 'youdaozhiyun'
+                    : normalizedApiBaseUrl.includes('dashscope')
+                      ? 'qwen'
+                      : normalizedApiBaseUrl.includes('stepfun')
+                        ? 'stepfun'
+                        : normalizedApiBaseUrl.includes('openrouter.ai')
+                          ? 'openrouter'
+                          : normalizedApiBaseUrl.includes('googleapis')
+                            ? 'gemini'
+                            : normalizedApiBaseUrl.includes('anthropic')
+                              ? 'anthropic'
+                              : (normalizedApiBaseUrl.includes('ollama') || normalizedApiBaseUrl.includes('11434'))
+                                ? 'ollama'
+                                : (normalizedApiBaseUrl.includes('lm-studio') || normalizedApiBaseUrl.includes(':1234'))
+                                  ? 'lm-studio'
+                                  : null;
+        if (legacyProviderKey) {
+          setActiveProvider(legacyProviderKey);
+          const legacyHydrated: ProvidersConfig = {
+            ...getDefaultProviders(),
+            [legacyProviderKey]: {
+              ...getDefaultProviders()[legacyProviderKey],
               enabled: true,
               apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('deepseek')) {
-          setActiveProvider('deepseek');
-          setProviders(prev => ({
-            ...prev,
-            deepseek: {
-              ...prev.deepseek,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('moonshot.ai') || normalizedApiBaseUrl.includes('moonshot.cn')) {
-          setActiveProvider('moonshot');
-          setProviders(prev => ({
-            ...prev,
-            moonshot: {
-              ...prev.moonshot,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('bigmodel.cn')) {
-          setActiveProvider('zhipu');
-          setProviders(prev => ({
-            ...prev,
-            zhipu: {
-              ...prev.zhipu,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('minimax')) {
-          setActiveProvider('minimax');
-          setProviders(prev => ({
-            ...prev,
-            minimax: {
-              ...prev.minimax,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (isUrlOnDomain(normalizedApiBaseUrl, 'openapi.youdao.com')) {
-          setActiveProvider('youdaozhiyun');
-          setProviders(prev => ({
-            ...prev,
-            youdaozhiyun: {
-              ...prev.youdaozhiyun,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('dashscope')) {
-          setActiveProvider('qwen');
-          setProviders(prev => ({
-            ...prev,
-            qwen: {
-              ...prev.qwen,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('stepfun')) {
-          setActiveProvider('stepfun');
-          setProviders(prev => ({
-            ...prev,
-            stepfun: {
-              ...prev.stepfun,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('openrouter.ai')) {
-          setActiveProvider('openrouter');
-          setProviders(prev => ({
-            ...prev,
-            openrouter: {
-              ...prev.openrouter,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('googleapis')) {
-          setActiveProvider('gemini');
-          setProviders(prev => ({
-            ...prev,
-            gemini: {
-              ...prev.gemini,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('anthropic')) {
-          setActiveProvider('anthropic');
-          setProviders(prev => ({
-            ...prev,
-            anthropic: {
-              ...prev.anthropic,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('ollama') || normalizedApiBaseUrl.includes('11434')) {
-          setActiveProvider('ollama');
-          setProviders(prev => ({
-            ...prev,
-            ollama: {
-              ...prev.ollama,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('lm-studio') || normalizedApiBaseUrl.includes(':1234')) {
-          setActiveProvider('lm-studio');
-          setProviders(prev => ({
-            ...prev,
-            'lm-studio': {
-              ...prev['lm-studio'],
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
+              baseUrl: config.api.baseUrl,
+            },
+          };
+          setProviders(legacyHydrated);
+          setSavedProviders(legacyHydrated);
+          savedProvidersRef.current = legacyHydrated;
         }
       }
 
       // Load provider-specific configurations if available
       // 合并已保存的配置和默认配置，确保新添加的 provider 能被显示
       if (config.providers) {
-        setProviders(prev => {
-          const merged = {
-            ...prev,  // 保留默认的 providers（包括新添加的 anthropic）
-            ...config.providers,  // 覆盖已保存的配置
-          };
+        const merged = {
+          ...getDefaultProviders(),  // 保留默认的 providers（包括新添加的 anthropic）
+          ...config.providers,  // 覆盖已保存的配置
+        };
 
-          // After merging, find the first enabled provider to set as activeProvider
-          // This ensures we don't use stale activeProvider from old config.api.baseUrl
-          const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
-          if (firstEnabledProvider) {
-            setActiveProvider(firstEnabledProvider);
-          }
+        // After merging, find the first enabled provider to set as activeProvider
+        // This ensures we don't use stale activeProvider from old config.api.baseUrl
+        const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
+        if (firstEnabledProvider) {
+          setActiveProvider(firstEnabledProvider);
+        }
 
-          return Object.fromEntries(
-            Object.entries(merged).map(([providerKey, providerConfig]) => {
-              const models = providerConfig.models?.map((model, idx) => {
-                let id = model.id;
-                // Fix corrupted model IDs from previous OAuth mutation bug
-                if (providerKey === 'qwen' && (id === 'vision-model' || id === 'coder-model')) {
-                  const defaultModel = defaultConfig.providers?.qwen?.models?.[idx];
-                  id = defaultModel?.id || 'qwen3.5-plus';
-                }
-                return {
-                  ...model,
+        const hydratedProviders = Object.fromEntries(
+          Object.entries(merged).map(([providerKey, providerConfig]) => {
+            const models = providerConfig.models?.map((model, idx) => {
+              let id = model.id;
+              // Fix corrupted model IDs from previous OAuth mutation bug
+              if (providerKey === 'qwen' && (id === 'vision-model' || id === 'coder-model')) {
+                const defaultModel = defaultConfig.providers?.qwen?.models?.[idx];
+                id = defaultModel?.id || 'qwen3.5-plus';
+              }
+              return {
+                ...model,
+                id,
+                supportsImage: ProviderRegistry.resolveModelSupportsImage(
+                  providerKey,
                   id,
-                  supportsImage: ProviderRegistry.resolveModelSupportsImage(
-                    providerKey,
-                    id,
-                    model.supportsImage,
-                    model.capabilityOverrides?.image,
-                  ),
-                };
-              });
-              return [
-                providerKey,
-                {
-                  ...providerConfig,
-                  apiFormat: getEffectiveApiFormat(providerKey, (providerConfig as ProviderConfig).apiFormat),
-                  ...(providerKey === ProviderName.Copilot && providerConfig.apiKey?.trim()
-                    ? { authType: ProviderAuthType.OAuth, apiKey: '' }
-                    : {}),
-                  models,
-                },
-              ];
-            })
-          ) as ProvidersConfig;
-        });
+                  model.supportsImage,
+                  model.capabilityOverrides?.image,
+                ),
+              };
+            });
+            return [
+              providerKey,
+              {
+                ...providerConfig,
+                apiFormat: getEffectiveApiFormat(providerKey, (providerConfig as ProviderConfig).apiFormat),
+                ...(providerKey === ProviderName.Copilot && providerConfig.apiKey?.trim()
+                  ? { authType: ProviderAuthType.OAuth, apiKey: '' }
+                  : {}),
+                models,
+              },
+            ];
+          }),
+        ) as ProvidersConfig;
+        setProviders(hydratedProviders);
+        setSavedProviders(hydratedProviders);
+        savedProvidersRef.current = hydratedProviders;
       }
 
       // 加载快捷键设置
@@ -2290,20 +1910,26 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, []);
 
-  useEffect(() => {
-    const initialUiFontSize = initialUiFontSizeRef.current;
-    const initialCodeFontSize = initialCodeFontSizeRef.current;
-    const initialLanguage = initialLanguageRef.current;
-    return () => {
-      if (didSaveRef.current) {
-        return;
-      }
-      applyTypographyPreferences({
-        uiFontSize: initialUiFontSize,
-        codeFontSize: initialCodeFontSize,
+  // Flush any debounced font-size write if the settings dialog closes before the timer fires.
+  useEffect(() => () => {
+    if (connectionSavedTimerRef.current !== null) {
+      window.clearTimeout(connectionSavedTimerRef.current);
+      connectionSavedTimerRef.current = null;
+    }
+    if (fontSizeSaveTimerRef.current !== null) {
+      window.clearTimeout(fontSizeSaveTimerRef.current);
+      fontSizeSaveTimerRef.current = null;
+    }
+    const pendingFonts = pendingFontSizesRef.current;
+    if (pendingFonts) {
+      pendingFontSizesRef.current = null;
+      void configService.updateConfig({
+        uiFontSize: pendingFonts.uiFontSize,
+        codeFontSize: pendingFonts.codeFontSize,
+      }).catch((err) => {
+        console.error('[Settings] failed to flush font preferences on unmount:', err);
       });
-      i18nService.setLanguage(initialLanguage, { persist: false });
-    };
+    }
   }, []);
 
   // 监听标签页切换，确保内容区域滚动到顶部
@@ -2313,40 +1939,13 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [activeTab]);
 
-  // 跟踪内容区滚动/尺寸/内容变化，决定底部渐隐遮罩是否显示
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      setFooterFadeVisible(el.scrollHeight - el.scrollTop - el.clientHeight > 1);
-    };
-    const scheduleUpdate = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(update);
-    };
-    scheduleUpdate();
-    el.addEventListener('scroll', scheduleUpdate, { passive: true });
-    const resizeObserver = new ResizeObserver(scheduleUpdate);
-    resizeObserver.observe(el);
-    const mutationObserver = new MutationObserver(scheduleUpdate);
-    mutationObserver.observe(el, { childList: true, subtree: true });
-    return () => {
-      el.removeEventListener('scroll', scheduleUpdate);
-      resizeObserver.disconnect();
-      mutationObserver.disconnect();
-      if (frame) cancelAnimationFrame(frame);
-    };
-  }, []);
-
   useEffect(() => {
     setNoticeMessage(buildNoticeMessage());
   }, [buildNoticeMessage]);
 
   useEffect(() => {
     if (initialTab) {
-      setActiveTab(initialTab);
+      setActiveTab(normalizeSettingsTab(initialTab));
     }
   }, [initialTab, initialTabRequestId]);
 
@@ -2391,36 +1990,196 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [visibleProviders, activeProvider]);
 
+  const registerDirtyGuard = useCallback<RegisterSettingsDirtyGuard>((entry) => {
+    dirtyGuardRef.current = entry;
+  }, []);
+
+  const requestGuardedAction = useCallback((action: () => void) => {
+    if (resolveDirtyGuardAction(dirtyGuardRef.current) === SettingsDirtyGuardAction.Prompt) {
+      setPendingGuardError(null);
+      setPendingGuardedAction(() => action);
+      return;
+    }
+    action();
+  }, []);
+
+  const handleCancelPendingGuard = useCallback(() => {
+    if (isSavingPendingGuard) return;
+    setPendingGuardedAction(null);
+    setPendingGuardError(null);
+  }, [isSavingPendingGuard]);
+
+  const handleDiscardPendingGuard = useCallback(() => {
+    if (isSavingPendingGuard) return;
+    const action = pendingGuardedAction;
+    dirtyGuardRef.current?.discard();
+    dirtyGuardRef.current = null;
+    setPendingGuardedAction(null);
+    setPendingGuardError(null);
+    action?.();
+  }, [isSavingPendingGuard, pendingGuardedAction]);
+
+  const handleSavePendingGuard = useCallback(async () => {
+    if (isSavingPendingGuard || !pendingGuardedAction) return;
+    const guard = dirtyGuardRef.current;
+    if (!guard?.save) {
+      const action = pendingGuardedAction;
+      setPendingGuardedAction(null);
+      action();
+      return;
+    }
+    setIsSavingPendingGuard(true);
+    setPendingGuardError(null);
+    try {
+      const saved = await guard.save();
+      if (!mountedRef.current) return;
+      if (!saved) {
+        setPendingGuardError(i18nService.t('failedToSaveSettings'));
+        return;
+      }
+      const action = pendingGuardedAction;
+      dirtyGuardRef.current = null;
+      setPendingGuardedAction(null);
+      action();
+    } catch (saveErr) {
+      if (mountedRef.current) {
+        setPendingGuardError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsSavingPendingGuard(false);
+      }
+    }
+  }, [isSavingPendingGuard, pendingGuardedAction]);
+
+  const isActiveProviderConnectionDirty = useMemo(() => (
+    isProviderConnectionDirty(savedProviders[activeProvider], providers[activeProvider], activeProvider)
+  ), [activeProvider, providers, savedProviders]);
+
+  const resolvedConnectionFormStatus: SettingsFormStatus = connectionFormStatus === SettingsFormStatus.Saving
+    ? SettingsFormStatus.Saving
+    : connectionFormStatus === SettingsFormStatus.Error
+      ? SettingsFormStatus.Error
+      : isActiveProviderConnectionDirty
+        ? SettingsFormStatus.Dirty
+        : connectionFormStatus === SettingsFormStatus.Saved
+          ? SettingsFormStatus.Saved
+          : SettingsFormStatus.Idle;
+
+  const handleSaveProviderConnection = useCallback(async (): Promise<boolean> => {
+    const targetProvider = activeProvider;
+    const currentProviderConfig = providersRef.current[targetProvider];
+    if (!currentProviderConfig) return true;
+    clearConnectionSavedTimer();
+    setConnectionFormStatus(SettingsFormStatus.Saving);
+    setConnectionSaveError(null);
+    setError(null);
+    try {
+      const nextToSave: ProvidersConfig = {
+        ...savedProvidersRef.current,
+        [targetProvider]: { ...currentProviderConfig },
+      };
+      const normalized = await persistProvidersSnapshot(nextToSave, targetProvider);
+      if (!mountedRef.current) return true;
+      setProviders(prev => ({
+        ...prev,
+        [targetProvider]: normalized[targetProvider],
+      }));
+      setConnectionFormStatus(SettingsFormStatus.Saved);
+      connectionSavedTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) {
+          setConnectionFormStatus(SettingsFormStatus.Idle);
+        }
+        connectionSavedTimerRef.current = null;
+      }, SETTINGS_FORM_SAVED_RESET_MS);
+      return true;
+    } catch (saveErr) {
+      console.error('[Settings] failed to save provider connection:', saveErr);
+      if (mountedRef.current) {
+        setConnectionFormStatus(SettingsFormStatus.Error);
+        setConnectionSaveError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      }
+      return false;
+    }
+  }, [activeProvider, clearConnectionSavedTimer, persistProvidersSnapshot]);
+
+  const handleDiscardProviderConnection = useCallback(() => {
+    const targetProvider = activeProvider;
+    clearConnectionSavedTimer();
+    setConnectionSaveError(null);
+    setConnectionFormStatus(SettingsFormStatus.Idle);
+    const wasUnsavedCustom = !savedProvidersRef.current[targetProvider];
+    const reverted = discardProviderConnectionDraft(
+      savedProvidersRef.current,
+      providersRef.current,
+      targetProvider,
+    );
+    setProviders(reverted);
+    if (wasUnsavedCustom) {
+      const remainingKeys = Object.keys(reverted) as ProviderType[];
+      const firstEnabled = remainingKeys.find(k => reverted[k]?.enabled);
+      setActiveProvider(firstEnabled ?? remainingKeys[0] ?? providerKeys[0]);
+    }
+  }, [activeProvider, clearConnectionSavedTimer]);
+
+  useEffect(() => {
+    if (activeTab !== SettingsTabId.Model) return;
+    if (isActiveProviderConnectionDirty) {
+      registerDirtyGuard({
+        isDirty: true,
+        canSave: true,
+        save: handleSaveProviderConnection,
+        discard: handleDiscardProviderConnection,
+      });
+    } else {
+      registerDirtyGuard(null);
+    }
+    return () => {
+      registerDirtyGuard(null);
+    };
+  }, [
+    activeTab,
+    handleDiscardProviderConnection,
+    handleSaveProviderConnection,
+    isActiveProviderConnectionDirty,
+    registerDirtyGuard,
+  ]);
+
   // Handle adding a new custom provider
   const handleAddCustomProvider = () => {
-    // Find the first unused custom slot
-    const usedKeys = new Set(Object.keys(providers));
-    const newKey = CUSTOM_PROVIDER_KEYS.find(k => !usedKeys.has(k));
-    if (!newKey) return; // All custom provider slots used
-    setProviders(prev => ({
-      ...prev,
-      [newKey]: {
-        enabled: false,
-        apiKey: '',
-        baseUrl: '',
-        apiFormat: 'openai' as const,
-        models: [],
-        displayName: undefined,
-      },
-    }));
-    setActiveProvider(newKey);
-    setShowApiKey(false);
-    setIsAddingModel(false);
-    setIsEditingModel(false);
-    setEditingModelId(null);
-    setNewModelName('');
-    setNewModelId('');
-    setNewModelSupportsImage(false);
-    setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
-    setNewModelMaxTokens('');
-    setNewModelCustomParams('');
-    setModelFormError(null);
+    requestGuardedAction(() => {
+      // Find the first unused custom slot
+      const usedKeys = new Set(Object.keys(providersRef.current));
+      const newKey = CUSTOM_PROVIDER_KEYS.find(k => !usedKeys.has(k));
+      if (!newKey) return; // All custom provider slots used
+      clearConnectionSavedTimer();
+      setConnectionSaveError(null);
+      setConnectionFormStatus(SettingsFormStatus.Dirty);
+      setProviders(prev => ({
+        ...prev,
+        [newKey]: {
+          enabled: false,
+          apiKey: '',
+          baseUrl: '',
+          apiFormat: 'openai' as const,
+          models: [],
+          displayName: undefined,
+        },
+      }));
+      setActiveProvider(newKey);
+      setShowApiKey(false);
+      setIsAddingModel(false);
+      setIsEditingModel(false);
+      setEditingModelId(null);
+      setNewModelName('');
+      setNewModelId('');
+      setNewModelSupportsImage(false);
+      setNewModelSupportsThinking(false);
+      setNewModelContextWindow('');
+      setNewModelMaxTokens('');
+      setNewModelCustomParams('');
+      setModelFormError(null);
+    });
   };
 
   // Handle deleting a custom provider
@@ -2432,7 +2191,7 @@ const Settings: React.FC<SettingsProps> = ({
     const key = pendingDeleteProvider;
     if (!key) return;
     setPendingDeleteProvider(null);
-    const currentConfig = configService.getConfig();
+    const wasPersisted = Boolean(savedProvidersRef.current[key]);
     setProviders(prev => {
       const next = { ...prev };
       delete next[key];
@@ -2443,47 +2202,58 @@ const Settings: React.FC<SettingsProps> = ({
     // would still have activeProvider pointing at the just-deleted key, and the
     // model settings render accesses providers[activeProvider].* without guards,
     // crashing the whole view (white screen).
+    let fallbackProvider = activeProvider;
     if (activeProvider === key) {
       const visibleKeys = Object.keys(visibleProviders).filter(k => k !== key) as ProviderType[];
       const firstEnabled = visibleKeys.find(k => visibleProviders[k]?.enabled);
-      setActiveProvider(firstEnabled ?? visibleKeys[0] ?? providerKeys[0]);
+      fallbackProvider = firstEnabled ?? visibleKeys[0] ?? providerKeys[0];
+      setActiveProvider(fallbackProvider);
+      setConnectionFormStatus(SettingsFormStatus.Idle);
+      setConnectionSaveError(null);
     }
-    // Persist the deletion immediately so it survives window close
-    const updatedProviders = { ...currentConfig.providers };
-    delete updatedProviders[key];
+    if (!wasPersisted) return;
+    const updatedSavedProviders = { ...savedProvidersRef.current };
+    delete updatedSavedProviders[key];
     try {
-      await configService.updateConfig({ providers: updatedProviders as AppConfig['providers'] });
-      if (usageAnalyticsEnabled) {
-        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
-          (currentConfig.providers ?? providers) as ProvidersConfig,
-          updatedProviders as ProvidersConfig,
-        );
-        if (customModelSettingsSummary) {
-          reportCustomModelSettingsSaved(customModelSettingsSummary);
-        }
-      }
+      await persistProvidersSnapshot(updatedSavedProviders as ProvidersConfig, fallbackProvider);
     } catch (deleteError) {
       console.warn('[Settings] failed to persist custom provider deletion:', deleteError);
+      setError(deleteError instanceof Error ? deleteError.message : i18nService.t('failedToSaveSettings'));
     }
   };
 
   // Handle provider change
   const handleProviderChange = (provider: ProviderType) => {
-    setIsAddingModel(false);
-    setIsEditingModel(false);
-    setEditingModelId(null);
-    setNewModelName('');
-    setNewModelId('');
-    setNewModelSupportsImage(false);
-    setModelFormError(null);
-    setActiveProvider(provider);
-    // 切换 provider 时清除测试结果
-    setIsTestResultModalOpen(false);
-    setTestResult(null);
+    if (provider === activeProvider) return;
+    requestGuardedAction(() => {
+      clearConnectionSavedTimer();
+      setConnectionFormStatus(SettingsFormStatus.Idle);
+      setConnectionSaveError(null);
+      setIsAddingModel(false);
+      setIsEditingModel(false);
+      setEditingModelId(null);
+      setNewModelName('');
+      setNewModelId('');
+      setNewModelSupportsImage(false);
+      setModelFormError(null);
+      setActiveProvider(provider);
+      // 切换 provider 时清除测试结果
+      setIsTestResultModalOpen(false);
+      setTestResult(null);
+    });
   };
 
   // Handle provider configuration change
   const handleProviderConfigChange = (provider: ProviderType, field: string, value: string) => {
+    clearConnectionSavedTimer();
+    setTestResult(null);
+    setIsTestResultModalOpen(false);
+    setConnectionSaveError(null);
+    setConnectionFormStatus((prev) => (
+      prev === SettingsFormStatus.Error || prev === SettingsFormStatus.Saved
+        ? SettingsFormStatus.Idle
+        : prev
+    ));
     setProviders(prev => {
       if (field === 'apiFormat') {
         const nextApiFormat = getEffectiveApiFormat(provider, value);
@@ -2656,20 +2426,27 @@ const Settings: React.FC<SettingsProps> = ({
             baseUrl = defaultBaseUrl;
           }
 
-          setProviders(prev => ({
-            ...prev,
-            minimax: {
-              ...prev.minimax,
-              enabled: true,
-              oauthAccessToken: tokenPayload.access_token!,
-              oauthBaseUrl: baseUrl,
-              apiFormat: 'anthropic',
-              authType: 'oauth',
-              oauthRefreshToken: tokenPayload.refresh_token,
-              oauthTokenExpiresAt: tokenPayload.expired_in,
-              models: [...(defaultConfig.providers?.minimax.models ?? [])],
-            },
-          }));
+          const nextMinimax: ProviderConfig = {
+            ...providersRef.current.minimax,
+            enabled: true,
+            oauthAccessToken: tokenPayload.access_token!,
+            oauthBaseUrl: baseUrl,
+            apiFormat: 'anthropic',
+            authType: 'oauth',
+            oauthRefreshToken: tokenPayload.refresh_token,
+            oauthTokenExpiresAt: tokenPayload.expired_in,
+            models: [...(defaultConfig.providers?.minimax.models ?? [])],
+          };
+          const nextProviders: ProvidersConfig = {
+            ...providersRef.current,
+            minimax: nextMinimax,
+          };
+          const nextSavedProviders: ProvidersConfig = {
+            ...savedProvidersRef.current,
+            minimax: nextMinimax,
+          };
+          setProviders(nextProviders);
+          persistProviderAuthConfigInBackground(nextSavedProviders, 'minimax');
 
           setMinimaxOAuthPhase({ kind: 'success' });
           setTimeout(() => setMinimaxOAuthPhase({ kind: 'idle' }), 1500);
@@ -2693,17 +2470,24 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleMiniMaxOAuthLogout = () => {
-    setProviders(prev => ({
-      ...prev,
-      minimax: {
-        ...prev.minimax,
-        enabled: false,
-        oauthAccessToken: undefined,
-        oauthBaseUrl: undefined,
-        oauthRefreshToken: undefined,
-        oauthTokenExpiresAt: undefined,
-      },
-    }));
+    const nextMinimax: ProviderConfig = {
+      ...providersRef.current.minimax,
+      enabled: false,
+      oauthAccessToken: undefined,
+      oauthBaseUrl: undefined,
+      oauthRefreshToken: undefined,
+      oauthTokenExpiresAt: undefined,
+    };
+    const nextProviders: ProvidersConfig = {
+      ...providersRef.current,
+      minimax: nextMinimax,
+    };
+    const nextSavedProviders: ProvidersConfig = {
+      ...savedProvidersRef.current,
+      minimax: nextMinimax,
+    };
+    setProviders(nextProviders);
+    persistProviderAuthConfigInBackground(nextSavedProviders, 'minimax');
     setMinimaxOAuthPhase({ kind: 'idle' });
   };
 
@@ -2723,6 +2507,12 @@ const Settings: React.FC<SettingsProps> = ({
           if (prev.openai.authType !== 'oauth') return prev;
           return { ...prev, openai: { ...prev.openai, authType: 'apikey' } };
         });
+        setSavedProviders(prev => {
+          if (prev.openai.authType !== 'oauth') return prev;
+          const next = { ...prev, openai: { ...prev.openai, authType: 'apikey' as const } };
+          savedProvidersRef.current = next;
+          return next;
+        });
       }
     }).catch(() => {
       if (!cancelled) setOpenaiOAuthStatus({ loggedIn: false });
@@ -2730,12 +2520,15 @@ const Settings: React.FC<SettingsProps> = ({
     return () => { cancelled = true; };
   }, [activeProvider]);
 
-  const persistProviderAuthConfigInBackground = useCallback((nextProviders: ProvidersConfig) => {
-    void configService.updateConfig({ providers: nextProviders }).catch((saveError) => {
+  const persistProviderAuthConfigInBackground = useCallback((
+    nextProviders: ProvidersConfig,
+    primaryHint: ProviderType = activeProvider,
+  ) => {
+    void persistProvidersSnapshot(nextProviders, primaryHint).catch((saveError) => {
       console.error('[Settings] failed to save provider auth state:', saveError);
       setError(i18nService.t('failedToSaveSettings'));
     });
-  }, []);
+  }, [activeProvider, persistProvidersSnapshot]);
 
   const handleOpenAIOAuthLogin = async () => {
     setOpenaiOAuthPhase({ kind: 'pending' });
@@ -2745,18 +2538,23 @@ const Settings: React.FC<SettingsProps> = ({
         setOpenaiOAuthPhase({ kind: 'error', message: result.error });
         return;
       }
+      const nextOpenAI: ProviderConfig = {
+        ...providersRef.current.openai,
+        enabled: true,
+        authType: 'oauth',
+      };
       const nextProviders: ProvidersConfig = {
-        ...providers,
-        openai: {
-          ...providers.openai,
-          enabled: true,
-          authType: 'oauth',
-        },
+        ...providersRef.current,
+        openai: nextOpenAI,
+      };
+      const nextSavedProviders: ProvidersConfig = {
+        ...savedProvidersRef.current,
+        openai: nextOpenAI,
       };
       setProviders(nextProviders);
       setOpenaiOAuthStatus({ loggedIn: true, email: result.email ?? undefined });
       setOpenaiOAuthPhase({ kind: 'success', email: result.email ?? undefined });
-      persistProviderAuthConfigInBackground(nextProviders);
+      persistProviderAuthConfigInBackground(nextSavedProviders, 'openai');
       setTimeout(() => setOpenaiOAuthPhase({ kind: 'idle' }), 1500);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2774,21 +2572,23 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleOpenAIOAuthLogout = async () => {
-    const nextOpenAIProvider = {
-      ...providers.openai,
-      enabled: providers.openai.apiKey.trim().length > 0,
-      authType: 'apikey' as const,
+    const nextOpenAIProvider: ProviderConfig = {
+      ...providersRef.current.openai,
+      enabled: providersRef.current.openai.apiKey.trim().length > 0,
+      authType: 'apikey',
     };
     const nextProviders: ProvidersConfig = {
-      ...providers,
-      openai: {
-        ...nextOpenAIProvider,
-      },
+      ...providersRef.current,
+      openai: nextOpenAIProvider,
+    };
+    const nextSavedProviders: ProvidersConfig = {
+      ...savedProvidersRef.current,
+      openai: nextOpenAIProvider,
     };
     setProviders(nextProviders);
     setOpenaiOAuthStatus({ loggedIn: false });
     setOpenaiOAuthPhase({ kind: 'idle' });
-    persistProviderAuthConfigInBackground(nextProviders);
+    persistProviderAuthConfigInBackground(nextSavedProviders, 'openai');
     try {
       await window.electron.openaiCodexOAuth.logout();
     } catch {
@@ -2811,6 +2611,12 @@ const Settings: React.FC<SettingsProps> = ({
         setProviders(prev => {
           if (prev.xai.authType !== 'oauth') return prev;
           return { ...prev, xai: { ...prev.xai, authType: 'apikey' } };
+        });
+        setSavedProviders(prev => {
+          if (prev.xai.authType !== 'oauth') return prev;
+          const next = { ...prev, xai: { ...prev.xai, authType: 'apikey' as const } };
+          savedProvidersRef.current = next;
+          return next;
         });
       }
     }).catch(() => {
@@ -2840,18 +2646,23 @@ const Settings: React.FC<SettingsProps> = ({
         }
         return;
       }
+      const nextXai: ProviderConfig = {
+        ...providersRef.current.xai,
+        enabled: true,
+        authType: 'oauth',
+      };
       const nextProviders: ProvidersConfig = {
-        ...providers,
-        xai: {
-          ...providers.xai,
-          enabled: true,
-          authType: 'oauth',
-        },
+        ...providersRef.current,
+        xai: nextXai,
+      };
+      const nextSavedProviders: ProvidersConfig = {
+        ...savedProvidersRef.current,
+        xai: nextXai,
       };
       setProviders(nextProviders);
       setXaiOAuthStatus({ loggedIn: true, email: result.email ?? undefined });
       setXaiOAuthPhase({ kind: 'success', email: result.email ?? undefined });
-      persistProviderAuthConfigInBackground(nextProviders);
+      persistProviderAuthConfigInBackground(nextSavedProviders, 'xai');
       setTimeout(() => setXaiOAuthPhase({ kind: 'idle' }), 1500);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2871,18 +2682,23 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleXaiOAuthLogout = async () => {
+    const nextXai: ProviderConfig = {
+      ...providersRef.current.xai,
+      enabled: providersRef.current.xai.apiKey.trim().length > 0,
+      authType: 'apikey',
+    };
     const nextProviders: ProvidersConfig = {
-      ...providers,
-      xai: {
-        ...providers.xai,
-        enabled: providers.xai.apiKey.trim().length > 0,
-        authType: 'apikey' as const,
-      },
+      ...providersRef.current,
+      xai: nextXai,
+    };
+    const nextSavedProviders: ProvidersConfig = {
+      ...savedProvidersRef.current,
+      xai: nextXai,
     };
     setProviders(nextProviders);
     setXaiOAuthStatus({ loggedIn: false });
     setXaiOAuthPhase({ kind: 'idle' });
-    persistProviderAuthConfigInBackground(nextProviders);
+    persistProviderAuthConfigInBackground(nextSavedProviders, 'xai');
     try {
       await window.electron.xaiOAuth.logout();
     } catch {
@@ -2890,24 +2706,7 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
-    || coworkMemoryEnabled !== coworkConfig.memoryEnabled
-    || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
-    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
-    || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? false)
-    || openClawSkillReviewEnabled !== (coworkConfig.openClawSkillReviewEnabled ?? false)
-    || openClawMemoryFlushEnabled !== (coworkConfig.openClawMemoryFlushEnabled ?? false)
-    || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
-    || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
-    || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
-    || embeddingModel !== (coworkConfig.embeddingModel ?? '')
-    || embeddingLocalModelPath !== (coworkConfig.embeddingLocalModelPath ?? '')
-    || embeddingVectorWeight !== (coworkConfig.embeddingVectorWeight ?? 0.7)
-    || embeddingRemoteBaseUrl !== (coworkConfig.embeddingRemoteBaseUrl ?? '')
-    || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '')
-    || dreamingEnabled !== (coworkConfig.dreamingEnabled ?? false)
-    || dreamingFrequency !== (coworkConfig.dreamingFrequency ?? '0 3 * * *');
-  const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
+  const isOpenClawAgentEngine = coworkAgentEngine === 'dsh';
 
   const openClawProgressPercent = useMemo(() => {
     if (typeof openClawEngineStatus?.progressPercent !== 'number' || !Number.isFinite(openClawEngineStatus.progressPercent)) {
@@ -2935,7 +2734,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (phase === OpenClawEnginePhase.Running || phase === OpenClawEnginePhase.Ready) {
       return {
         Icon: CheckCircleIcon,
-        iconClassName: 'bg-primary-muted text-primary',
+        iconClassName: 'bg-surface-raised text-foreground',
         progressClassName: 'bg-primary',
         spinIcon: false,
         inProgress: false,
@@ -2950,7 +2749,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (phase === OpenClawEnginePhase.Installing || phase === OpenClawEnginePhase.Starting) {
       return {
         Icon: ArrowPathIcon,
-        iconClassName: 'bg-primary-muted text-primary',
+        iconClassName: 'bg-surface-raised text-foreground',
         progressClassName: 'bg-primary',
         spinIcon: true,
         inProgress: true,
@@ -3070,231 +2869,85 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [openClawRepairResult?.backupPath]);
 
-  const handleRevealOpenClawDataBackup = useCallback(async () => {
-    const backupPath = openClawDataBackupResult?.path;
-    if (!backupPath) return;
-    try {
-      const result = await window.electron.shell.showItemInFolder(backupPath);
-      if (!result?.success) {
-        setError(result?.error || i18nService.t('showInFolderFailed'));
-      }
-    } catch (revealError) {
-      setError(revealError instanceof Error ? revealError.message : i18nService.t('showInFolderFailed'));
-    }
-  }, [openClawDataBackupResult?.path]);
+  const dataMigration = useDataMigration({
+    onError: setError,
+    onNotice: setNoticeMessage,
+    onReportAction: reportAgentEngineMaintenanceAction,
+  });
 
-  const persistModelSettingsBeforeDataBackup = useCallback(async () => {
-    const normalizedProviders = normalizeProvidersForSettingsSave(providers);
-    const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
-    await configService.updateConfig({
-      api: {
-        key: primaryProvider.apiKey,
-        baseUrl: primaryProvider.baseUrl,
-      },
-      providers: normalizedProviders,
-    });
-  }, [activeProvider, providers]);
-
-  const handleOpenClawDataBackup = useCallback(async () => {
-    if (isBackingUpOpenClawData) return;
+  const handleToggleCoworkMemoryEnabled = useCallback(async (nextEnabled: boolean): Promise<boolean> => {
+    const previousEnabled = coworkMemoryEnabled;
+    setCoworkMemoryEnabled(nextEnabled);
     setError(null);
-    setNoticeMessage(null);
-    setOpenClawDataBackupResult(null);
-    setIsBackingUpOpenClawData(true);
     try {
-      await waitForNextPaint();
-      await persistModelSettingsBeforeDataBackup();
-      const result = await window.electron.openclaw.dataMigration.backup();
-      if (!result.success) {
-        setError(result.error || i18nService.t('openClawDataBackupFailed'));
-        reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
-        return;
+      const updated = await coworkService.updateConfig({ memoryEnabled: nextEnabled });
+      if (!updated) {
+        setCoworkMemoryEnabled(previousEnabled);
+        setError(i18nService.t('coworkConfigSaveFailed'));
+        return false;
       }
-      if (result.canceled) {
-        return;
+      if (usageAnalyticsEnabled && previousEnabled !== nextEnabled) {
+        reportMemorySettingChanged({
+          changedKeys: 'memory_enabled',
+          embeddingEnabled,
+          embeddingProvider,
+          embeddingVectorWeight,
+          hasEmbeddingApiKey: embeddingRemoteApiKey.trim().length > 0,
+          hasEmbeddingBaseUrl: embeddingRemoteBaseUrl.trim().length > 0,
+          hasEmbeddingModel: embeddingModel.trim().length > 0,
+          memoryEnabled: nextEnabled,
+          memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
+        });
       }
-      if (result.path) {
-        setOpenClawDataBackupResult({ path: result.path, sizeBytes: result.sizeBytes });
-      }
-      setNoticeMessage(i18nService.t('openClawDataBackupSuccess'));
-      reportAgentEngineMaintenanceAction('backup_data', 'success', {
-        sizeBytes: result.sizeBytes,
-      });
-    } catch (backupError) {
-      setError(backupError instanceof Error ? backupError.message : i18nService.t('openClawDataBackupFailed'));
-      reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
-    } finally {
-      setIsBackingUpOpenClawData(false);
-    }
-  }, [isBackingUpOpenClawData, persistModelSettingsBeforeDataBackup]);
-
-  const handleConfirmOpenClawDataRestore = useCallback(async () => {
-    if (isRestoringOpenClawData) return;
-    setShowOpenClawDataRestoreConfirm(false);
-    setError(null);
-    setNoticeMessage(null);
-    setIsRestoringOpenClawData(true);
-    let keepLoadingUntilRestart = false;
-    try {
-      await waitForNextPaint();
-      const result = await window.electron.openclaw.dataMigration.restore();
-      if (!result.success) {
-        setError(result.error || i18nService.t('openClawDataMigrationFailed'));
-        reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
-        return;
-      }
-      if (result.canceled) {
-        return;
-      }
-      if (result.scheduledRestart) {
-        keepLoadingUntilRestart = true;
-        setNoticeMessage(i18nService.t('openClawDataMigrationRestarting'));
-      }
-      reportAgentEngineMaintenanceAction('restore_data', 'success');
-    } catch (restoreError) {
-      setError(restoreError instanceof Error ? restoreError.message : i18nService.t('openClawDataMigrationFailed'));
-      reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
-    } finally {
-      if (!keepLoadingUntilRestart) {
-        setIsRestoringOpenClawData(false);
-      }
-    }
-  }, [isRestoringOpenClawData]);
-
-  const loadCoworkMemoryData = useCallback(async () => {
-    setCoworkMemoryListLoading(true);
-    try {
-      const [entries, stats] = await Promise.all([
-        coworkService.listMemoryEntries({
-          query: coworkMemoryQuery.trim() || undefined,
-        }),
-        coworkService.getMemoryStats(),
-      ]);
-      setCoworkMemoryEntries(entries);
-      setCoworkMemoryStats(stats);
-    } catch (loadError) {
-      console.error('Failed to load cowork memory data:', loadError);
-      setCoworkMemoryEntries([]);
-      setCoworkMemoryStats(null);
-    } finally {
-      setCoworkMemoryListLoading(false);
+      return true;
+    } catch (toggleError) {
+      setCoworkMemoryEnabled(previousEnabled);
+      setError(
+        toggleError instanceof Error && toggleError.message
+          ? toggleError.message
+          : i18nService.t('coworkConfigSaveFailed'),
+      );
+      return false;
     }
   }, [
-    coworkMemoryQuery,
+    coworkMemoryEnabled,
+    coworkMemoryLlmJudgeEnabled,
+    embeddingEnabled,
+    embeddingModel,
+    embeddingProvider,
+    embeddingRemoteApiKey,
+    embeddingRemoteBaseUrl,
+    embeddingVectorWeight,
+    usageAnalyticsEnabled,
   ]);
 
-  useEffect(() => {
-    if (activeTab !== 'coworkMemory') return;
-    void loadCoworkMemoryData();
-  }, [activeTab, loadCoworkMemoryData]);
-
-  const resetCoworkMemoryEditor = () => {
-    setCoworkMemoryEditingId(null);
-    setCoworkMemoryDraftText('');
-    setShowMemoryModal(false);
-  };
-
-  const handleSaveCoworkMemoryEntry = async () => {
-    const text = coworkMemoryDraftText.trim();
-    if (!text) return;
-
-    setCoworkMemoryListLoading(true);
-    try {
-      const operation = coworkMemoryEditingId ? 'updated' : 'created';
-      if (coworkMemoryEditingId) {
-        await coworkService.updateMemoryEntry({
-          id: coworkMemoryEditingId,
-          text,
-        });
-      } else {
-        await coworkService.createMemoryEntry({
-          text,
-        });
-      }
-      resetCoworkMemoryEditor();
-      await loadCoworkMemoryData();
-      reportMemoryEntryChanged(
-        operation,
-        operation === 'created'
-          ? (coworkMemoryStats?.total ?? coworkMemoryEntries.length) + 1
-          : coworkMemoryStats?.total,
-      );
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : i18nService.t('coworkMemoryCrudSaveFailed'));
-    } finally {
-      setCoworkMemoryListLoading(false);
-    }
-  };
-
-  const handleEditCoworkMemoryEntry = (entry: CoworkUserMemoryEntry) => {
-    setCoworkMemoryEditingId(entry.id);
-    setCoworkMemoryDraftText(entry.text);
-    setShowMemoryModal(true);
-  };
-
-  const handleDeleteCoworkMemoryEntry = async (entry: CoworkUserMemoryEntry) => {
-    setCoworkMemoryListLoading(true);
-    try {
-      await coworkService.deleteMemoryEntry({ id: entry.id });
-      if (coworkMemoryEditingId === entry.id) {
-        resetCoworkMemoryEditor();
-      }
-      await loadCoworkMemoryData();
-      reportMemoryEntryChanged(
-        'deleted',
-        Math.max(0, (coworkMemoryStats?.total ?? coworkMemoryEntries.length) - 1),
-      );
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : i18nService.t('coworkMemoryCrudDeleteFailed'));
-    } finally {
-      setCoworkMemoryListLoading(false);
-    }
-  };
-
-  const handleOpenCoworkMemoryModal = () => {
-    resetCoworkMemoryEditor();
-    setShowMemoryModal(true);
-  };
-
-  const handleEnterCoworkMemoryRawMode = async () => {
+  const handleToggleOpenClawBackgroundOption = useCallback(async (
+    key: 'openClawHeartbeatEnabled' | 'openClawSkillReviewEnabled' | 'openClawMemoryFlushEnabled',
+    previousEnabled: boolean,
+    setter: React.Dispatch<React.SetStateAction<boolean>>,
+  ): Promise<void> => {
+    const nextEnabled = !previousEnabled;
+    setter(nextEnabled);
     setError(null);
-    const content = await coworkService.readMemoryFileRaw();
-    if (content === null) {
-      setError(i18nService.t('coworkMemoryRawLoadFailed'));
-      return;
-    }
-    setCoworkMemoryRawText(content);
-    setCoworkMemoryRawMode(true);
-  };
-
-  const handleSaveCoworkMemoryRaw = async () => {
-    if (coworkMemoryRawSaving) return;
-    setError(null);
-    setCoworkMemoryRawSaving(true);
     try {
-      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText);
-      if (!result.success) {
-        setError(result.error || i18nService.t('coworkMemoryRawSaveFailed'));
+      const updated = await coworkService.updateConfig({ [key]: nextEnabled });
+      if (!updated) {
+        setter(previousEnabled);
+        setError(i18nService.t('coworkConfigSaveFailed'));
         return;
       }
-      setCoworkMemoryRawMode(false);
-      await loadCoworkMemoryData();
-    } finally {
-      setCoworkMemoryRawSaving(false);
-    }
-  };
-
-  const toggleCoworkMemoryExpandedId = (id: string) => {
-    setCoworkMemoryExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+      if (usageAnalyticsEnabled) {
+        reportAgentEngineSettingChanged(key, nextEnabled, previousEnabled);
       }
-      return next;
-    });
-  };
+    } catch (toggleError) {
+      setter(previousEnabled);
+      setError(
+        toggleError instanceof Error && toggleError.message
+          ? toggleError.message
+          : i18nService.t('coworkConfigSaveFailed'),
+      );
+    }
+  }, [usageAnalyticsEnabled]);
 
   // Toggle provider enabled status
   const toggleProviderEnabled = (provider: ProviderType) => {
@@ -3313,29 +2966,55 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
-    setProviders(prev => ({
-      ...prev,
-      [provider]: {
-        ...prev[provider],
-        enabled: !prev[provider].enabled
-      }
-    }));
-  };
-
-  const enableProvider = (provider: ProviderType) => {
-    setProviders(prev => {
-      if (prev[provider].enabled) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        [provider]: {
-          ...prev[provider],
-          enabled: true,
-        },
+    // If enabling the active provider while it has unsaved connection edits,
+    // save the connection along with enabling it so auth + toggle stay in sync.
+    if (provider === activeProvider && isEnabling && isActiveProviderConnectionDirty) {
+      const nextProviderConfig: ProviderConfig = {
+        ...providerConfig,
+        enabled: true,
       };
-    });
+      setProviders(prev => ({
+        ...prev,
+        [provider]: nextProviderConfig,
+      }));
+      clearConnectionSavedTimer();
+      setConnectionFormStatus(SettingsFormStatus.Saving);
+      setConnectionSaveError(null);
+      void persistProvidersSnapshot({
+        ...savedProvidersRef.current,
+        [provider]: nextProviderConfig,
+      }, provider).then((normalized) => {
+        if (!mountedRef.current) return;
+        setProviders(prev => ({ ...prev, [provider]: normalized[provider] }));
+        setConnectionFormStatus(SettingsFormStatus.Saved);
+        connectionSavedTimerRef.current = window.setTimeout(() => {
+          if (mountedRef.current) setConnectionFormStatus(SettingsFormStatus.Idle);
+          connectionSavedTimerRef.current = null;
+        }, SETTINGS_FORM_SAVED_RESET_MS);
+      }).catch((saveErr) => {
+        console.error('[Settings] failed to enable and save provider:', saveErr);
+        if (mountedRef.current) {
+          setConnectionFormStatus(SettingsFormStatus.Error);
+          setConnectionSaveError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+        }
+      });
+      return;
+    }
+
+    const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+      savedProvidersRef.current,
+      providersRef.current,
+      provider,
+      (cfg) => ({ ...cfg, enabled: !cfg.enabled }),
+    );
+    setProviders(nextCurrent);
+    if (nextSaved) {
+      void persistProvidersSnapshot(nextSaved, provider).catch((saveErr) => {
+        console.error('[Settings] failed to toggle provider enabled:', saveErr);
+        setProviders(providersRef.current);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      });
+    }
   };
 
   // GitHub Copilot device code authentication
@@ -3367,15 +3046,20 @@ const Settings: React.FC<SettingsProps> = ({
           apiKey: result.token,
           ...(result.baseUrl ? { baseUrl: result.baseUrl } : {}),
         });
+        const nextCopilot: ProviderConfig = {
+          ...providersRef.current[ProviderName.Copilot],
+          enabled: true,
+          authType: ProviderAuthType.OAuth,
+          apiKey: '',
+        };
         setProviders(prev => ({
           ...prev,
-          [ProviderName.Copilot]: {
-            ...prev[ProviderName.Copilot],
-            enabled: true,
-            authType: ProviderAuthType.OAuth,
-            apiKey: '',
-          },
+          [ProviderName.Copilot]: nextCopilot,
         }));
+        persistProviderAuthConfigInBackground({
+          ...savedProvidersRef.current,
+          [ProviderName.Copilot]: nextCopilot,
+        }, ProviderName.Copilot);
       } else {
         setCopilotError(result.error || 'Authentication failed');
         setCopilotAuthStatus('error');
@@ -3394,15 +3078,20 @@ const Settings: React.FC<SettingsProps> = ({
       setCopilotUserCode('');
       setCopilotError(null);
       apiService.setProviderRuntimeCredential(ProviderName.Copilot, null);
+      const nextCopilot: ProviderConfig = {
+        ...providersRef.current[ProviderName.Copilot],
+        enabled: false,
+        authType: ProviderAuthType.ApiKey,
+        apiKey: '',
+      };
       setProviders(prev => ({
         ...prev,
-        [ProviderName.Copilot]: {
-          ...prev[ProviderName.Copilot],
-          enabled: false,
-          authType: ProviderAuthType.ApiKey,
-          apiKey: '',
-        },
+        [ProviderName.Copilot]: nextCopilot,
       }));
+      persistProviderAuthConfigInBackground({
+        ...savedProvidersRef.current,
+        [ProviderName.Copilot]: nextCopilot,
+      }, ProviderName.Copilot);
     } catch (error) {
       console.error('[Settings] GitHub Copilot sign-out failed:', error);
     }
@@ -3419,388 +3108,203 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (isSaving || isAppearanceChanging) return;
-    setIsSaving(true);
+  // Immediate persistence handlers for General, DataPrivacy, Browser, and About settings.
+  const handleLanguageChange = useCallback(async (nextLanguage: LanguageType) => {
+    const previousLanguage = language;
+    if (nextLanguage === previousLanguage) return;
     setError(null);
-
+    setLanguage(nextLanguage);
+    i18nService.setLanguage(nextLanguage, { persist: false });
     try {
-      const normalizedProviders = normalizeProvidersForSettingsSave(providers);
-      const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
-      const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig({
-        ...browserWebAccess,
-        browserEnabled: true,
-        profileMode: defaultBrowserWebAccessConfig.profileMode,
-        followGlobalProxy: defaultBrowserWebAccessConfig.followGlobalProxy,
-        snapshotMode: defaultBrowserWebAccessConfig.snapshotMode,
-        executablePath: undefined,
-        cdpUrl: undefined,
-        attachOnly: undefined,
-        remoteCdpTimeoutMs: undefined,
-        remoteCdpHandshakeTimeoutMs: undefined,
-        extraArgs: [],
-        webFetch: defaultBrowserWebAccessConfig.webFetch,
-      });
-      const previousConfig = configService.getConfig();
-      const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
-      const previousShortcuts: ShortcutConfig = {
-        ...defaultConfig.shortcuts!,
-        ...(previousConfig.shortcuts || {}),
-      };
-      const previousProviders = previousConfig.providers
-        ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
-        : normalizedProviders;
-      const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
-      const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? false;
-      const previousOpenClawSkillReviewEnabled = coworkConfig.openClawSkillReviewEnabled ?? false;
-      const previousOpenClawMemoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled ?? false;
-      const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
-      const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
-        || OpenClawSessionKeepAliveValues.ThirtyDays;
-      const previousMemorySettings = {
-        embeddingEnabled: coworkConfig.embeddingEnabled ?? false,
-        embeddingModel: coworkConfig.embeddingModel ?? '',
-        embeddingProvider: coworkConfig.embeddingProvider ?? 'openai',
-        embeddingRemoteApiKey: coworkConfig.embeddingRemoteApiKey ?? '',
-        embeddingRemoteBaseUrl: coworkConfig.embeddingRemoteBaseUrl ?? '',
-        embeddingVectorWeight: coworkConfig.embeddingVectorWeight ?? 0.7,
-        memoryEnabled: coworkConfig.memoryEnabled ?? true,
-        memoryLlmJudgeEnabled: coworkConfig.memoryLlmJudgeEnabled ?? false,
-      };
-      const nextMemorySettings = {
-        embeddingEnabled,
-        embeddingModel,
-        embeddingProvider,
-        embeddingRemoteApiKey,
-        embeddingRemoteBaseUrl,
-        embeddingVectorWeight,
-        memoryEnabled: coworkMemoryEnabled,
-        memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
-      };
-      const previousDreamingSettings = {
-        dreamingEnabled: coworkConfig.dreamingEnabled ?? false,
-        dreamingFrequency: coworkConfig.dreamingFrequency ?? '0 3 * * *',
-      };
-      const nextDreamingSettings = {
-        dreamingEnabled,
-        dreamingFrequency,
-      };
-      const previousNotificationSettings = normalizeNotificationSettings(
-        previousConfig.notificationSettings,
-      );
-      const previousArtifactAutoPreviewEnabled = resolveArtifactAutoPreviewEnabled(
-        previousConfig.artifactAutoPreviewEnabled,
-      );
-      const previousThemeId = initialThemeIdRef.current;
-      const previousUiFontSize = normalizeFontPreference(
-        previousConfig.uiFontSize,
-        FontPreferences.UiFontSizeDefault,
-        FontPreferences.UiFontSizeMin,
-        FontPreferences.UiFontSizeMax,
-      );
-      const previousCodeFontSize = normalizeFontPreference(
-        previousConfig.codeFontSize,
-        FontPreferences.CodeFontSizeDefault,
-        FontPreferences.CodeFontSizeMin,
-        FontPreferences.CodeFontSizeMax,
-      );
-      let savedPluginPendingChanges: PluginPendingChanges | null = null;
-
-      if (quickPanelShortcutDraft !== null) {
-        const result = await window.electron.desktopCompanion.setPreferences({ shortcut: quickPanelShortcutDraft });
-        if (!result.success) throw new Error(result.error || i18nService.t('desktopCompanionShortcutConflict'));
-        setQuickPanelShortcutDraft(null);
+      await configService.updateConfig({ language: nextLanguage });
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('language', nextLanguage, previousLanguage);
       }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update language:', saveErr);
+      setLanguage(previousLanguage);
+      i18nService.setLanguage(previousLanguage, { persist: false });
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [language, usageAnalyticsEnabled]);
 
+  const handleToggleArtifactAutoPreview = useCallback(async () => {
+    const previous = artifactAutoPreviewEnabled;
+    const next = !previous;
+    setError(null);
+    setArtifactAutoPreviewEnabled(next);
+    try {
+      await configService.updateConfig({ artifactAutoPreviewEnabled: next });
+      console.log(`[Settings] artifact auto-preview preference updated: enabled=${next}`);
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('artifactAutoPreviewEnabled', next, previous);
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update artifact auto-preview:', saveErr);
+      setArtifactAutoPreviewEnabled(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [artifactAutoPreviewEnabled, usageAnalyticsEnabled]);
+
+  const handleTaskCompletionNotificationModeChange = useCallback(async (nextMode: TaskCompletionNotificationMode) => {
+    const previousMode = taskCompletionNotificationMode;
+    if (nextMode === previousMode) return;
+    setError(null);
+    setTaskCompletionNotificationMode(nextMode);
+    try {
       await configService.updateConfig({
-        api: {
-          key: primaryProvider.apiKey,
-          baseUrl: primaryProvider.baseUrl,
-        },
-        providers: normalizedProviders, // Save all providers configuration
-        theme,
-        uiFontSize,
-        codeFontSize,
-        language,
-        artifactAutoPreviewEnabled,
-        useSystemProxy,
-        sqliteAutoBackupEnabled,
-        usageAnalyticsEnabled,
         notificationSettings: normalizeNotificationSettings({
-          taskCompletionNotificationMode,
+          taskCompletionNotificationMode: nextMode,
           permissionNotificationsEnabled,
           questionNotificationsEnabled,
         }),
-        browserWebAccess: normalizedBrowserWebAccess,
-        shortcuts,
-        app: {
-          ...previousConfig.app,
-          testMode,
-        },
       });
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('taskCompletionNotificationMode', nextMode, previousMode);
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update task completion notification mode:', saveErr);
+      setTaskCompletionNotificationMode(previousMode);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [
+    permissionNotificationsEnabled,
+    questionNotificationsEnabled,
+    taskCompletionNotificationMode,
+    usageAnalyticsEnabled,
+  ]);
 
-      if (!usageAnalyticsEnabled) {
+  const handleToggleAttentionNotifications = useCallback(async () => {
+    const previousPermission = permissionNotificationsEnabled;
+    const previousQuestion = questionNotificationsEnabled;
+    const nextEnabled = !(previousPermission || previousQuestion);
+    setError(null);
+    setPermissionNotificationsEnabled(nextEnabled);
+    setQuestionNotificationsEnabled(nextEnabled);
+    try {
+      await configService.updateConfig({
+        notificationSettings: normalizeNotificationSettings({
+          taskCompletionNotificationMode,
+          permissionNotificationsEnabled: nextEnabled,
+          questionNotificationsEnabled: nextEnabled,
+        }),
+      });
+      if (usageAnalyticsEnabled) {
+        if (previousPermission !== nextEnabled) {
+          reportGeneralSettingChanged('permissionNotificationsEnabled', nextEnabled, previousPermission);
+        }
+        if (previousQuestion !== nextEnabled) {
+          reportGeneralSettingChanged('questionNotificationsEnabled', nextEnabled, previousQuestion);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update attention notifications:', saveErr);
+      setPermissionNotificationsEnabled(previousPermission);
+      setQuestionNotificationsEnabled(previousQuestion);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [
+    permissionNotificationsEnabled,
+    questionNotificationsEnabled,
+    taskCompletionNotificationMode,
+    usageAnalyticsEnabled,
+  ]);
+
+  const handleToggleUseSystemProxy = useCallback(async () => {
+    if (isUpdatingUseSystemProxy) return;
+    const previous = useSystemProxy;
+    const next = !previous;
+    setError(null);
+    setIsUpdatingUseSystemProxy(true);
+    setUseSystemProxy(next);
+    try {
+      await configService.updateConfig({ useSystemProxy: next });
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('useSystemProxy', next, previous);
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update system proxy setting:', saveErr);
+      setUseSystemProxy(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    } finally {
+      if (mountedRef.current) {
+        setIsUpdatingUseSystemProxy(false);
+      }
+    }
+  }, [isUpdatingUseSystemProxy, usageAnalyticsEnabled, useSystemProxy]);
+
+  const handleToggleUsageAnalytics = useCallback(async () => {
+    const previous = usageAnalyticsEnabled;
+    const next = !previous;
+    setError(null);
+    setUsageAnalyticsEnabled(next);
+    try {
+      await configService.updateConfig({ usageAnalyticsEnabled: next });
+      if (!next) {
         clearPendingPublishingConversionAttribution();
         clearPublishingSubscriptionRecoveryAnalytics();
-      }
-
-      if (previousArtifactAutoPreviewEnabled !== artifactAutoPreviewEnabled) {
-        console.log(
-          `[Settings] artifact auto-preview preference updated: enabled=${artifactAutoPreviewEnabled}`,
-        );
-      }
-
-      applyTypographyPreferences({ uiFontSize, codeFontSize });
-
-      // 应用语言
-      i18nService.setLanguage(language, { persist: false });
-
-      // Set API with the primary provider - handle Qwen OAuth
-      let apiKeyToUse = primaryProvider.apiKey;
-      let baseUrlToUse = primaryProvider.baseUrl;
-
-
-      apiService.setConfig({
-        apiKey: apiKeyToUse,
-        baseUrl: baseUrlToUse,
-      });
-
-      // 更新 Redux store 中的可用模型列表
-      const allModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
-      Object.entries(normalizedProviders).forEach(([providerName, config]) => {
-        if (config.enabled && config.models) {
-          const openClawProviderId = getOpenClawProviderIdForConfig(providerName, config);
-          config.models.forEach(model => {
-            allModels.push({
-              id: model.id,
-              name: model.name,
-              provider: getProviderDisplayName(providerName, config),
-              providerKey: providerName,
-              openClawProviderId,
-              supportsImage: resolveModelSupportsImageForProvider(providerName, model),
-            });
-          });
-        }
-      });
-      dispatch(setAvailableModels(allModels));
-
-      if (hasCoworkConfigChanges) {
-        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
-          console.log(
-            `[Settings] updating OpenClaw heartbeat: enabled=${openClawHeartbeatEnabled}, previous=${previousOpenClawHeartbeatEnabled}`,
-          );
-        }
-        if (previousOpenClawSkillReviewEnabled !== openClawSkillReviewEnabled) {
-          console.log(
-            `[Settings] updating OpenClaw skill review: enabled=${openClawSkillReviewEnabled}, previous=${previousOpenClawSkillReviewEnabled}`,
-          );
-        }
-        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
-          console.log(
-            `[Settings] updating OpenClaw memory flush: enabled=${openClawMemoryFlushEnabled}, previous=${previousOpenClawMemoryFlushEnabled}`,
-          );
-        }
-        const updated = await coworkService.updateConfig({
-          agentEngine: coworkAgentEngine,
-          memoryEnabled: coworkMemoryEnabled,
-          memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
-          skipMissedJobs,
-          openClawHeartbeatEnabled,
-          openClawSkillReviewEnabled,
-          openClawMemoryFlushEnabled,
-          embeddingEnabled,
-          embeddingProvider,
-          embeddingModel,
-          embeddingLocalModelPath,
-          embeddingVectorWeight,
-          embeddingRemoteBaseUrl,
-          embeddingRemoteApiKey,
-          dreamingEnabled,
-          dreamingFrequency,
-          dreamingModel,
-          dreamingTimezone,
+      } else {
+        void reportYdAnalyzer({
+          action: LogReporterAction.UsageAnalyticsEnabled,
+          source: SettingsAnalyticsSource.General,
         });
-        if (!updated) {
-          throw new Error(i18nService.t('coworkConfigSaveFailed'));
-        }
-        const savedSessionPolicy = await coworkService.updateSessionPolicy({
-          keepAlive: openClawSessionKeepAlive,
-        });
-        if (!savedSessionPolicy) {
-          throw new Error(i18nService.t('coworkConfigSaveFailed'));
-        }
       }
-
-      // Ask main to sync IM/OpenClaw config. The main process skips this when
-      // the IM fingerprint has not changed, so unrelated settings saves do not
-      // restart the gateway.
-      const syncSucceeded = await imService.saveAndSyncConfig();
-      if (!syncSucceeded) {
-        throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
-      }
-
-      // Batch save plugin changes (toggles + configs) if any pending
-      if (activeTab === 'plugins' && pluginsSettingsRef.current) {
-        const pendingChanges = pluginsSettingsRef.current.getPendingChanges();
-        if (pendingChanges) {
-          await window.electron?.plugins.batchSave(pendingChanges);
-          savedPluginPendingChanges = pendingChanges;
-          pluginsSettingsRef.current.resetDirty();
-        }
-      }
-
-      // Decision model edits save with the dialog, so switching the tool on
-      // or off restarts the gateway once, on Save, rather than per field.
-      if (decisionModelDraftRef.current) {
-        await window.electron.decisionModel.saveConfig(decisionModelDraftRef.current);
-        decisionModelDraftRef.current = null;
-      }
-
-      if (usageAnalyticsEnabled) {
-        if (previousConfig.language !== language) {
-          reportGeneralSettingChanged('language', language, previousConfig.language);
-        }
-        if (previousArtifactAutoPreviewEnabled !== artifactAutoPreviewEnabled) {
-          reportGeneralSettingChanged(
-            'artifactAutoPreviewEnabled',
-            artifactAutoPreviewEnabled,
-            previousArtifactAutoPreviewEnabled,
-          );
-        }
-        if ((previousConfig.useSystemProxy ?? false) !== useSystemProxy) {
-          reportGeneralSettingChanged('useSystemProxy', useSystemProxy, previousConfig.useSystemProxy ?? false);
-        }
-        if ((previousConfig.sqliteAutoBackupEnabled === true) !== sqliteAutoBackupEnabled) {
-          reportGeneralSettingChanged(
-            'sqliteAutoBackupEnabled',
-            sqliteAutoBackupEnabled,
-            previousConfig.sqliteAutoBackupEnabled === true,
-          );
-        }
-        if (previousNotificationSettings.taskCompletionNotificationMode !== taskCompletionNotificationMode) {
-          reportGeneralSettingChanged(
-            'taskCompletionNotificationMode',
-            taskCompletionNotificationMode,
-            previousNotificationSettings.taskCompletionNotificationMode,
-          );
-        }
-        if (previousNotificationSettings.permissionNotificationsEnabled !== permissionNotificationsEnabled) {
-          reportGeneralSettingChanged(
-            'permissionNotificationsEnabled',
-            permissionNotificationsEnabled,
-            previousNotificationSettings.permissionNotificationsEnabled,
-          );
-        }
-        if (previousNotificationSettings.questionNotificationsEnabled !== questionNotificationsEnabled) {
-          reportGeneralSettingChanged(
-            'questionNotificationsEnabled',
-            questionNotificationsEnabled,
-            previousNotificationSettings.questionNotificationsEnabled,
-          );
-        }
-        if (previousSkipMissedJobs !== skipMissedJobs) {
-          reportGeneralSettingChanged('skipMissedJobs', skipMissedJobs, previousSkipMissedJobs);
-        }
-        if (previousConfig.theme !== theme) {
-          reportAppearanceSettingChanged('theme', theme, previousConfig.theme);
-        }
-        if (previousThemeId !== themeId) {
-          reportAppearanceSettingChanged('themeId', themeId, previousThemeId);
-        }
-        if (previousUiFontSize !== uiFontSize) {
-          reportAppearanceSettingChanged('uiFontSize', uiFontSize, previousUiFontSize);
-        }
-        if (previousCodeFontSize !== codeFontSize) {
-          reportAppearanceSettingChanged('codeFontSize', codeFontSize, previousCodeFontSize);
-        }
-        const browserSettingParams = buildBrowserSettingAnalyticsParams(
-          previousBrowserWebAccess,
-          normalizedBrowserWebAccess,
-        );
-        if (browserSettingParams) {
-          reportBrowserSettingChanged(browserSettingParams);
-        }
-        if (previousAgentEngine !== coworkAgentEngine) {
-          reportAgentEngineSettingChanged('agentEngine', coworkAgentEngine, previousAgentEngine);
-        }
-        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
-          reportAgentEngineSettingChanged(
-            'openClawHeartbeatEnabled',
-            openClawHeartbeatEnabled,
-            previousOpenClawHeartbeatEnabled,
-          );
-        }
-        if (previousOpenClawSkillReviewEnabled !== openClawSkillReviewEnabled) {
-          reportAgentEngineSettingChanged(
-            'openClawSkillReviewEnabled',
-            openClawSkillReviewEnabled,
-            previousOpenClawSkillReviewEnabled,
-          );
-        }
-        if (previousOpenClawSessionKeepAlive !== openClawSessionKeepAlive) {
-          reportAgentEngineSettingChanged(
-            'openClawSessionKeepAlive',
-            openClawSessionKeepAlive,
-            previousOpenClawSessionKeepAlive,
-          );
-        }
-        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
-          reportAgentEngineSettingChanged(
-            'openClawMemoryFlushEnabled',
-            openClawMemoryFlushEnabled,
-            previousOpenClawMemoryFlushEnabled,
-          );
-        }
-        const memorySettingsSummary = buildMemorySettingAnalyticsSummary(
-          previousMemorySettings,
-          nextMemorySettings,
-        );
-        if (memorySettingsSummary) {
-          reportMemorySettingChanged(memorySettingsSummary);
-        }
-        const dreamingSettingsSummary = buildDreamingSettingAnalyticsSummary(
-          previousDreamingSettings,
-          nextDreamingSettings,
-        );
-        if (dreamingSettingsSummary) {
-          reportDreamingSettingChanged(dreamingSettingsSummary);
-        }
-        const shortcutSettingsSummary = buildShortcutSettingAnalyticsSummary(
-          previousShortcuts,
-          shortcuts,
-        );
-        if (shortcutSettingsSummary) {
-          reportShortcutSettingChanged(shortcutSettingsSummary);
-        }
-        const pluginSettingsSummary = buildPluginSettingsAnalyticsSummary(savedPluginPendingChanges);
-        if (pluginSettingsSummary) {
-          reportPluginSettingsSaved(pluginSettingsSummary);
-        }
-        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
-          previousProviders,
-          normalizedProviders,
-        );
-        if (customModelSettingsSummary) {
-          reportCustomModelSettingsSaved(customModelSettingsSummary);
-        }
-        if (previousConfig.usageAnalyticsEnabled === false) {
-          void reportYdAnalyzer({
-            action: LogReporterAction.UsageAnalyticsEnabled,
-            source: SettingsAnalyticsSource.General,
-          });
-        }
-      }
-
-      didSaveRef.current = true;
-      onClose();
-    } catch (error) {
-      console.error('[Settings] failed to save settings:', error);
-      setError(error instanceof Error ? error.message : i18nService.t('failedToSaveSettings'));
-    } finally {
-      setIsSaving(false);
+    } catch (saveErr) {
+      console.error('[Settings] failed to update usage analytics setting:', saveErr);
+      setUsageAnalyticsEnabled(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
     }
-  };
+  }, [usageAnalyticsEnabled]);
+
+  const handleToggleTestMode = useCallback(async () => {
+    const previous = testMode;
+    const next = !previous;
+    setError(null);
+    setTestMode(next);
+    try {
+      const previousApp = configService.getConfig().app;
+      await configService.updateConfig({
+        app: {
+          ...previousApp,
+          testMode: next,
+        },
+      });
+    } catch (saveErr) {
+      console.error('[Settings] failed to update test mode setting:', saveErr);
+      setTestMode(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [testMode]);
+
+  const handleCommitBrowserWebAccess = useCallback(async (nextConfig: BrowserWebAccessConfig): Promise<boolean> => {
+    setError(null);
+    if (
+      nextConfig.displayMode === BrowserDisplayMode.External
+      && nextConfig.cdpUrl?.trim()
+      && !normalizeBrowserCdpUrl(nextConfig.cdpUrl)
+    ) {
+      setError(i18nService.t('browserCdpUrlInvalid'));
+      return false;
+    }
+    const previous = normalizeBrowserWebAccessConfig(browserWebAccess);
+    const normalized = normalizeBrowserWebAccessConfig(nextConfig);
+    setBrowserWebAccess(normalized);
+    try {
+      await configService.updateConfig({ browserWebAccess: normalized });
+      if (usageAnalyticsEnabled) {
+        const params = buildBrowserSettingAnalyticsParams(previous, normalized);
+        if (params) {
+          reportBrowserSettingChanged(params);
+        }
+      }
+      return true;
+    } catch (saveErr) {
+      console.error('[Settings] failed to save browser web access settings:', saveErr);
+      setBrowserWebAccess(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      return false;
+    }
+  }, [browserWebAccess, usageAnalyticsEnabled]);
 
   // 标签页切换处理
   const doTabChange = useCallback((tab: TabType) => {
@@ -3817,21 +3321,19 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   const handleTabChange = useCallback((tab: TabType) => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
-    if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => doTabChange(tab))) {
-      return;
-    }
-    doTabChange(tab);
-  }, [activeTab, doTabChange, isBackingUpOpenClawData, isRestoringOpenClawData]);
+    if (dataMigration.isBusy || tab === activeTab) return;
+    requestGuardedAction(() => {
+      doTabChange(tab);
+    });
+  }, [activeTab, dataMigration.isBusy, doTabChange, requestGuardedAction]);
 
-  // Guarded close: check plugin dirty state before closing
+  // Guarded close: prevent closing while backup/restore is active, and confirm unsaved drafts.
   const guardedClose = useCallback(() => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
-    if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => onClose())) {
-      return;
-    }
-    onClose();
-  }, [activeTab, isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
+    if (dataMigration.isBusy) return;
+    requestGuardedAction(() => {
+      onClose();
+    });
+  }, [dataMigration.isBusy, onClose, requestGuardedAction]);
 
   const shortcutCommandMap = useMemo(
     () => new Map(SHORTCUT_COMMANDS.map(command => [command.key, command])),
@@ -3858,8 +3360,8 @@ const Settings: React.FC<SettingsProps> = ({
       .filter(group => group.commands.length > 0);
   }, [shortcutSearchQuery, shortcutBindings]);
 
-  // 快捷键更新处理
-  const handleShortcutChange = (key: SettingsShortcutAction, value: string) => {
+  // 快捷键更新处理（即改即落盘）
+  const handleShortcutChange = async (key: SettingsShortcutAction, value: string) => {
     const normalizedValue = value.trim();
     // Check for conflicts with other shortcuts
     const normalizedSignature = getShortcutConflictSignature(normalizedValue, { isMac: isMacPlatform });
@@ -3878,23 +3380,92 @@ const Settings: React.FC<SettingsProps> = ({
         i18nService
           .t('shortcutConflict')
           .replace('{0}', formatShortcutForDisplay(normalizedValue, { isMac: isMacPlatform }))
-          .replace('{1}', conflictLabel)
+          .replace('{1}', conflictLabel),
       );
       return;
     }
+
+    setError(null);
     if (key === SettingsShortcutAction.QuickPanel) {
-      setQuickPanelShortcutDraft(normalizedValue);
+      setIsUpdatingShortcut(true);
+      try {
+        const result = await window.electron.desktopCompanion.setPreferences({ shortcut: normalizedValue });
+        if (!result.success) {
+          setError(result.error || i18nService.t('desktopCompanionShortcutConflict'));
+        }
+      } catch (saveErr) {
+        console.error('[Settings] failed to update quick panel shortcut:', saveErr);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('desktopCompanionShortcutConflict'));
+      } finally {
+        if (mountedRef.current) {
+          setIsUpdatingShortcut(false);
+        }
+      }
       return;
     }
-    setShortcuts(prev => ({
-      ...prev,
-      [key]: normalizedValue
-    }));
+
+    const previousShortcuts = shortcuts;
+    const nextShortcuts: ShortcutConfig = {
+      ...previousShortcuts,
+      [key]: normalizedValue,
+    };
+    setShortcuts(nextShortcuts);
+    setIsUpdatingShortcut(true);
+    try {
+      await configService.updateConfig({ shortcuts: nextShortcuts });
+      if (usageAnalyticsEnabled) {
+        const summary = buildShortcutSettingAnalyticsSummary(previousShortcuts, nextShortcuts);
+        if (summary) {
+          reportShortcutSettingChanged(summary);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to save shortcut:', saveErr);
+      setShortcuts(previousShortcuts);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    } finally {
+      if (mountedRef.current) {
+        setIsUpdatingShortcut(false);
+      }
+    }
   };
 
   const handleResetShortcuts = () => {
-    setShortcuts({ ...defaultConfig.shortcuts! });
-    if (companionState) setQuickPanelShortcutDraft(DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut);
+    setShowResetShortcutsConfirm(true);
+  };
+
+  const confirmResetShortcuts = async () => {
+    setShowResetShortcutsConfirm(false);
+    const previousShortcuts = shortcuts;
+    const nextShortcuts: ShortcutConfig = { ...defaultConfig.shortcuts! };
+    setError(null);
+    setShortcuts(nextShortcuts);
+    setIsUpdatingShortcut(true);
+    try {
+      await configService.updateConfig({ shortcuts: nextShortcuts });
+      if (companionState) {
+        const result = await window.electron.desktopCompanion.setPreferences({
+          shortcut: DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut,
+        });
+        if (!result.success) {
+          setError(result.error || i18nService.t('desktopCompanionShortcutConflict'));
+        }
+      }
+      if (usageAnalyticsEnabled) {
+        const summary = buildShortcutSettingAnalyticsSummary(previousShortcuts, nextShortcuts);
+        if (summary) {
+          reportShortcutSettingChanged(summary);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to reset shortcuts:', saveErr);
+      setShortcuts(previousShortcuts);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    } finally {
+      if (mountedRef.current) {
+        setIsUpdatingShortcut(false);
+      }
+    }
   };
 
   // 阻止点击设置窗口时事件传播到背景
@@ -3903,15 +3474,16 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   // Handlers for model operations
-  const handleAddModel = () => {
+  const handleAddModel = (prefillModelId?: string) => {
+    const prefill = typeof prefillModelId === 'string' ? prefillModelId.trim() : '';
     setIsAddingModel(true);
     setIsEditingModel(false);
     setEditingModelId(null);
-    setNewModelName('');
-    setNewModelId('');
+    setNewModelName(prefill);
+    setNewModelId(prefill);
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -3926,6 +3498,27 @@ const Settings: React.FC<SettingsProps> = ({
     customParams?: Record<string, unknown>,
     maxTokens?: number,
   ) => {
+    const providerConfig = providers[activeProvider];
+    const effectiveApiFormat = getEffectiveApiFormat(
+      activeProvider,
+      providerConfig?.apiFormat,
+    );
+    const runtimeProfile = resolveModelRuntimeProfile({
+      source: isCustomProvider(activeProvider)
+        ? ModelRuntimeProfileSource.Custom
+        : ModelRuntimeProfileSource.BuiltIn,
+      providerId: activeProvider,
+      modelId,
+      api: effectiveApiFormat === 'openai'
+        ? OpenClawApi.OpenAICompletions
+        : OpenClawApi.AnthropicMessages,
+    });
+    const kimiK3Migration = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
+      ? migrateKimiK3LegacyCustomParams(customParams, maxTokens)
+      : null;
+    const effectiveMaxTokens = kimiK3Migration?.migratedMaxTokens ?? maxTokens;
+    const effectiveCustomParams = kimiK3Migration ? kimiK3Migration.customParams : customParams;
+
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
@@ -3933,53 +3526,47 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId(modelId);
     setNewModelSupportsImage(!!supportsImage);
     setNewModelSupportsThinking(!!supportsThinking);
-    setNewModelContextWindow(contextWindow);
-    setNewModelMaxTokens(maxTokens !== undefined ? String(maxTokens) : '');
+    setNewModelContextWindow(contextWindow !== undefined ? String(contextWindow) : '');
+    setNewModelMaxTokens(effectiveMaxTokens !== undefined ? String(effectiveMaxTokens) : '');
     setNewModelCustomParams(
-      customParams && Object.keys(customParams).length > 0
-        ? JSON.stringify(customParams, null, 2)
+      effectiveCustomParams && Object.keys(effectiveCustomParams).length > 0
+        ? JSON.stringify(effectiveCustomParams, null, 2)
         : '',
     );
     setModelFormError(null);
   };
 
   const handleDeleteModel = (modelId: string) => {
-    if (!providers[activeProvider].models) return;
+    if (!providers[activeProvider]?.models) return;
 
     const updatedModels = providers[activeProvider].models.filter(
-      model => model.id !== modelId
+      model => model.id !== modelId,
     );
 
-    setProviders(prev => ({
-      ...prev,
-      [activeProvider]: {
-        ...prev[activeProvider],
-        models: updatedModels
-      }
-    }));
+    const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+      savedProvidersRef.current,
+      providersRef.current,
+      activeProvider,
+      (cfg) => ({ ...cfg, models: updatedModels }),
+    );
+    setProviders(nextCurrent);
+    if (nextSaved) {
+      void persistProvidersSnapshot(nextSaved, activeProvider).catch((saveErr) => {
+        console.error('[Settings] failed to persist model deletion:', saveErr);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      });
+    }
   };
 
   const handleSaveNewModel = () => {
     const modelId = newModelId.trim();
-
-    if (activeProvider === 'ollama' || activeProvider === 'lm-studio') {
-      // For Ollama/LM Studio, only the model name (stored as modelId) is required
-      if (!modelId) {
-        setModelFormError(i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNameRequired' : 'ollamaModelNameRequired'));
-        return;
-      }
-    } else {
-      const modelName = newModelName.trim();
-      if (!modelName || !modelId) {
-        setModelFormError(i18nService.t('modelNameAndIdRequired'));
-        return;
-      }
+    if (!modelId) {
+      setModelFormError(i18nService.t('modelIdRequired'));
+      return;
     }
 
-    // For Ollama, auto-fill display name from modelId if not provided
-    const modelName = activeProvider === 'ollama' || activeProvider === 'lm-studio'
-      ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
-      : newModelName.trim();
+    // Display name is optional for all providers; leave blank to show modelId.
+    const modelName = newModelName.trim() || modelId;
 
     const currentModels = providers[activeProvider].models ?? [];
     const hasDuplicateModel = hasEquivalentProviderModelId(
@@ -4023,23 +3610,18 @@ const Settings: React.FC<SettingsProps> = ({
         ? OpenClawApi.OpenAICompletions
         : OpenClawApi.AnthropicMessages,
     });
-    const conflictingCustomParamKeys = runtimeProfile
-      ? findKimiK3ReservedCustomParamKeys(parsedCustomParams)
-      : [];
-    if (conflictingCustomParamKeys.length > 0) {
+
+    const parsedContextWindow = parseContextWindowInput(newModelContextWindow);
+    if (parsedContextWindow === null) {
       setModelFormError(
-        i18nService.t('kimiK3CustomParamsConflict').replace(
-          '{keys}',
-          conflictingCustomParamKeys.join(', '),
-        ),
+        i18nService.t('contextWindowInvalid')
+          .replace('{min}', String(CONTEXT_WINDOW_MIN))
+          .replace('{max}', String(CONTEXT_WINDOW_MAX)),
       );
       return;
     }
 
-    // Runtime profiles own the output cap, so the (hidden) field is ignored there.
-    const parsedMaxTokens = runtimeProfile
-      ? undefined
-      : parseMaxOutputTokensInput(newModelMaxTokens);
+    const parsedMaxTokens = parseMaxOutputTokensInput(newModelMaxTokens);
     if (parsedMaxTokens === null) {
       setModelFormError(
         i18nService.t('maxOutputTokensInvalid')
@@ -4049,15 +3631,27 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
+    const kimiK3Migration = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
+      ? migrateKimiK3LegacyCustomParams(parsedCustomParams, parsedMaxTokens, {
+        promoteOverDefaultMaxTokens: false,
+      })
+      : null;
+    const effectiveCustomParams = kimiK3Migration
+      ? kimiK3Migration.customParams
+      : parsedCustomParams;
+    const effectiveMaxTokens = parsedMaxTokens ?? kimiK3Migration?.migratedMaxTokens;
+
     const editingModel = currentModels.find(model => model.id === editingModelId);
-    // Runtime profiles fix the capabilities, so there is nothing to override.
-    const capabilityOverrides = runtimeProfile
-      ? undefined
-      : buildModelCapabilityOverrides(activeProvider, modelId, {
+    const capabilityOverrides = buildModelCapabilityOverrides(
+      activeProvider,
+      modelId,
+      {
         supportsImage: newModelSupportsImage,
         supportsThinking: newModelSupportsThinking,
-      });
-    const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
+      },
+      runtimeProfile,
+    );
+    const resolvedProfileMetadata = applyModelRuntimeProfileDefaults({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
         activeProvider,
         modelId,
@@ -4075,14 +3669,20 @@ const Settings: React.FC<SettingsProps> = ({
         newModelSupportsThinking,
         capabilityOverrides?.thinking,
       ),
-      contextWindow: newModelContextWindow,
-      // An empty field falls back to the registry default instead of the
-      // previously saved value, so clearing it restores automatic inference.
-      maxTokens: parsedMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
+      contextWindow: parsedContextWindow ?? ProviderRegistry.resolveModelContextWindow(
         activeProvider,
         modelId,
       ),
-    }, runtimeProfile);
+      // An empty field falls back to the registry default instead of the
+      // previously saved value, so clearing it restores automatic inference.
+      maxTokens: effectiveMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
+        activeProvider,
+        modelId,
+      ),
+    }, runtimeProfile, {
+      supportsImage: capabilityOverrides?.image,
+      supportsThinking: capabilityOverrides?.thinking,
+    });
     const nextModel = {
       id: modelId,
       name: modelName,
@@ -4095,8 +3695,8 @@ const Settings: React.FC<SettingsProps> = ({
       ...(resolvedProfileMetadata.maxTokens !== undefined
         ? { maxTokens: resolvedProfileMetadata.maxTokens }
         : {}),
-      ...(parsedCustomParams && Object.keys(parsedCustomParams).length > 0
-        ? { customParams: parsedCustomParams }
+      ...(effectiveCustomParams && Object.keys(effectiveCustomParams).length > 0
+        ? { customParams: effectiveCustomParams }
         : {}),
       ...(capabilityOverrides ? { capabilityOverrides } : {}),
     };
@@ -4104,13 +3704,19 @@ const Settings: React.FC<SettingsProps> = ({
       ? currentModels.map(model => (model.id === editingModelId ? nextModel : model))
       : [...currentModels, nextModel];
 
-    setProviders(prev => ({
-      ...prev,
-      [activeProvider]: {
-        ...prev[activeProvider],
-        models: updatedModels
-      }
-    }));
+    const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+      savedProvidersRef.current,
+      providersRef.current,
+      activeProvider,
+      (cfg) => ({ ...cfg, models: updatedModels }),
+    );
+    setProviders(nextCurrent);
+    if (nextSaved) {
+      void persistProvidersSnapshot(nextSaved, activeProvider).catch((saveErr) => {
+        console.error('[Settings] failed to persist model edit:', saveErr);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      });
+    }
 
     setIsAddingModel(false);
     setIsEditingModel(false);
@@ -4119,7 +3725,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -4133,7 +3739,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -4157,28 +3763,34 @@ const Settings: React.FC<SettingsProps> = ({
   // Dialogs rendered through Modal handle Escape themselves.
   const handleEscape = () => {
     const resolution = resolveSettingsEscapeAction({
-      isBlocked: isBackingUpOpenClawData
-        || isRestoringOpenClawData
+      isBlocked: dataMigration.isBusy
         || isRepairingOpenClaw
         || isCleaningTempStorage
+        || isSavingPendingGuard
         || isShortcutInputActive(),
       layers: [
+        { isOpen: pendingGuardedAction !== null, dismiss: handleCancelPendingGuard },
+        { isOpen: showResetShortcutsConfirm, dismiss: () => setShowResetShortcutsConfirm(false) },
         { isOpen: pendingDeleteProvider !== null, dismiss: () => setPendingDeleteProvider(null) },
+        { isOpen: modelDiscovery.dialog !== null, dismiss: modelDiscovery.closeDialog },
         { isOpen: isAddingModel || isEditingModel, dismiss: handleCancelModelEdit },
         { isOpen: isTestResultModalOpen, dismiss: () => setIsTestResultModalOpen(false) },
         { isOpen: showOpenClawRepairConfirm, dismiss: () => setShowOpenClawRepairConfirm(false) },
         { isOpen: showTempCleanConfirm, dismiss: () => setShowTempCleanConfirm(false) },
         {
-          isOpen: showOpenClawDataRestoreConfirm,
-          dismiss: () => setShowOpenClawDataRestoreConfirm(false),
+          isOpen: dataMigration.hasOpenModal,
+          dismiss: () => dataMigration.dismissTopModal(),
         },
-        { isOpen: showMemoryModal, dismiss: resetCoworkMemoryEditor },
       ],
+      hasUnsavedChanges: Boolean(dirtyGuardRef.current?.isDirty),
     });
 
     switch (resolution.action) {
       case SettingsEscapeAction.DismissLayer:
         resolution.dismiss();
+        return;
+      case SettingsEscapeAction.PromptUnsaved:
+        requestGuardedAction(onClose);
         return;
       case SettingsEscapeAction.ClosePanel:
         guardedClose();
@@ -4198,10 +3810,25 @@ const Settings: React.FC<SettingsProps> = ({
     setIsTestResultModalOpen(true);
   };
 
+  const handleFetchModels = () => {
+    const providerConfig = providers[activeProvider];
+    if (!providerConfig) return;
+    const copilotSignedIn = copilotAuthStatus === 'authenticated'
+      || providers[ProviderName.Copilot]?.authType === ProviderAuthType.OAuth;
+    void modelDiscovery.fetchModels(activeProvider, providerConfig, {
+      minimaxIsOAuthMode,
+      openaiIsOAuthMode,
+      xaiIsOAuthMode,
+      copilotSignedIn,
+    });
+  };
+
   // 测试 API 连接
   const handleTestConnection = async () => {
     const testingProvider = activeProvider;
     const providerConfig = providers[testingProvider];
+    // An edit replaces the immutable draft, so an earlier response cannot certify it.
+    const isCurrentProbe = () => mountedRef.current && visibleProviderConfigRef.current === providerConfig;
     const testingApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
     setIsTesting(true);
     setIsTestResultModalOpen(false);
@@ -4252,6 +3879,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (testingProvider === ProviderName.Copilot) {
         const result = await window.electron.githubCopilot.refreshToken();
+        if (!isCurrentProbe()) return;
         if (!result.success || !result.token) {
           reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
             failureReason: 'unknown',
@@ -4286,15 +3914,14 @@ const Settings: React.FC<SettingsProps> = ({
       }
 
       // Determine format after all overrides (OAuth may switch to openai)
-      // 统一为两种协议格式：
+      // - gemini: native /models/{model}:generateContent (built-in & custom Gemini)
       // - anthropic: /v1/messages
-      // - openai provider: /v1/responses
+      // - openai Responses mode (default for built-in OpenAI API Key & custom Responses): /v1/responses
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
-      const useCustomGeminiFormat = effectiveApiFormat === 'gemini'
-        && supportsGeminiApiFormatSelection(testingProvider);
+      const useGeminiFormat = effectiveApiFormat === 'gemini';
 
-      if (useCustomGeminiFormat) {
+      if (useGeminiFormat) {
         const geminiRequest = buildGeminiConnectionTestRequest(normalizedBaseUrl, firstModel.id);
         response = await window.electron.api.fetch({
           url: geminiRequest.url,
@@ -4357,30 +3984,49 @@ const Settings: React.FC<SettingsProps> = ({
         });
       }
 
-      if (response.ok) {
-        enableProvider(testingProvider);
-        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
-        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
-      } else {
+      if (!response.ok) {
         const data = response.data || {};
-        // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
-        if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
-          enableProvider(testingProvider);
-          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
-          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+        if (!(typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached'))) {
+          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
+            failureReason: 'http_error',
+            statusCode: response.status,
+          });
+          if (isCurrentProbe()) showTestResultModal({ success: false, message: errorMessage }, testingProvider);
           return;
         }
-        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
-          failureReason: 'http_error',
-          statusCode: response.status,
-        });
-        showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
+      const autoSave = isCurrentProbe() && (!providerConfig.enabled
+        || isProviderConnectionDirty(savedProvidersRef.current[testingProvider], providerConfig, testingProvider));
+      const normalized = autoSave
+        ? await persistProvidersSnapshot({
+          ...savedProvidersRef.current,
+          [testingProvider]: { ...providerConfig, enabled: true },
+        }, testingProvider)
+        : null;
+      reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
+      if (!isCurrentProbe()) return;
+      if (normalized) {
+        setProviders(prev => prev[testingProvider] === providerConfig
+          ? { ...prev, [testingProvider]: normalized[testingProvider] }
+          : prev);
+        setConnectionSaveError(null);
+        setConnectionFormStatus(SettingsFormStatus.Saved);
+        clearConnectionSavedTimer();
+        connectionSavedTimerRef.current = window.setTimeout(() => {
+          if (mountedRef.current) setConnectionFormStatus(SettingsFormStatus.Idle);
+          connectionSavedTimerRef.current = null;
+        }, SETTINGS_FORM_SAVED_RESET_MS);
+      }
+      showTestResultModal({
+        success: true,
+        message: i18nService.t(autoSave ? 'connectionSuccessAndSaved' : 'connectionSuccess'),
+      }, testingProvider);
     } catch (err) {
       reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
         failureReason: 'network_error',
       });
+      if (!isCurrentProbe()) return;
       showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),
@@ -4394,33 +4040,26 @@ const Settings: React.FC<SettingsProps> = ({
     importInputRef.current?.click();
   };
 
-  // 渲染标签页
-  const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = (() => {
-    const allTabs = [
-      { key: 'general' as TabType,        label: i18nService.t('general'),        icon: <SettingsSlidersIcon className="h-5 w-5" /> },
-      { key: 'appearance' as TabType,     label: i18nService.t('appearance'),     icon: <SunIcon className="h-5 w-5" /> },
-      { key: 'desktopCompanion' as TabType, label: i18nService.t('desktopCompanionTitle'), icon: <FloatingOrbTabIcon className="h-5 w-5" /> },
-      { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
-      { key: 'model' as TabType,          label: i18nService.t('settingsCustomModel'), icon: <CubeIcon className="h-5 w-5" /> },
-      { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
-      { key: 'browserWebAccess' as TabType, label: i18nService.t('browserWebAccessTab'), icon: <GlobeAltIcon className="h-5 w-5" /> },
-      { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
-      { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
-      { key: 'coworkDreaming' as TabType, label: i18nService.t('coworkMemoryTabDreaming'), icon: <DreamingTabIcon className="h-5 w-5" /> },
-      { key: 'plugins' as TabType,        label: i18nService.t('pluginsTab'),     icon: <PlugIcon className="h-5 w-5" /> },
-      { key: 'experimental' as TabType,   label: i18nService.t('experimentalTab'), icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3v6.4c0 .35-.09.68-.27.98l-4.4 7.34A2 2 0 0 0 6.8 20.75h10.4a2 2 0 0 0 1.72-3.03l-4.4-7.34a1.9 1.9 0 0 1-.27-.98V3M8.25 3h7.5M7.5 14.25h9" /></svg> },
-      { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
-      { key: 'help' as TabType,           label: i18nService.t('helpAndFeedback'), icon: <QuestionMarkCircleIcon className="h-5 w-5" /> },
-      { key: 'about' as TabType,          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
+  // 渲染标签页（按组织后的平铺顺序展示，兼容企业配置隐藏指定页签）
+  const sidebarTabs = (() => {
+    const allTabs: Array<{ key: TabType; label: string; icon: React.ReactNode }> = [
+      { key: SettingsTabId.General,          label: i18nService.t('general'),               icon: <SettingsSlidersIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Appearance,       label: i18nService.t('appearance'),            icon: <SunIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.DesktopCompanion, label: i18nService.t('desktopCompanionTitle'), icon: <FloatingOrbTabIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Shortcuts,        label: i18nService.t('shortcuts'),             icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+      { key: SettingsTabId.Model,            label: i18nService.t('settingsCustomModel'),   icon: <CubeIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.CoworkMemory,     label: i18nService.t('coworkMemoryTitle'),     icon: <BrainIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.BrowserWebAccess, label: i18nService.t('browserWebAccessTab'),   icon: <GlobeAltIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Im,               label: i18nService.t('imBot'),                 icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Email,            label: i18nService.t('emailTab'),              icon: <EnvelopeIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Plugins,          label: i18nService.t('pluginsTab'),            icon: <PlugIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.DataPrivacy,      label: i18nService.t('dataPrivacyTab'),        icon: <ShieldCheckIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Experimental,     label: i18nService.t('experimentalTab'),       icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3v6.4c0 .35-.09.68-.27.98l-4.4 7.34A2 2 0 0 0 6.8 20.75h10.4a2 2 0 0 0 1.72-3.03l-4.4-7.34a1.9 1.9 0 0 1-.27-.98V3M8.25 3h7.5M7.5 14.25h9" /></svg> },
+      { key: SettingsTabId.Help,             label: i18nService.t('helpAndFeedback'),       icon: <QuestionMarkCircleIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.About,            label: i18nService.t('about'),                 icon: <InformationCircleIcon className="h-5 w-5" /> },
     ];
-    // Filter out tabs hidden by enterprise config
-    // Filter out tabs with 'hide' action in enterprise config
-    // e.g., ui: { "settings.im": "hide" } → hide the 'im' tab
-    const ui = enterpriseConfig?.ui;
-    if (ui) {
-      return allTabs.filter(tab => ui[`settings.${tab.key}`] !== 'hide');
-    }
-    return allTabs;
+    const tabsByKey = new Map(allTabs.map((tab) => [tab.key, tab]));
+    return filterVisibleSettingsTabs(tabsByKey, enterpriseConfig?.ui);
   })();
 
   const activeTabLabel = useMemo(() => {
@@ -4451,13 +4090,78 @@ const Settings: React.FC<SettingsProps> = ({
     return () => document.removeEventListener('keydown', handleSettingsTabShortcut);
   }, [shortcuts, sidebarTabs, handleTabChange]);
 
+  const persistFontSizes = useCallback(async (nextUiFontSize: number, nextCodeFontSize: number) => {
+    const previousConfig = configService.getConfig();
+    const previousUiFontSize = normalizeFontPreference(
+      previousConfig.uiFontSize,
+      FontPreferences.UiFontSizeDefault,
+      FontPreferences.UiFontSizeMin,
+      FontPreferences.UiFontSizeMax,
+    );
+    const previousCodeFontSize = normalizeFontPreference(
+      previousConfig.codeFontSize,
+      FontPreferences.CodeFontSizeDefault,
+      FontPreferences.CodeFontSizeMin,
+      FontPreferences.CodeFontSizeMax,
+    );
+    if (previousUiFontSize === nextUiFontSize && previousCodeFontSize === nextCodeFontSize) {
+      return;
+    }
+    try {
+      await configService.updateConfig({
+        uiFontSize: nextUiFontSize,
+        codeFontSize: nextCodeFontSize,
+      });
+      if (usageAnalyticsEnabled) {
+        if (previousUiFontSize !== nextUiFontSize) {
+          reportAppearanceSettingChanged('uiFontSize', nextUiFontSize, previousUiFontSize);
+        }
+        if (previousCodeFontSize !== nextCodeFontSize) {
+          reportAppearanceSettingChanged('codeFontSize', nextCodeFontSize, previousCodeFontSize);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to save font preferences:', saveErr);
+      if (mountedRef.current) {
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      }
+    }
+  }, [usageAnalyticsEnabled]);
+
+  const scheduleFontSizePersist = useCallback((nextUiFontSize: number, nextCodeFontSize: number) => {
+    pendingFontSizesRef.current = { uiFontSize: nextUiFontSize, codeFontSize: nextCodeFontSize };
+    if (fontSizeSaveTimerRef.current !== null) {
+      window.clearTimeout(fontSizeSaveTimerRef.current);
+    }
+    fontSizeSaveTimerRef.current = window.setTimeout(() => {
+      fontSizeSaveTimerRef.current = null;
+      const pending = pendingFontSizesRef.current;
+      pendingFontSizesRef.current = null;
+      if (pending) {
+        void persistFontSizes(pending.uiFontSize, pending.codeFontSize);
+      }
+    }, 300);
+  }, [persistFontSizes]);
+
+  const flushPendingFontSizes = useCallback((override?: { uiFontSize?: number; codeFontSize?: number }) => {
+    if (fontSizeSaveTimerRef.current !== null) {
+      window.clearTimeout(fontSizeSaveTimerRef.current);
+      fontSizeSaveTimerRef.current = null;
+    }
+    const nextUi = override?.uiFontSize ?? pendingFontSizesRef.current?.uiFontSize ?? uiFontSize;
+    const nextCode = override?.codeFontSize ?? pendingFontSizesRef.current?.codeFontSize ?? codeFontSize;
+    pendingFontSizesRef.current = null;
+    void persistFontSizes(nextUi, nextCode);
+  }, [codeFontSize, persistFontSizes, uiFontSize]);
+
   const handleUiFontSizeChange = useCallback((nextValue: number) => {
     setUiFontSize(nextValue);
     applyTypographyPreferences({
       uiFontSize: nextValue,
       codeFontSize,
     });
-  }, [codeFontSize]);
+    scheduleFontSizePersist(nextValue, codeFontSize);
+  }, [codeFontSize, scheduleFontSizePersist]);
 
   const handleCodeFontSizeChange = useCallback((nextValue: number) => {
     setCodeFontSize(nextValue);
@@ -4465,33 +4169,54 @@ const Settings: React.FC<SettingsProps> = ({
       uiFontSize,
       codeFontSize: nextValue,
     });
-  }, [uiFontSize]);
+    scheduleFontSizePersist(uiFontSize, nextValue);
+  }, [scheduleFontSizePersist, uiFontSize]);
 
   const handleThemeModeSelection = useCallback(async (
     mode: 'light' | 'dark' | 'system',
   ) => {
+    const previousTheme = theme;
+    const previousThemeId = themeId;
     setError(null);
     try {
       const selection = await selectThemeMode(mode);
       setTheme(selection.mode);
       setThemeId(selection.themeId);
+      if (usageAnalyticsEnabled) {
+        if (previousTheme !== selection.mode) {
+          reportAppearanceSettingChanged('theme', selection.mode, previousTheme);
+        }
+        if (previousThemeId !== selection.themeId) {
+          reportAppearanceSettingChanged('themeId', selection.themeId, previousThemeId);
+        }
+      }
     } catch (selectionError) {
       console.error('[Settings] Failed to select the default theme mode', selectionError);
       setError(i18nService.t('themeApplyFailed'));
     }
-  }, [selectThemeMode]);
+  }, [selectThemeMode, theme, themeId, usageAnalyticsEnabled]);
 
   const handleThemeIdSelection = useCallback(async (nextThemeId: string) => {
+    const previousTheme = theme;
+    const previousThemeId = themeId;
     setError(null);
     try {
       const selection = await selectThemeById(nextThemeId);
       setTheme(selection.mode);
       setThemeId(selection.themeId);
+      if (usageAnalyticsEnabled) {
+        if (previousTheme !== selection.mode) {
+          reportAppearanceSettingChanged('theme', selection.mode, previousTheme);
+        }
+        if (previousThemeId !== selection.themeId) {
+          reportAppearanceSettingChanged('themeId', selection.themeId, previousThemeId);
+        }
+      }
     } catch (selectionError) {
       console.error('[Settings] Failed to select the default color theme', selectionError);
       setError(i18nService.t('themeApplyFailed'));
     }
-  }, [selectThemeById]);
+  }, [selectThemeById, theme, themeId, usageAnalyticsEnabled]);
 
   const renderAppearanceSettings = () => (
     <div className="space-y-8">
@@ -4511,8 +4236,8 @@ const Settings: React.FC<SettingsProps> = ({
                 disabled={isAppearanceChanging}
                 className="flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
-                  borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
-                  backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
+                  borderColor: isSelected ? 'var(--lobster-action)' : 'var(--lobster-border)',
+                  backgroundColor: isSelected ? 'var(--lobster-surface-raised)' : undefined,
                 }}
               >
                 <svg viewBox="0 0 120 80" className="w-full h-auto rounded-md mb-2 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
@@ -4596,7 +4321,7 @@ const Settings: React.FC<SettingsProps> = ({
                     </>
                   )}
                 </svg>
-                <span className="text-xs font-medium" style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
+                <span className={`text-xs ${isSelected ? 'font-semibold' : 'font-medium'}`} style={{ color: 'var(--lobster-text-primary)' }}>
                   {i18nService.t(mode)}
                 </span>
               </button>
@@ -4620,8 +4345,8 @@ const Settings: React.FC<SettingsProps> = ({
                 disabled={isAppearanceChanging}
                 className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
-                  borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
-                  backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
+                  borderColor: isSelected ? 'var(--lobster-action)' : 'var(--lobster-border)',
+                  backgroundColor: isSelected ? 'var(--lobster-surface-raised)' : undefined,
                 }}
               >
                 <svg viewBox="0 0 80 48" className="w-full h-auto rounded-md mb-1.5 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
@@ -4631,7 +4356,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <circle cx="52" cy="24" r="8" fill={c3} opacity="0.8" />
                   <rect x="32" y="34" width="40" height="4" rx="2" fill={c1} opacity="0.6" />
                 </svg>
-                <span className={`${SETTINGS_META_TEXT} font-medium truncate w-full text-center`} style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
+                <span className={`${SETTINGS_META_TEXT} ${isSelected ? 'font-semibold' : 'font-medium'} truncate w-full text-center`} style={{ color: 'var(--lobster-text-primary)' }}>
                   {i18nService.t('theme-name-' + t.meta.id) || t.meta.name}
                 </span>
               </button>
@@ -4648,335 +4373,196 @@ const Settings: React.FC<SettingsProps> = ({
 
         <div className="mt-5 divide-y divide-border rounded-xl border border-border bg-surface">
           <div className="px-4 py-3">
-            <SettingsNumberInputRow
+            <FontSizeSettingRow
               id="ui-font-size"
               title={i18nService.t('uiFontSize')}
               description={i18nService.t('uiFontSizeDescription')}
               value={uiFontSize}
+              defaultValue={FontPreferences.UiFontSizeDefault}
               min={FontPreferences.UiFontSizeMin}
               max={FontPreferences.UiFontSizeMax}
               onChange={handleUiFontSizeChange}
+              onCommit={(val) => flushPendingFontSizes({ uiFontSize: val })}
             />
           </div>
           <div className="px-4 py-3">
-            <SettingsNumberInputRow
+            <FontSizeSettingRow
               id="code-font-size"
               title={i18nService.t('codeFontSize')}
               description={i18nService.t('codeFontSizeDescription')}
               value={codeFontSize}
+              defaultValue={FontPreferences.CodeFontSizeDefault}
               min={FontPreferences.CodeFontSizeMin}
               max={FontPreferences.CodeFontSizeMax}
               onChange={handleCodeFontSizeChange}
+              onCommit={(val) => flushPendingFontSizes({ codeFontSize: val })}
             />
+          </div>
+          <div className="px-4 py-2.5">
+            <p className={`${SETTINGS_META_TEXT} text-secondary/80`}>
+              {i18nService
+                .t('fontSizeWindowZoomHint')
+                .replace(/\{mod\}/g, window.electron?.platform === 'darwin' ? '⌘' : 'Ctrl')}
+            </p>
           </div>
         </div>
       </div>
     </div>
   );
 
+  const handleToggleAutoLaunch = async () => {
+    if (isUpdatingAutoLaunch) return;
+    const next = !autoLaunch;
+    setIsUpdatingAutoLaunch(true);
+    try {
+      console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
+      const result = await window.electron.autoLaunch.set(next);
+      console.log(
+        `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
+      );
+      if (result.success) {
+        const previous = autoLaunch;
+        const actualEnabled = result.enabled ?? next;
+        setAutoLaunchState(actualEnabled);
+        reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
+      } else {
+        if (typeof result.enabled === 'boolean') {
+          setAutoLaunchState(result.enabled);
+        }
+        setError(getAutoLaunchErrorMessage(result.errorCode));
+      }
+    } catch (err) {
+      console.error('Failed to set auto-launch:', err);
+      setError(i18nService.t('autoLaunchUpdateFailed'));
+    } finally {
+      setIsUpdatingAutoLaunch(false);
+    }
+  };
+
+  const handleTogglePreventSleep = async () => {
+    if (isUpdatingPreventSleep) return;
+    const next = !preventSleep;
+    setIsUpdatingPreventSleep(true);
+    try {
+      const result = await window.electron.preventSleep.set(next);
+      if (result.success) {
+        const previous = preventSleep;
+        setPreventSleepState(next);
+        reportGeneralSettingChanged('preventSleep', next, previous);
+      } else {
+        setError(result.error || 'Failed to update prevent-sleep setting');
+      }
+    } catch (err) {
+      console.error('Failed to set prevent-sleep:', err);
+      setError('Failed to update prevent-sleep setting');
+    } finally {
+      setIsUpdatingPreventSleep(false);
+    }
+  };
+
+  const handleToggleQuitConfirmation = async () => {
+    if (isUpdatingQuitConfirmation) return;
+    const next = !quitConfirmation;
+    setIsUpdatingQuitConfirmation(true);
+    try {
+      const result = await window.electron.quitConfirmation.set(next);
+      if (result.success) {
+        const previous = quitConfirmation;
+        setQuitConfirmationState(next);
+        reportGeneralSettingChanged('quitConfirmation', next, previous);
+      } else {
+        setError(i18nService.t('quitConfirmationUpdateFailed'));
+      }
+    } catch (err) {
+      console.error('Failed to set quit-confirmation:', err);
+      setError(i18nService.t('quitConfirmationUpdateFailed'));
+    } finally {
+      setIsUpdatingQuitConfirmation(false);
+    }
+  };
+
   const renderTabContent = () => {
     switch(activeTab) {
-      case 'experimental':
+      case SettingsTabId.Experimental:
         return (
           <div className="space-y-8">
-            <DshExperimentalSettings />
-            <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
+            <DecisionModelExperimentalSettings onRegisterDirtyGuard={registerDirtyGuard} />
           </div>
         );
-      case 'general':
+      case SettingsTabId.General:
         return (
-          <div className="space-y-8">
-            {/* Group: General basics */}
-            <SettingsGroup title={i18nService.t('settingsGroupBasics')}>
-              <SettingsRow>
-                <div className="flex items-center justify-between gap-4">
-                  <h4 className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                    {i18nService.t('language')}
-                  </h4>
-                  <div className="w-[140px] shrink-0">
-                    <ThemedSelect
-                      id="language"
-                      value={language}
-                      onChange={(value) => {
-                        const nextLanguage = value as LanguageType;
-                        setLanguage(nextLanguage);
-                        i18nService.setLanguage(nextLanguage, { persist: false });
-                      }}
-                      options={[
-                        { value: 'zh', label: i18nService.t('chinese') },
-                        { value: 'en', label: i18nService.t('english') }
-                      ]}
-                    />
-                  </div>
-                </div>
-              </SettingsRow>
+          <GeneralSettingsSection
+            language={language}
+            onLanguageChange={(nextLanguage) => {
+              void handleLanguageChange(nextLanguage);
+            }}
+            artifactAutoPreviewEnabled={artifactAutoPreviewEnabled}
+            onToggleArtifactAutoPreview={() => {
+              void handleToggleArtifactAutoPreview();
+            }}
+            taskCompletionNotificationMode={taskCompletionNotificationMode}
+            onTaskCompletionNotificationModeChange={(nextMode) => {
+              void handleTaskCompletionNotificationModeChange(nextMode);
+            }}
+            attentionNotificationsEnabled={permissionNotificationsEnabled || questionNotificationsEnabled}
+            onToggleAttentionNotifications={() => {
+              void handleToggleAttentionNotifications();
+            }}
+            autoLaunch={autoLaunch}
+            isUpdatingAutoLaunch={isUpdatingAutoLaunch}
+            onToggleAutoLaunch={handleToggleAutoLaunch}
+            preventSleep={preventSleep}
+            isUpdatingPreventSleep={isUpdatingPreventSleep}
+            onTogglePreventSleep={handleTogglePreventSleep}
+            quitConfirmation={quitConfirmation}
+            isUpdatingQuitConfirmation={isUpdatingQuitConfirmation}
+            onToggleQuitConfirmation={handleToggleQuitConfirmation}
+            useSystemProxy={useSystemProxy}
+            isUpdatingUseSystemProxy={isUpdatingUseSystemProxy}
+            onToggleUseSystemProxy={handleToggleUseSystemProxy}
+          />
+        );
 
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('artifactAutoPreviewEnabled')}
-                  description={i18nService.t('artifactAutoPreviewEnabledDescription')}
-                  checked={artifactAutoPreviewEnabled}
-                  onToggle={() => {
-                    setArtifactAutoPreviewEnabled((previous) => !previous);
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('autoLaunch')}
-                  description={i18nService.t('autoLaunchDescription')}
-                  checked={autoLaunch}
-                  disabled={isUpdatingAutoLaunch}
-                  onToggle={async () => {
-                    if (isUpdatingAutoLaunch) return;
-                    const next = !autoLaunch;
-                    setIsUpdatingAutoLaunch(true);
-                    try {
-                      console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
-                      const result = await window.electron.autoLaunch.set(next);
-                      console.log(
-                        `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
-                      );
-                      if (result.success) {
-                        const previous = autoLaunch;
-                        const actualEnabled = result.enabled ?? next;
-                        setAutoLaunchState(actualEnabled);
-                        reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
-                      } else {
-                        if (typeof result.enabled === 'boolean') {
-                          setAutoLaunchState(result.enabled);
-                        }
-                        setError(getAutoLaunchErrorMessage(result.errorCode));
-                      }
-                    } catch (err) {
-                      console.error('Failed to set auto-launch:', err);
-                      setError(i18nService.t('autoLaunchUpdateFailed'));
-                    } finally {
-                      setIsUpdatingAutoLaunch(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('preventSleep')}
-                  description={i18nService.t('preventSleepDescription')}
-                  checked={preventSleep}
-                  disabled={isUpdatingPreventSleep}
-                  onToggle={async () => {
-                    if (isUpdatingPreventSleep) return;
-                    const next = !preventSleep;
-                    setIsUpdatingPreventSleep(true);
-                    try {
-                      const result = await window.electron.preventSleep.set(next);
-                      if (result.success) {
-                        const previous = preventSleep;
-                        setPreventSleepState(next);
-                        reportGeneralSettingChanged('preventSleep', next, previous);
-                      } else {
-                        setError(result.error || 'Failed to update prevent-sleep setting');
-                      }
-                    } catch (err) {
-                      console.error('Failed to set prevent-sleep:', err);
-                      setError('Failed to update prevent-sleep setting');
-                    } finally {
-                      setIsUpdatingPreventSleep(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('quitConfirmation')}
-                  description={i18nService.t('quitConfirmationDescription')}
-                  checked={quitConfirmation}
-                  disabled={isUpdatingQuitConfirmation}
-                  onToggle={async () => {
-                    if (isUpdatingQuitConfirmation) return;
-                    const next = !quitConfirmation;
-                    setIsUpdatingQuitConfirmation(true);
-                    try {
-                      const result = await window.electron.quitConfirmation.set(next);
-                      if (result.success) {
-                        const previous = quitConfirmation;
-                        setQuitConfirmationState(next);
-                        reportGeneralSettingChanged('quitConfirmation', next, previous);
-                      } else {
-                        setError(i18nService.t('quitConfirmationUpdateFailed'));
-                      }
-                    } catch (err) {
-                      console.error('Failed to set quit-confirmation:', err);
-                      setError(i18nService.t('quitConfirmationUpdateFailed'));
-                    } finally {
-                      setIsUpdatingQuitConfirmation(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('useSystemProxy')}
-                  description={i18nService.t('useSystemProxyDescription')}
-                  checked={useSystemProxy}
-                  onToggle={() => {
-                    setUseSystemProxy((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-
-            {/* Group: Notifications */}
-            <SettingsGroup
-              title={i18nService.t('settingsGroupNotifications')}
-              footer={
-                (window.electron.platform === 'win32' ||
-                  (window.electron.platform === 'darwin' && !import.meta.env.DEV)) && (
-                  <p className="px-1 text-xs text-secondary">
-                    {i18nService.t('notificationSystemPermissionHint')}{' '}
-                    <button
-                      type="button"
-                      className="text-primary hover:underline"
-                      onClick={() => {
-                        void window.electron.appInfo.openSystemNotificationSettings?.();
-                      }}
-                    >
-                      {i18nService.t('openSystemNotificationSettings')}
-                    </button>
-                  </p>
-                )
-              }
-            >
-              <SettingsRow>
-                <div>
-                  <div className="flex items-center justify-between gap-4">
-                    <h4 className={`min-w-0 flex-1 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                      {i18nService.t('taskCompletionNotificationMode')}
-                    </h4>
-                    <div className="w-[180px] shrink-0">
-                      <ThemedSelect
-                        id="task-completion-notification-mode"
-                        value={taskCompletionNotificationMode}
-                        onChange={(value) => {
-                          setTaskCompletionNotificationMode(value as TaskCompletionNotificationMode);
-                        }}
-                        options={[
-                          {
-                            value: TaskCompletionNotificationMode.Always,
-                            label: i18nService.t('taskCompletionNotificationModeAlways'),
-                          },
-                          {
-                            value: TaskCompletionNotificationMode.Unfocused,
-                            label: i18nService.t('taskCompletionNotificationModeUnfocused'),
-                          },
-                          {
-                            value: TaskCompletionNotificationMode.Off,
-                            label: i18nService.t('taskCompletionNotificationModeOff'),
-                          },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                  <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                    {i18nService.t('taskCompletionNotificationModeDescription')}
-                  </p>
-                </div>
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('permissionNotifications')}
-                  description={i18nService.t('permissionNotificationsDescription')}
-                  checked={permissionNotificationsEnabled || questionNotificationsEnabled}
-                  onToggle={() => {
-                    const nextEnabled = !(permissionNotificationsEnabled || questionNotificationsEnabled);
-                    setPermissionNotificationsEnabled(nextEnabled);
-                    setQuestionNotificationsEnabled(nextEnabled);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-
-            {/* Group: Scheduled tasks */}
-            <SettingsGroup title={i18nService.t('scheduledTasks')}>
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('skipMissedJobs')}
-                  description={i18nService.t('skipMissedJobsDescription')}
-                  checked={skipMissedJobs}
-                  onToggle={() => {
-                    setSkipMissedJobs((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-
-            {/* Group: Data & privacy */}
-            <SettingsGroup title={i18nService.t('settingsGroupDataPrivacy')}>
-              <SettingsRow>
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <h4 className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                      {i18nService.t('coworkTempUsageTitle')}
-                    </h4>
-                    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                      {tempStorageUsageBytes === null
-                        ? i18nService.t('coworkTempUsageLoading')
-                        : i18nService.t('coworkTempUsageLabel')
-                            .replace('{size}', formatBackupSize(tempStorageUsageBytes) || '0 B')
-                            .replace(
-                              '{cleanable}',
-                              formatBackupSize(tempStorageCleanableBytes ?? 0) || '0 B',
-                            )}
-                    </p>
-                    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                      {i18nService.t('coworkTempUsageManualNote')}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleOpenTempCleanConfirm();
-                    }}
-                    disabled={isLoadingTempCleanPreview || isCleaningTempStorage || tempStorageCleanableBytes === 0}
-                    className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isLoadingTempCleanPreview
-                      ? i18nService.t('coworkTempPreviewLoading')
-                      : i18nService.t('coworkTempCleanNow')}
-                  </button>
-                </div>
-                {tempStorageCleanResult && (
-                  <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{tempStorageCleanResult}</p>
-                )}
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('sqliteAutoBackupEnabled')}
-                  description={i18nService.t('sqliteAutoBackupEnabledDescription')}
-                  checked={sqliteAutoBackupEnabled}
-                  onToggle={() => {
-                    setSqliteAutoBackupEnabled((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('usageAnalyticsEnabled')}
-                  description={i18nService.t('usageAnalyticsEnabledDescription')}
-                  checked={usageAnalyticsEnabled}
-                  onToggle={() => {
-                    setUsageAnalyticsEnabled((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-          </div>
+      case SettingsTabId.DataPrivacy:
+        return (
+          <DataPrivacySettingsSection
+            tempStorageUsageBytes={tempStorageUsageBytes}
+            tempStorageCleanableBytes={tempStorageCleanableBytes}
+            tempStorageCleanResult={tempStorageCleanResult}
+            isLoadingTempCleanPreview={isLoadingTempCleanPreview}
+            isCleaningTempStorage={isCleaningTempStorage}
+            formatSize={formatBackupSize}
+            onOpenTempCleanConfirm={() => {
+              void handleOpenTempCleanConfirm();
+            }}
+            dataBackupResult={dataMigration.backupResult}
+            lastRestoreResult={dataMigration.lastRestoreResult}
+            pluginInstallOutcomes={dataMigration.pluginInstallOutcomes}
+            isBackingUpData={dataMigration.isBackingUp}
+            isRestoringData={dataMigration.isRestoring}
+            isPreviewingData={dataMigration.isPreviewing}
+            isReinstallingPlugins={dataMigration.isReinstallingPlugins}
+            onRevealDataBackup={() => {
+              void dataMigration.revealBackupResult();
+            }}
+            onRevealRollback={() => {
+              void dataMigration.revealRollbackPath();
+            }}
+            onReinstallPlugins={() => {
+              void dataMigration.reinstallMissingPlugins();
+            }}
+            onDismissRestoreResult={dataMigration.dismissLastRestoreResult}
+            onDataBackup={() => {
+              void dataMigration.runBackup();
+            }}
+            onOpenDataRestoreConfirm={() => {
+              void dataMigration.startRestoreFlow();
+            }}
+            usageAnalyticsEnabled={usageAnalyticsEnabled}
+            onToggleUsageAnalytics={() => {
+              void handleToggleUsageAnalytics();
+            }}
+          />
         );
 
       case 'appearance':
@@ -4985,8 +4571,8 @@ const Settings: React.FC<SettingsProps> = ({
       case 'desktopCompanion':
         return <DesktopCompanionSettings />;
 
-      case 'email':
-        return <EmailSkillConfig />;
+      case SettingsTabId.Email:
+        return <EmailSkillConfig onRegisterDirtyGuard={registerDirtyGuard} />;
 
       case 'coworkAgentEngine':
         return (
@@ -5030,10 +4616,10 @@ const Settings: React.FC<SettingsProps> = ({
                               onClick={handleCopyOpenClawGatewayUrl}
                               title={openClawGatewayCopied ? i18nService.t('copied') : i18nService.t('copyToClipboard')}
                               aria-label={openClawGatewayCopied ? i18nService.t('copied') : i18nService.t('copyToClipboard')}
-                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-background hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
+                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-background hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/25"
                             >
                               {openClawGatewayCopied
-                                ? <CheckCircleIcon className="h-4 w-4 text-primary" />
+                                ? <CheckCircleIcon className="h-4 w-4 text-foreground" />
                                 : <MessageCopyIcon className="h-4 w-4" />}
                             </button>
                           </div>
@@ -5072,7 +4658,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <span
                         className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
                           openClawHeartbeatEnabled
-                            ? 'bg-primary-muted text-primary'
+                            ? 'bg-surface-raised text-foreground'
                             : 'bg-surface-raised text-secondary'
                         }`}
                       >
@@ -5087,7 +4673,11 @@ const Settings: React.FC<SettingsProps> = ({
                             checked={openClawHeartbeatEnabled}
                             label={i18nService.t('openClawHeartbeatEnabled')}
                             onClick={() => {
-                              setOpenClawHeartbeatEnabled((prev) => !prev);
+                              void handleToggleOpenClawBackgroundOption(
+                                'openClawHeartbeatEnabled',
+                                openClawHeartbeatEnabled,
+                                setOpenClawHeartbeatEnabled,
+                              );
                             }}
                           />
                         </div>
@@ -5103,7 +4693,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <span
                         className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
                           openClawSkillReviewEnabled
-                            ? 'bg-primary-muted text-primary'
+                            ? 'bg-surface-raised text-foreground'
                             : 'bg-surface-raised text-secondary'
                         }`}
                       >
@@ -5118,7 +4708,11 @@ const Settings: React.FC<SettingsProps> = ({
                             checked={openClawSkillReviewEnabled}
                             label={i18nService.t('openClawSkillReviewEnabled')}
                             onClick={() => {
-                              setOpenClawSkillReviewEnabled((prev) => !prev);
+                              void handleToggleOpenClawBackgroundOption(
+                                'openClawSkillReviewEnabled',
+                                openClawSkillReviewEnabled,
+                                setOpenClawSkillReviewEnabled,
+                              );
                             }}
                           />
                         </div>
@@ -5134,7 +4728,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <span
                         className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
                           openClawMemoryFlushEnabled
-                            ? 'bg-primary-muted text-primary'
+                            ? 'bg-surface-raised text-foreground'
                             : 'bg-surface-raised text-secondary'
                         }`}
                       >
@@ -5149,7 +4743,11 @@ const Settings: React.FC<SettingsProps> = ({
                             checked={openClawMemoryFlushEnabled}
                             label={i18nService.t('openClawMemoryFlushEnabled')}
                             onClick={() => {
-                              setOpenClawMemoryFlushEnabled((prev) => !prev);
+                              void handleToggleOpenClawBackgroundOption(
+                                'openClawMemoryFlushEnabled',
+                                openClawMemoryFlushEnabled,
+                                setOpenClawMemoryFlushEnabled,
+                              );
                             }}
                           />
                         </div>
@@ -5169,7 +4767,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <div className="overflow-hidden rounded-xl border border-border bg-surface divide-y divide-border">
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 items-start gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                           <WrenchScrewdriverIcon className="h-[18px] w-[18px]" />
                         </span>
                         <div className="min-w-0">
@@ -5196,26 +4794,24 @@ const Settings: React.FC<SettingsProps> = ({
                       </button>
                     </div>
 
-                    <OpenClawUserConfigRow />
-
-                    {openClawDataBackupResult && (
+                    {dataMigration.backupResult && (
                       <div className={`flex flex-col gap-3 p-4 ${SETTINGS_ITEM_TITLE_TEXT} sm:flex-row sm:items-center sm:justify-between`}>
                         <div className="min-w-0 space-y-1">
                           <div className="font-medium text-foreground">
                             {i18nService.t('openClawDataBackupSavedTitle')}
                           </div>
                           <div className="break-all font-mono text-xs leading-5 text-secondary">
-                            {openClawDataBackupResult.path}
+                            {dataMigration.backupResult.path}
                           </div>
-                          {formatBackupSize(openClawDataBackupResult.sizeBytes) && (
+                          {formatBackupSize(dataMigration.backupResult.sizeBytes) && (
                             <div className="text-xs text-secondary">
-                              {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(openClawDataBackupResult.sizeBytes)}
+                              {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(dataMigration.backupResult.sizeBytes)}
                             </div>
                           )}
                         </div>
                         <button
                           type="button"
-                          onClick={() => { void handleRevealOpenClawDataBackup(); }}
+                          onClick={() => { void dataMigration.revealBackupResult(); }}
                           className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
                         >
                           {i18nService.t('showInFolder')}
@@ -5225,7 +4821,7 @@ const Settings: React.FC<SettingsProps> = ({
 
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 items-start gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                           <ArchiveBoxIcon className="h-[18px] w-[18px]" />
                         </span>
                         <div className="min-w-0">
@@ -5237,24 +4833,22 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => { void handleOpenClawDataBackup(); }}
-                        disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
+                      <ManualDataMigrationAction
+                        onClick={() => { void dataMigration.runBackup(); }}
+                        disabled={dataMigration.isBusy || dataMigration.isPreviewing}
                       >
-                        {isBackingUpOpenClawData && (
+                        {dataMigration.isBackingUp && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
-                        {isBackingUpOpenClawData
+                        {dataMigration.isBackingUp
                           ? i18nService.t('openClawDataBackupRunning')
                           : i18nService.t('openClawDataBackupAction')}
-                      </button>
+                      </ManualDataMigrationAction>
                     </div>
 
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 items-start gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                           <ArrowPathRoundedSquareIcon className="h-[18px] w-[18px]" />
                         </span>
                         <div className="min-w-0">
@@ -5266,26 +4860,20 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowOpenClawDataRestoreConfirm(true)}
-                        disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
+                      <ManualDataMigrationAction
+                        onClick={() => { void dataMigration.startRestoreFlow(); }}
+                        disabled={dataMigration.isBusy || dataMigration.isPreviewing}
                       >
-                        {isRestoringOpenClawData && (
+                        {dataMigration.isRestoring && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
-                        {isRestoringOpenClawData
+                        {dataMigration.isRestoring
                           ? i18nService.t('openClawDataMigrationRunning')
                           : i18nService.t('openClawDataMigrationAction')}
-                      </button>
+                      </ManualDataMigrationAction>
                     </div>
                   </div>
                 </section>
-
-                {openClawEngineStatus?.dreamingRecovery && (
-                  <DreamingRecoveryNotice summary={openClawEngineStatus.dreamingRecovery} />
-                )}
 
                 {openClawRepairResult && (
                   <div className={`rounded-lg border px-3 py-3 text-sm ${openClawRepairResult.success
@@ -5328,262 +4916,24 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
         );
 
-      case 'coworkMemory': {
-        const memoryTabs = [
-          { key: 'entries' as const, titleKey: 'coworkMemoryTabEntries' },
-          { key: 'embedding' as const, titleKey: 'coworkMemoryTabEmbedding' },
-        ];
-        const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
-        for (const entry of coworkMemoryEntries) {
-          const lastGroup = coworkMemoryGroups[coworkMemoryGroups.length - 1];
-          if (lastGroup && (lastGroup.section ?? '') === (entry.section ?? '')) {
-            lastGroup.entries.push(entry);
-          } else {
-            coworkMemoryGroups.push({ section: entry.section, entries: [entry] });
-          }
-        }
+      case 'coworkMemory':
         return (
-          <div className="flex flex-col h-full space-y-4">
-            <div
-              className="flex gap-6 border-b border-border shrink-0"
-              role="tablist"
-              aria-label={i18nService.t('coworkMemoryTitle')}
-            >
-              {memoryTabs.map((tab) => (
-                <button
-                  type="button"
-                  key={tab.key}
-                  role="tab"
-                  aria-selected={memoryTab === tab.key}
-                  onClick={() => setMemoryTab(tab.key)}
-                  className={`-mb-px border-b-2 px-0.5 pb-2.5 text-sm font-medium transition-colors ${
-                    memoryTab === tab.key
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {i18nService.t(tab.titleKey)}
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              {memoryTab === 'entries' && (
-                <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                        {i18nService.t('coworkMemoryCrudTitle')}
-                      </div>
-                      <div className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                        {i18nService.t('coworkMemoryManageHint')}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => { void handleEnterCoworkMemoryRawMode(); }}
-                          disabled={coworkMemoryListLoading}
-                          className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-surface-raised disabled:opacity-60 transition-colors"
-                        >
-                          {i18nService.t('coworkMemoryRawButton')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleOpenCoworkMemoryModal}
-                          className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-medium transition-colors active:scale-[0.98]"
-                        >
-                          <PlusCircleIcon className="h-4 w-4 mr-1.5" />
-                          {i18nService.t('coworkMemoryCrudCreate')}
-                        </button>
-                    </div>
-                  </div>
-
-                    <>
-                      {coworkMemoryStats && (
-                        <div className="text-xs text-secondary">
-                          {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
-                        </div>
-                      )}
-
-                      <input
-                        type="text"
-                        value={coworkMemoryQuery}
-                        onChange={(event) => setCoworkMemoryQuery(event.target.value)}
-                        placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
-                        className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
-                      />
-
-                      <div className="rounded-lg border border-border">
-                        {coworkMemoryListLoading ? (
-                          <div className="px-3 py-3 text-xs text-secondary">
-                            {i18nService.t('loading')}
-                          </div>
-                        ) : coworkMemoryEntries.length === 0 ? (
-                          <div className="px-3 py-3 text-xs text-secondary">
-                            {i18nService.t('coworkMemoryEmpty')}
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-border">
-                            {coworkMemoryGroups.map((group, groupIndex) => (
-                              <React.Fragment key={group.section ?? `ungrouped-${groupIndex}`}>
-                                {group.section && (
-                                  <div className={`flex items-baseline gap-1.5 px-3 pb-1.5 pt-3 ${SETTINGS_META_TEXT} font-medium text-secondary`}>
-                                    <span className="truncate">{group.section}</span>
-                                    <span className="font-normal opacity-70">{group.entries.length}</span>
-                                  </div>
-                                )}
-                                {group.entries.map((entry) => {
-                                  const isLongMemoryText =
-                                    entry.text.split('\n').length > 3 || entry.text.length > 240;
-                                  const isMemoryTextExpanded = coworkMemoryExpandedIds.has(entry.id);
-                                  return (
-                                    <div key={entry.id} className="group px-3 py-3 text-xs transition-colors hover:bg-surface-raised/60">
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div className="flex-1 min-w-0">
-                                          <div
-                                            className={`text-foreground break-words whitespace-pre-wrap leading-relaxed ${
-                                              isLongMemoryText && !isMemoryTextExpanded ? 'line-clamp-3' : ''
-                                            }`}
-                                          >
-                                            {entry.text}
-                                          </div>
-                                          {isLongMemoryText && (
-                                            <button
-                                              type="button"
-                                              onClick={() => toggleCoworkMemoryExpandedId(entry.id)}
-                                              className={`mt-1.5 ${SETTINGS_META_TEXT} text-primary hover:underline`}
-                                            >
-                                              {i18nService.t(isMemoryTextExpanded ? 'coworkMemoryCollapse' : 'coworkMemoryExpand')}
-                                            </button>
-                                          )}
-                                        </div>
-                                        <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleEditCoworkMemoryEntry(entry)}
-                                            title={i18nService.t('edit')}
-                                            aria-label={i18nService.t('edit')}
-                                            className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
-                                          >
-                                            <EditIcon className="h-4 w-4" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
-                                            title={i18nService.t('delete')}
-                                            aria-label={i18nService.t('delete')}
-                                            className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
-                                            disabled={coworkMemoryListLoading}
-                                          >
-                                            <TrashIcon className="h-4 w-4" />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </React.Fragment>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </>
-
-                  {coworkMemoryRawMode && (
-                    <Modal
-                      isOpen
-                      onClose={() => setCoworkMemoryRawMode(false)}
-                      onEscape={() => setCoworkMemoryRawMode(false)}
-                      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 dark:bg-black/50 p-6"
-                      className="flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
-                    >
-                      <div className="flex shrink-0 items-start justify-between gap-3 px-5 py-4">
-                        <div className="min-w-0">
-                          <h2 className="text-lg font-semibold text-foreground">
-                            {i18nService.t('coworkMemoryRawButton')}
-                          </h2>
-                          <p className="mt-0.5 text-sm text-secondary">
-                            {i18nService.t('coworkMemoryRawHint')}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setCoworkMemoryRawMode(false)}
-                          title={i18nService.t('close')}
-                          aria-label={i18nService.t('close')}
-                          className="p-2 rounded-lg hover:bg-surface-raised transition-colors"
-                        >
-                          <XMarkIcon className="h-5 w-5 text-secondary" />
-                        </button>
-                      </div>
-                      <textarea
-                        value={coworkMemoryRawText}
-                        onChange={(event) => setCoworkMemoryRawText(event.target.value)}
-                        spellCheck={false}
-                        autoFocus
-                        className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 pt-1 pb-4 text-xs font-mono leading-relaxed text-foreground focus:outline-none"
-                      />
-                      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setCoworkMemoryRawMode(false)}
-                          className="px-3.5 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-lg border border-border transition-colors"
-                        >
-                          {i18nService.t('cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { void handleSaveCoworkMemoryRaw(); }}
-                          disabled={coworkMemoryRawSaving}
-                          className="px-3.5 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                        >
-                          {i18nService.t('save')}
-                        </button>
-                      </div>
-                    </Modal>
-                  )}
-                </div>
-              )}
-
-              {memoryTab === 'embedding' && (
-                <EmbeddingSettingsSection
-                  embeddingEnabled={embeddingEnabled}
-                  embeddingProvider={embeddingProvider}
-                  embeddingModel={embeddingModel}
-                  embeddingVectorWeight={embeddingVectorWeight}
-                  embeddingRemoteBaseUrl={embeddingRemoteBaseUrl}
-                  embeddingRemoteApiKey={embeddingRemoteApiKey}
-                  onEmbeddingEnabledChange={setEmbeddingEnabled}
-                  onEmbeddingProviderChange={setEmbeddingProvider}
-                  onEmbeddingModelChange={setEmbeddingModel}
-                  onEmbeddingVectorWeightChange={setEmbeddingVectorWeight}
-                  onEmbeddingRemoteBaseUrlChange={setEmbeddingRemoteBaseUrl}
-                  onEmbeddingRemoteApiKeyChange={setEmbeddingRemoteApiKey}
-                />
-              )}
-
-            </div>
-          </div>
-        );
-      }
-
-      case 'coworkDreaming':
-        return (
-          <div className="min-h-full">
-            <DreamingSettingsSection
-              dreamingEnabled={dreamingEnabled}
-              dreamingFrequency={dreamingFrequency}
-              onDreamingEnabledChange={setDreamingEnabled}
-              onDreamingFrequencyChange={setDreamingFrequency}
-            />
-          </div>
+          <MemorySettings
+            initialAgentId={initialMemoryAgentId}
+            initialAgentRequestId={initialTabRequestId}
+            memoryEnabled={coworkMemoryEnabled}
+            onMemoryEnabledChange={handleToggleCoworkMemoryEnabled}
+            onError={setError}
+            onEntryChanged={reportMemoryEntryChanged}
+          />
         );
 
       case 'browserWebAccess':
         return (
           <BrowserWebAccessSettings
             value={browserWebAccess}
-            onChange={setBrowserWebAccess}
+            onCommit={handleCommitBrowserWebAccess}
+            onRegisterDirtyGuard={registerDirtyGuard}
           />
         );
 
@@ -5643,9 +4993,18 @@ const Settings: React.FC<SettingsProps> = ({
             handleCopilotSignOut={handleCopilotSignOut}
             handleCopilotCancelAuth={handleCopilotCancelAuth}
             handleTestConnection={handleTestConnection}
-            handleAddModel={handleAddModel}
+            isFetchingModels={modelDiscovery.isFetching}
+            fetchModelsError={modelDiscovery.error}
+            onClearFetchModelsError={modelDiscovery.clearError}
+            handleFetchModels={handleFetchModels}
+            handleAddModel={() => handleAddModel()}
             handleEditModel={handleEditModel}
             handleDeleteModel={handleDeleteModel}
+            connectionFormStatus={resolvedConnectionFormStatus}
+            isConnectionDirty={isActiveProviderConnectionDirty}
+            connectionSaveError={connectionSaveError}
+            onSaveConnection={handleSaveProviderConnection}
+            onDiscardConnection={handleDiscardProviderConnection}
           />
         );
 
@@ -5700,22 +5059,22 @@ const Settings: React.FC<SettingsProps> = ({
                           {command.inputType === 'send' ? (
                             <SendShortcutSelect
                               value={value}
-                              onChange={(nextValue) => handleShortcutChange(command.key, nextValue)}
+                              onChange={(nextValue) => { void handleShortcutChange(command.key, nextValue); }}
                             />
                           ) : (
                             <ShortcutRecorder
                               value={value}
                               label={commandLabel}
                               global={isQuickPanel}
-                              disabled={isSaving || (isQuickPanel && !companionState)}
-                              onChange={(nextValue) => handleShortcutChange(command.key, nextValue)}
+                              disabled={isUpdatingShortcut || (isQuickPanel && !companionState)}
+                              onChange={(nextValue) => { void handleShortcutChange(command.key, nextValue); }}
                             />
                           )}
                           {value ? (
                             <button
                               type="button"
-                              onClick={() => handleShortcutChange(command.key, '')}
-                              disabled={isSaving || (isQuickPanel && !companionState)}
+                              onClick={() => { void handleShortcutChange(command.key, ''); }}
+                              disabled={isUpdatingShortcut || (isQuickPanel && !companionState)}
                               title={i18nService.t('shortcutClear')}
                               aria-label={i18nService.t('shortcutClear')}
                               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
@@ -5749,14 +5108,15 @@ const Settings: React.FC<SettingsProps> = ({
         );
 
       case 'im':
-        return <IMSettings />;
-
-      case 'plugins':
         return (
-          <PluginsSettings
-            handleRef={pluginsSettingsRef}
+          <IMSettings
+            onRegisterDirtyGuard={registerDirtyGuard}
+            requestNavigation={requestGuardedAction}
           />
         );
+
+      case 'plugins':
+        return <DshPluginEcosystemView />;
 
       case 'help':
         return (
@@ -5807,7 +5167,7 @@ const Settings: React.FC<SettingsProps> = ({
                       e.stopPropagation();
                       void handleCheckUpdate();
                     }}
-                    className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-primary dark:hover:text-primary hover:border-primary dark:hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {updateButtonLabel}
                   </button>
@@ -5827,7 +5187,7 @@ const Settings: React.FC<SettingsProps> = ({
                     type="button"
                     role="switch"
                     aria-checked={testMode}
-                    onClick={() => setTestMode((prev) => !prev)}
+                    onClick={() => { void handleToggleTestMode(); }}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
                       testMode ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
@@ -5853,7 +5213,7 @@ const Settings: React.FC<SettingsProps> = ({
                     e.stopPropagation();
                     handleOpenServiceTerms();
                   }}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-primary dark:hover:text-primary transition-colors"
+                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-foreground transition-colors"
                 >
                   {i18nService.t('aboutServiceTerms')}
                 </button>
@@ -5865,13 +5225,17 @@ const Settings: React.FC<SettingsProps> = ({
                     void handleExportLogs();
                   }}
                   disabled={isExportingLogs}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-primary dark:hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isExportingLogs ? i18nService.t('aboutExportingLogs') : i18nService.t('aboutExportLogs')}
                 </button>
               </div>
 
-              <p className="mt-5 text-center text-xs text-secondary">
+              {showOpenSourceEntries && (
+                <AboutEngineAcknowledgement onAction={reportAboutOpenSourceAction} />
+              )}
+
+              <p className={`${showOpenSourceEntries ? 'mt-4' : 'mt-5'} text-center text-xs text-secondary`}>
                 {i18nService.t('copyrightHolder')}
               </p>
               <p className="mt-1 text-center text-xs text-secondary">
@@ -5908,11 +5272,12 @@ const Settings: React.FC<SettingsProps> = ({
             {sidebarTabs.map((tab) => (
               <button
                 key={tab.key}
+                type="button"
                 onClick={() => handleTabChange(tab.key)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg ${SETTINGS_NAV_TEXT} font-medium transition-colors text-left ${
                   activeTab === tab.key
-                    ? 'bg-primary-muted text-primary'
-                    : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                    ? 'bg-[var(--lobster-sidebar-item-hover)] text-foreground'
+                    : 'text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground'
                 }`}
               >
                 <span className="shrink-0">{tab.icon}</span>
@@ -5944,6 +5309,23 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
+          {dataMigration.lastRestoreResult && activeTab !== SettingsTabId.DataPrivacy && (
+            <div className="px-6 pt-2">
+              <DataMigrationRestoreReportCard
+                result={dataMigration.lastRestoreResult}
+                isReinstallingPlugins={dataMigration.isReinstallingPlugins}
+                pluginInstallOutcomes={dataMigration.pluginInstallOutcomes}
+                onRevealRollback={() => {
+                  void dataMigration.revealRollbackPath();
+                }}
+                onReinstallPlugins={() => {
+                  void dataMigration.reinstallMissingPlugins();
+                }}
+                onDismiss={dataMigration.dismissLastRestoreResult}
+              />
+            </div>
+          )}
+
           {error && (
             <div className="px-6">
               <ErrorMessage
@@ -5953,44 +5335,64 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
             {/* Tab content */}
             <div
               ref={contentRef}
-              className="px-6 py-4 flex-1 overflow-y-auto"
+              className={`px-6 flex-1 min-h-0 ${
+                activeTab === SettingsTabId.CoworkMemory
+                  ? 'pt-2 pb-5 overflow-hidden'
+                  : 'py-4 pb-6 overflow-y-auto'
+              }`}
               style={{ scrollbarGutter: 'stable' }}
             >
               {renderTabContent()}
             </div>
-
-            {/* Footer buttons */}
-            <div className="relative shrink-0">
-              <div
-                aria-hidden="true"
-                className={`pointer-events-none absolute inset-x-0 bottom-full h-10 bg-gradient-to-t from-background to-transparent transition-opacity duration-200 ${
-                  footerFadeVisible ? 'opacity-100' : 'opacity-0'
-                }`}
-              />
-              <div className="flex justify-end space-x-4 px-6 pb-5 pt-3 bg-background">
-                <button
-                  type="button"
-                  onClick={guardedClose}
-                  className={`px-4 py-2 rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]`}
-                >
-                  {i18nService.t('cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving || isAppearanceChanging}
-                  className={`px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]`}
-                >
-                  {isSaving ? i18nService.t('saving') : i18nService.t('save')}
-                </button>
-              </div>
-            </div>
-          </form>
+          </div>
 
         </div>
+
+        <UnsavedChangesConfirmDialog
+          isOpen={pendingGuardedAction !== null}
+          canSave={Boolean(dirtyGuardRef.current?.canSave)}
+          isSaving={isSavingPendingGuard}
+          errorMessage={pendingGuardError}
+          onContinueEditing={handleCancelPendingGuard}
+          onDiscard={handleDiscardPendingGuard}
+          onSaveAndContinue={dirtyGuardRef.current?.save ? handleSavePendingGuard : undefined}
+        />
+
+        {showResetShortcutsConfirm && (
+          <Modal
+            onClose={() => setShowResetShortcutsConfirm(false)}
+            onEscape={() => setShowResetShortcutsConfirm(false)}
+            overlayClassName="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 px-4"
+            className="w-full max-w-[400px] rounded-2xl border border-border bg-background p-5 shadow-modal"
+          >
+            <h3 className="text-base font-semibold text-foreground">
+              {i18nService.t('shortcutResetConfirmTitle')}
+            </h3>
+            <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+              {i18nService.t('shortcutResetConfirmDesc')}
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowResetShortcutsConfirm(false)}
+                className={SETTINGS_ACTION_BUTTON_CLASS}
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void confirmResetShortcuts(); }}
+                className={SETTINGS_PRIMARY_BUTTON_CLASS}
+              >
+                {i18nService.t('shortcutResetAll')}
+              </button>
+            </div>
+          </Modal>
+        )}
 
         {providerTransfer.dialog && (
           <ProviderTransferDialog
@@ -6001,31 +5403,48 @@ const Settings: React.FC<SettingsProps> = ({
           />
         )}
 
-        <ModelEditorDialog
-          activeProvider={activeProvider}
-          isAddingModel={isAddingModel}
-          isEditingModel={isEditingModel}
-          newModelName={newModelName}
-          setNewModelName={setNewModelName}
-          newModelId={newModelId}
-          setNewModelId={setNewModelId}
-          newModelSupportsImage={newModelSupportsImage}
-          setNewModelSupportsImage={setNewModelSupportsImage}
-          newModelSupportsThinking={newModelSupportsThinking}
-          setNewModelSupportsThinking={setNewModelSupportsThinking}
-          newModelContextWindow={newModelContextWindow}
-          setNewModelContextWindow={setNewModelContextWindow}
-          newModelMaxTokens={newModelMaxTokens}
-          setNewModelMaxTokens={setNewModelMaxTokens}
-          newModelCustomParams={newModelCustomParams}
-          setNewModelCustomParams={setNewModelCustomParams}
-          activeProviderConfig={providers[activeProvider]}
-          modelFormError={modelFormError}
-          setModelFormError={setModelFormError}
-          handleSaveNewModel={handleSaveNewModel}
-          handleCancelModelEdit={handleCancelModelEdit}
-          handleModelDialogKeyDown={handleModelDialogKeyDown}
-        />
+        {modelDiscovery.dialog && (
+          <ModelDiscoveryDialog
+            key={`${modelDiscovery.dialog.provider}-${modelDiscovery.dialog.openedAt}`}
+            candidates={modelDiscovery.dialog.candidates}
+            currentModels={providers[modelDiscovery.dialog.provider]?.models ?? []}
+            onClose={modelDiscovery.closeDialog}
+            onConfirm={modelDiscovery.applySelection}
+            onManualAdd={(prefillModelId) => {
+              modelDiscovery.closeDialog();
+              handleAddModel(prefillModelId);
+            }}
+          />
+        )}
+
+        {(isAddingModel || isEditingModel) && (
+          <ModelEditorDialog
+            key={`${activeProvider}-${editingModelId ?? 'new'}-${isAddingModel ? 'add' : 'edit'}`}
+            activeProvider={activeProvider}
+            isAddingModel={isAddingModel}
+            isEditingModel={isEditingModel}
+            newModelName={newModelName}
+            setNewModelName={setNewModelName}
+            newModelId={newModelId}
+            setNewModelId={setNewModelId}
+            newModelSupportsImage={newModelSupportsImage}
+            setNewModelSupportsImage={setNewModelSupportsImage}
+            newModelSupportsThinking={newModelSupportsThinking}
+            setNewModelSupportsThinking={setNewModelSupportsThinking}
+            newModelContextWindow={newModelContextWindow}
+            setNewModelContextWindow={setNewModelContextWindow}
+            newModelMaxTokens={newModelMaxTokens}
+            setNewModelMaxTokens={setNewModelMaxTokens}
+            newModelCustomParams={newModelCustomParams}
+            setNewModelCustomParams={setNewModelCustomParams}
+            activeProviderConfig={providers[activeProvider]}
+            modelFormError={modelFormError}
+            setModelFormError={setModelFormError}
+            handleSaveNewModel={handleSaveNewModel}
+            handleCancelModelEdit={handleCancelModelEdit}
+            handleModelDialogKeyDown={handleModelDialogKeyDown}
+          />
+        )}
 
         <DeleteProviderConfirmDialog
           pendingDeleteProvider={pendingDeleteProvider}
@@ -6047,7 +5466,7 @@ const Settings: React.FC<SettingsProps> = ({
               >
                 <div className="px-5 pt-5 pb-4 border-b border-border">
                   <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                       <WrenchScrewdriverIcon className="h-5 w-5" />
                     </span>
                     <h3 className="text-base font-semibold text-foreground">
@@ -6074,7 +5493,7 @@ const Settings: React.FC<SettingsProps> = ({
                     type="button"
                     onClick={() => { void handleConfirmOpenClawRepair(); }}
                     disabled={isRepairingOpenClaw}
-                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-action-foreground bg-action hover:bg-action-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                   >
                     <WrenchScrewdriverIcon className="h-4 w-4" />
                     {isRepairingOpenClaw
@@ -6099,7 +5518,7 @@ const Settings: React.FC<SettingsProps> = ({
               >
                 <div className="px-5 pt-5 pb-4 border-b border-border">
                   <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                       <TrashIcon className="h-5 w-5" />
                     </span>
                     <h3 className="text-base font-semibold text-foreground">
@@ -6135,6 +5554,11 @@ const Settings: React.FC<SettingsProps> = ({
                               }}
                             />
                             <span className="min-w-0 flex-1">
+                              {dir.kind === CoworkTempDirKind.LegacySqliteBackup && (
+                                <span className="mb-0.5 inline-flex items-center rounded bg-surface-raised px-1.5 py-0.5 text-[11px] font-medium text-secondary">
+                                  {i18nService.t('coworkTempCleanDialogLegacyBackupTag')}
+                                </span>
+                              )}
                               <span className="block truncate text-sm text-foreground" title={dir.tempDir}>
                                 {dir.tempDir}
                               </span>
@@ -6178,7 +5602,7 @@ const Settings: React.FC<SettingsProps> = ({
                       type="button"
                       onClick={() => { void handleConfirmTempClean(); }}
                       disabled={isCleaningTempStorage || tempCleanSelectedDirs.length === 0}
-                      className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                      className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-action-foreground bg-action hover:bg-action-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                     >
                       {isCleaningTempStorage
                         ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -6193,145 +5617,17 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-          {showOpenClawDataRestoreConfirm && (
-            <div
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
-              onClick={() => {
-                if (!isRestoringOpenClawData) setShowOpenClawDataRestoreConfirm(false);
-              }}
-            >
-              <div
-                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-md"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="px-5 pt-5 pb-4 border-b border-border">
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
-                      <ArrowPathRoundedSquareIcon className="h-5 w-5" />
-                    </span>
-                    <h3 className="text-base font-semibold text-foreground">
-                      {i18nService.t('openClawDataMigrationConfirmTitle')}
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="space-y-3 px-5 py-4 text-sm text-secondary">
-                  <p>{i18nService.t('openClawDataMigrationConfirmDesc')}</p>
-                  <p>{i18nService.t('openClawDataMigrationConfirmSafeDesc')}</p>
-                </div>
-
-                <div className="flex justify-end space-x-2 px-5 pb-5">
-                  <button
-                    type="button"
-                    onClick={() => setShowOpenClawDataRestoreConfirm(false)}
-                    disabled={isRestoringOpenClawData}
-                    className="px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-xl border border-border disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {i18nService.t('cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleConfirmOpenClawDataRestore(); }}
-                    disabled={isRestoringOpenClawData}
-                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                  >
-                    {isRestoringOpenClawData
-                      ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
-                      : <ArrowPathRoundedSquareIcon className="h-4 w-4" />}
-                    {isRestoringOpenClawData
-                      ? i18nService.t('openClawDataMigrationRunning')
-                      : i18nService.t('openClawDataMigrationConfirmAction')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {(isBackingUpOpenClawData || isRestoringOpenClawData) && (
-            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4">
-              <div className="w-full max-w-md rounded-2xl border border-border bg-surface px-5 py-5 text-center shadow-xl">
-                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-primary-muted text-primary">
-                  <ArrowPathIcon className="h-5 w-5 animate-spin" />
-                </div>
-                <h3 className="mt-4 text-base font-semibold text-foreground">
-                  {i18nService.t(isBackingUpOpenClawData
-                    ? 'openClawDataBackupBlockingTitle'
-                    : 'openClawDataMigrationBlockingTitle')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-secondary">
-                  {i18nService.t(isBackingUpOpenClawData
-                    ? 'openClawDataBackupBlockingDesc'
-                    : 'openClawDataMigrationBlockingDesc')}
-                </p>
-                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>
-                    {i18nService.t(isBackingUpOpenClawData
-                      ? 'openClawDataBackupBlockingWarning'
-                      : 'openClawDataMigrationBlockingWarning')}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Memory Modal */}
-          {showMemoryModal && (
-            <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
-              onClick={resetCoworkMemoryEditor}
-            >
-              <div
-                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-lg"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center gap-2.5 px-5 pt-5 pb-3">
-                  <h3 className="text-base font-semibold text-foreground">
-                    {coworkMemoryEditingId ? i18nService.t('coworkMemoryCrudUpdate') : i18nService.t('coworkMemoryCrudCreate')}
-                  </h3>
-                  {coworkMemoryEditingId && (
-                    <span className="inline-flex items-center rounded-md bg-primary-muted px-2 py-0.5 text-[11px] text-primary">
-                      {i18nService.t('coworkMemoryEditingTag')}
-                    </span>
-                  )}
-                </div>
-
-                <div className="px-5 pb-1">
-                  <label className="block text-xs font-medium text-secondary mb-1.5">
-                    {i18nService.t('coworkMemoryCrudContentLabel')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
-                  </label>
-                  <textarea
-                    value={coworkMemoryDraftText}
-                    onChange={(event) => setCoworkMemoryDraftText(event.target.value)}
-                    placeholder={i18nService.t('coworkMemoryCrudTextPlaceholder')}
-                    autoFocus
-                    className="min-h-[220px] w-full resize-y rounded-lg border px-3.5 py-3 text-sm leading-relaxed border-border bg-surface text-foreground focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
-                  />
-                  <div className="mt-1.5 text-[11px] leading-relaxed text-secondary">
-                    {i18nService.t('coworkMemoryCrudMultilineHint')}
-                  </div>
-                </div>
-
-                <div className="flex justify-end space-x-2 px-5 py-4">
-                  <button
-                    type="button"
-                    onClick={resetCoworkMemoryEditor}
-                    className="px-3.5 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-lg border border-border transition-colors"
-                  >
-                    {i18nService.t('cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleSaveCoworkMemoryEntry(); }}
-                    disabled={!coworkMemoryDraftText.trim() || coworkMemoryListLoading}
-                    className="px-3.5 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                  >
-                    {coworkMemoryEditingId ? i18nService.t('save') : i18nService.t('coworkMemoryCrudCreate')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+          <DataMigrationDialogs
+            restorePreview={dataMigration.restorePreview}
+            onCancelRestorePreview={dataMigration.cancelRestorePreview}
+            onConfirmRestore={() => {
+              void dataMigration.confirmRestore();
+            }}
+            isBackingUp={dataMigration.isBackingUp}
+            isRestoring={dataMigration.isRestoring}
+            progress={dataMigration.progress}
+            formatSize={formatBackupSize}
+          />
 
           {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
       </SkinPresentationScope>

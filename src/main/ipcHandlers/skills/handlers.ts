@@ -1,25 +1,69 @@
 import { ipcMain } from 'electron';
 
-import { updatePluginSkillIdsFromReport } from '../../skills';
+import { createAuthRequiredIpcError } from '../../libs/authAccessPolicy';
+import { MarketplaceTrustRegistry } from '../../skills/marketplaceTrust';
 import type { SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;
   getSkillStoreUrl: () => string;
-  getOpenClawRuntimeAdapter: () => {
-    connectGatewayIfNeeded: () => Promise<void>;
-    getGatewayClient: () => {
-      request: <T = Record<string, unknown>>(
-        method: string,
-        params?: unknown,
-        opts?: { timeoutMs?: number },
-      ) => Promise<T>;
-    } | null;
-  } | null;
+  fetchMarketplaceText?: (url: string) => Promise<string>;
+  onSkillsPolicyChanged?: () => Promise<void> | void;
+  isAuthGateBlocked?: () => boolean;
 }
 
+const fetchMarketplaceOverHttps = async (url: string): Promise<string> => {
+  const https = await import('https');
+  return new Promise<string>((resolve, reject) => {
+    const req = https.get(url, { timeout: 10000 }, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        res.resume();
+        return;
+      }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => { body += chunk; });
+      res.on('end', () => resolve(body));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+  });
+};
+
 export function registerSkillHandlers(deps: SkillHandlerDeps): void {
-  const { getSkillManager, getSkillStoreUrl, getOpenClawRuntimeAdapter } = deps;
+  const {
+    getSkillManager,
+    getSkillStoreUrl,
+    fetchMarketplaceText = fetchMarketplaceOverHttps,
+    onSkillsPolicyChanged,
+    isAuthGateBlocked,
+  } = deps;
+  const marketplaceTrust = new MarketplaceTrustRegistry();
+  let lastCatalogUrl = '';
+
+  const loadMarketplaceCatalog = async (): Promise<string> => {
+    const url = getSkillStoreUrl();
+    if (!url) {
+      throw new Error('Skill marketplace URL is not configured');
+    }
+    const data = await fetchMarketplaceText(url);
+    lastCatalogUrl = url;
+    marketplaceTrust.updateFromRawResponse(data);
+    return data;
+  };
+
+  const ensureMarketplaceTrustLoaded = async (): Promise<void> => {
+    const url = getSkillStoreUrl();
+    if (!url) return;
+    if (marketplaceTrust.isLoaded() && lastCatalogUrl === url) return;
+    try {
+      await loadMarketplaceCatalog();
+    } catch (error) {
+      console.warn('[SkillMarketplace] Failed to refresh trust catalog before install:', error);
+    }
+  };
 
   ipcMain.handle('skills:list', () => {
     try {
@@ -31,20 +75,13 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   });
 
   ipcMain.handle('skills:setEnabled', async (_event, options: { id: string; enabled: boolean }) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const skills = getSkillManager().setSkillEnabled(options.id, options.enabled);
-      // Best-effort sync to OpenClaw
       try {
-        const adapter = getOpenClawRuntimeAdapter();
-        if (adapter) {
-          await adapter.connectGatewayIfNeeded();
-          const client = adapter.getGatewayClient();
-          if (client) {
-            await client.request('skills.update', { skillKey: options.id, enabled: options.enabled }, { timeoutMs: 10_000 });
-          }
-        }
-      } catch (ocError) {
-        console.warn('[skills] Failed to sync enabled state to OpenClaw:', ocError);
+        await onSkillsPolicyChanged?.();
+      } catch (syncError) {
+        console.warn('[skills] Failed to sync enabled state to DSH host:', syncError);
       }
       return { success: true, skills };
     } catch (error) {
@@ -53,10 +90,10 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   });
 
   ipcMain.handle('skills:delete', async (_event, id: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
-      // Only the skill's own directory is removed. Files inside it come from the
-      // installed package, so they must never name anything else to delete.
       const skills = await getSkillManager().deleteSkill(id);
+      await Promise.resolve(onSkillsPolicyChanged?.()).catch((): void => undefined);
       return { success: true, skills };
     } catch (error) {
       console.error('[skills] Failed to delete skill:', id, error);
@@ -65,21 +102,48 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   });
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
-    return getSkillManager().downloadSkill(source);
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
+    if (typeof source === 'string' && /^https:\/\//i.test(source.trim())) {
+      await ensureMarketplaceTrustLoaded();
+    }
+    const trust = typeof source === 'string'
+      ? marketplaceTrust.resolveTrustedDownload(source)
+      : { trusted: false };
+    return getSkillManager().downloadSkill(
+      source,
+      undefined,
+      trust.trusted
+        ? { skipSecurityScan: true, expectedSha256: trust.expectedSha256 }
+        : undefined,
+    );
   });
 
   ipcMain.handle('skills:upgrade', async (_event, skillId: string, downloadUrl: string) => {
-    return getSkillManager().upgradeSkill(skillId, downloadUrl);
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
+    if (typeof downloadUrl === 'string' && /^https:\/\//i.test(downloadUrl.trim())) {
+      await ensureMarketplaceTrustLoaded();
+    }
+    const trust = typeof downloadUrl === 'string'
+      ? marketplaceTrust.resolveTrustedDownload(downloadUrl, skillId)
+      : { trusted: false };
+    return getSkillManager().upgradeSkill(
+      skillId,
+      downloadUrl,
+      trust.trusted
+        ? { skipSecurityScan: true, expectedSha256: trust.expectedSha256 }
+        : undefined,
+    );
   });
 
   ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     const validActions = ['install', 'installDisabled', 'cancel'];
     if (!validActions.includes(action)) {
       return { success: false, error: 'Invalid action' };
     }
     return getSkillManager().confirmPendingInstall(
       pendingId,
-      action as 'install' | 'installDisabled' | 'cancel'
+      action as 'install' | 'installDisabled' | 'cancel',
     );
   });
 
@@ -105,22 +169,34 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     return getSkillManager().getSkillConfig(skillId);
   });
 
-  ipcMain.handle('skills:setConfig', (_event, skillId: string, config: Record<string, string>) => {
-    return getSkillManager().setSkillConfig(skillId, config);
+  ipcMain.handle('skills:setConfig', async (_event, skillId: string, config: Record<string, string>) => {
+    const result = getSkillManager().setSkillConfig(skillId, config);
+    if (result.success) {
+      await Promise.resolve(onSkillsPolicyChanged?.()).catch((syncError: unknown) => {
+        console.warn('[skills] Failed to sync skill policy after config change:', syncError);
+      });
+    }
+    return result;
   });
 
   ipcMain.handle('skills:getEmailAccountsConfig', (_event, skillId: string) => {
     return getSkillManager().getEmailAccountsConfig(skillId);
   });
 
-  ipcMain.handle('skills:setEmailAccountsConfig', (_event, skillId: string, config: Parameters<SkillManager['setEmailAccountsConfig']>[1]) => {
-    return getSkillManager().setEmailAccountsConfig(skillId, config);
+  ipcMain.handle('skills:setEmailAccountsConfig', async (_event, skillId: string, config: Parameters<SkillManager['setEmailAccountsConfig']>[1]) => {
+    const result = getSkillManager().setEmailAccountsConfig(skillId, config);
+    if (result.success) {
+      await Promise.resolve(onSkillsPolicyChanged?.()).catch((syncError: unknown) => {
+        console.warn('[skills] Failed to sync skill policy after email accounts update:', syncError);
+      });
+    }
+    return result;
   });
 
   ipcMain.handle('skills:testEmailAccountConnectivity', async (
     _event,
     skillId: string,
-    account: Parameters<SkillManager['testEmailAccountConnectivity']>[1]
+    account: Parameters<SkillManager['testEmailAccountConnectivity']>[1],
   ) => {
     return getSkillManager().testEmailAccountConnectivity(skillId, account);
   });
@@ -128,7 +204,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   ipcMain.handle('skills:testEmailConnectivity', async (
     _event,
     skillId: string,
-    config: Record<string, string>
+    config: Record<string, string>,
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
   });
@@ -137,86 +213,14 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     const url = getSkillStoreUrl();
     console.log(`[SkillMarketplace] fetching from: ${url}`);
     try {
-      const https = await import('https');
-      const data = await new Promise<string>((resolve, reject) => {
-        const req = https.get(url, { timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            res.resume();
-            return;
-          }
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => { body += chunk; });
-          res.on('end', () => resolve(body));
-          res.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
-      });
+      const data = await loadMarketplaceCatalog();
       return { success: true, data };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch skill marketplace' };
     }
   });
 
-  ipcMain.handle('skills:detectFromOpenClaw', async () => {
-    try {
-      const adapter = getOpenClawRuntimeAdapter();
-      if (!adapter) {
-        return { skills: [], error: 'OpenClaw runtime not available' };
-      }
-      await adapter.connectGatewayIfNeeded();
-      const client = adapter.getGatewayClient();
-      if (!client) {
-        return { skills: [], error: 'Gateway client not connected' };
-      }
-      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
-      const sm = getSkillManager();
-      updatePluginSkillIdsFromReport(sm, report as any);
-      return sm.detectSkillsFromOpenClaw(report as any);
-    } catch (error) {
-      return { skills: [], error: error instanceof Error ? error.message : 'Detection failed' };
-    }
-  });
-
-  ipcMain.handle('skills:syncFromOpenClaw', async () => {
-    try {
-      const adapter = getOpenClawRuntimeAdapter();
-      if (!adapter) {
-        return { synced: [], error: 'OpenClaw runtime not available' };
-      }
-      await adapter.connectGatewayIfNeeded();
-      const client = adapter.getGatewayClient();
-      if (!client) {
-        return { synced: [], error: 'Gateway client not connected' };
-      }
-      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
-      const sm = getSkillManager();
-      updatePluginSkillIdsFromReport(sm, report as any);
-      return sm.syncSkillsFromOpenClaw(report as any);
-    } catch (error) {
-      return { synced: [], error: error instanceof Error ? error.message : 'Sync failed' };
-    }
-  });
-
-  ipcMain.handle('skills:refreshPluginSkillIds', async () => {
-    try {
-      const adapter = getOpenClawRuntimeAdapter();
-      if (!adapter) {
-        return { success: false, error: 'OpenClaw runtime not available' };
-      }
-      await adapter.connectGatewayIfNeeded();
-      const client = adapter.getGatewayClient();
-      if (!client) {
-        return { success: false, error: 'Gateway client not connected' };
-      }
-      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
-      const sm = getSkillManager();
-      updatePluginSkillIdsFromReport(sm, report as any);
-      return { success: true, pluginSkillIds: [...sm.getPluginSkillIds()] };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Refresh failed' };
-    }
-  });
+  // Compatibility no-ops for removed OpenClaw skill sync channels.
+  ipcMain.handle('skills:detectFromOpenClaw', () => ({ skills: [] }));
+  ipcMain.handle('skills:syncFromOpenClaw', () => ({ synced: [] }));
 }

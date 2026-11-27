@@ -25,6 +25,7 @@ export interface AgentTurnPayload {
   message: string;
   timeoutSeconds?: number;
   model?: string;
+  workingDirectory?: string;
 }
 
 export interface SystemEventPayload {
@@ -92,6 +93,12 @@ export interface ScheduledTaskRunWithName extends ScheduledTaskRun {
   taskName: string;
 }
 
+export interface ScheduledRunSessionRequest {
+  sessionId?: string | null;
+  sessionKey?: string | null;
+  runId?: string;
+}
+
 export interface ScheduledTaskInput {
   name: string;
   description: string;
@@ -108,6 +115,7 @@ export interface ScheduledTaskInput {
 export interface ScheduledTaskStatusEvent {
   taskId: string;
   state: TaskState;
+  enabled?: boolean;
 }
 
 export interface ScheduledTaskRunEvent {

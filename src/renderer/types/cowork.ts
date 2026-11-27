@@ -4,7 +4,13 @@ import type {
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
+  CoworkMemoryStats as SharedCoworkMemoryStats,
+  CoworkMemoryStatus as SharedCoworkMemoryStatus,
+  CoworkMemoryStatusFilter as SharedCoworkMemoryStatusFilter,
   CoworkSessionStatus,
+  CoworkTempDirKind,
+  CoworkUserMemoryEntry as SharedCoworkUserMemoryEntry,
+  CoworkUserMemorySourceSummary as SharedCoworkUserMemorySourceSummary,
 } from '../../shared/cowork/constants';
 import type { CoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../shared/cowork/goal';
@@ -21,6 +27,7 @@ import type { CoworkModelChange } from '../../shared/cowork/modelChange';
 import type { CoworkSessionContentMatch } from '../../shared/cowork/search';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import type { CoworkTurnOutcome } from '../../shared/cowork/turnOutcome';
+import type { DshPermissionPreset } from '../../shared/dshEngine/hostConstants';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -49,7 +56,7 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 
 // Cowork execution mode
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
-export type CoworkAgentEngine = 'openclaw';
+export type CoworkAgentEngine = 'dsh';
 
 export const CoworkCollaborationMode = {
   Default: 'default',
@@ -81,6 +88,7 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  dshDelivery?: import('../../shared/dshEngine/hostConstants').DshDeliveryOutcome | null;
   turnOutcome?: CoworkTurnOutcome;
   imageEdits?: import('../../shared/imageEditing/types').ImageEditMessageSnapshot[];
   messageVersion?: import('../../shared/cowork/messageEdit').CoworkMessageVersionInfo;
@@ -135,12 +143,19 @@ export interface CoworkMessageMetadata {
   [key: string]: unknown;
 }
 
+export interface CoworkContextUsageBreakdown {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+}
+
 export interface CoworkContextUsage {
   sessionId: string;
   sessionKey?: string;
   usedTokens?: number;
   contextTokens?: number;
   percent?: number;
+  breakdown?: CoworkContextUsageBreakdown;
   compactionCount?: number;
   status: 'unknown' | 'normal' | 'warning' | 'danger' | 'compacting';
   latestCompactionCheckpointId?: string;
@@ -187,9 +202,11 @@ export interface CoworkSession {
   contextWindowOverride?: number | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
+  permissionPreset?: DshPermissionPreset | null;
   activeSkillIds: string[];
   activeKitIds?: string[];
   agentId: string;
+  imPlatform?: Platform | null;
   messages: CoworkMessage[];
   /** Offset of the first loaded message in the full message history. 0 means loaded from the beginning. */
   messagesOffset: number;
@@ -246,6 +263,7 @@ export interface CoworkConfig {
 export interface CoworkTempDirPreview {
   cwd: string;
   tempDir: string;
+  kind?: CoworkTempDirKind;
   totalBytes: number;
   totalFiles: number;
   cleanableBytes: number;
@@ -329,20 +347,11 @@ export interface OpenClawGatewayRepairResult {
   failurePath?: string;
 }
 
-export interface CoworkUserMemoryEntry {
-  id: string;
-  text: string;
-  section?: string;
-}
-
-export interface CoworkMemoryStats {
-  total: number;
-  created: number;
-  stale: number;
-  deleted: number;
-  explicit: number;
-  implicit: number;
-}
+export type CoworkMemoryStatus = SharedCoworkMemoryStatus;
+export type CoworkMemoryStatusFilter = SharedCoworkMemoryStatusFilter;
+export type CoworkUserMemorySourceSummary = SharedCoworkUserMemorySourceSummary;
+export type CoworkUserMemoryEntry = SharedCoworkUserMemoryEntry;
+export type CoworkMemoryStats = SharedCoworkMemoryStats;
 
 // Cowork pending permission request
 export interface CoworkPermissionRequest {
@@ -381,11 +390,13 @@ export interface CoworkSessionSummary {
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
+  cwd?: string;
   agentId?: string;
   imPlatform?: Platform | null;
   parentSessionId?: string | null;
   forkedAt?: number | null;
   forkMode?: CoworkForkMode;
+  forkGitBranch?: string | null;
   goal?: CoworkGoal | null;
   createdAt: number;
   updatedAt: number;
@@ -447,6 +458,7 @@ export interface CoworkStartOptions {
 
 // Continue session options
 export interface CoworkContinueOptions {
+  retryMessageId?: string;
   analytics?: UsageContext;
   sessionId: string;
   prompt: string;
@@ -504,55 +516,6 @@ export interface CoworkConfigResult {
   success: boolean;
   config?: CoworkConfig;
   error?: string;
-}
-
-// ── Dreaming content display types ──────────────────────────────────
-
-export interface DreamingPhaseInfo {
-  enabled: boolean;
-  cron: string;
-  nextRunAtMs?: number;
-}
-
-export interface DreamingEntry {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-}
-
-export interface DreamingStatusData {
-  enabled: boolean;
-  timezone?: string;
-  shortTermCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  promotedToday: number;
-  promotedTotal: number;
-  shortTermEntries: DreamingEntry[];
-  promotedEntries: DreamingEntry[];
-  phases?: {
-    light: DreamingPhaseInfo;
-    deep: DreamingPhaseInfo;
-    rem: DreamingPhaseInfo;
-  };
-}
-
-export interface DreamDiaryData {
-  found: boolean;
-  path: string;
-  content?: string;
-  updatedAtMs?: number;
 }
 
 // Stream event types for IPC communication

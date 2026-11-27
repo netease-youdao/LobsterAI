@@ -211,4 +211,74 @@ describe('Mac skill dependency packaging', () => {
     expect(minimatch('Contents/Resources/unrelated.node', rule)).toBe(false);
   });
 
+  test('generates, caches, and validates a lockfile when a skill omits package-lock.json', () => {
+    const f = fixture();
+    const lockContent = JSON.parse(fs.readFileSync(path.join(f.source, 'package-lock.json'), 'utf8'));
+    fs.rmSync(path.join(f.source, 'package-lock.json'));
+    const generateLock = vi.fn((directory: string) => {
+      json(path.join(directory, 'package-lock.json'), lockContent);
+    });
+
+    const context = f.context('x64');
+    const payload = prepareMacSkills(context, { projectDir: f.root, install: f.install, generateLock });
+    expect(fs.existsSync(path.join(f.source, 'package-lock.json'))).toBe(false);
+    expect(generateLock).toHaveBeenCalledTimes(1);
+    expect(f.install).toHaveBeenCalledTimes(1);
+
+    // Second build reuses both the cached lockfile and validated dependencies.
+    prepareMacSkills(f.context('x64'), { projectDir: f.root, install: f.install, generateLock });
+    expect(generateLock).toHaveBeenCalledTimes(1);
+    expect(f.install).toHaveBeenCalledTimes(1);
+
+    // afterPack validation uses the cached lockfile without regenerating.
+    const resources = path.join(context.appOutDir, 'LobsterAI.app/Contents/Resources/SKILLs');
+    fs.mkdirSync(path.dirname(resources), { recursive: true });
+    fs.cpSync(payload, resources, { recursive: true });
+    expect(() => verifyPackagedMacSkills(context, f.root)).not.toThrow();
+
+    // Universal builds share the same cached lockfile across both architectures.
+    for (const arch of ARCHES) {
+      prepareMacSkills(f.context(arch, true), { projectDir: f.root, install: f.install, generateLock });
+    }
+    expect(generateLock).toHaveBeenCalledTimes(1);
+    expect(f.install).toHaveBeenCalledTimes(2);
+  });
+
+  test('regenerates the cached lockfile when package.json changes or lock cache is corrupted', () => {
+    const f = fixture();
+    const lockContent = JSON.parse(fs.readFileSync(path.join(f.source, 'package-lock.json'), 'utf8'));
+    fs.rmSync(path.join(f.source, 'package-lock.json'));
+    const generateLock = vi.fn((directory: string) => {
+      json(path.join(directory, 'package-lock.json'), lockContent);
+    });
+    const prepare = () => prepareMacSkills(f.context('x64'), { projectDir: f.root, install: f.install, generateLock });
+
+    prepare();
+    expect(generateLock).toHaveBeenCalledTimes(1);
+
+    const lockCacheDir = generateLock.mock.calls[0][0];
+    fs.writeFileSync(path.join(lockCacheDir, 'package-lock.json'), '{not json');
+    prepare();
+    expect(generateLock).toHaveBeenCalledTimes(2);
+
+    json(path.join(f.source, 'package.json'), { dependencies: { sharp: '^0.34.5' }, description: 'updated' });
+    prepare();
+    expect(generateLock).toHaveBeenCalledTimes(3);
+  });
+
+  test('fails closed when lockfile generation fails or packaged verification has no lockfile', () => {
+    const f = fixture();
+    fs.rmSync(path.join(f.source, 'package-lock.json'));
+
+    expect(() => prepareMacSkills(f.context('x64'), {
+      projectDir: f.root,
+      install: f.install,
+      generateLock: () => { throw new Error('registry unreachable'); },
+    })).toThrow('Failed to generate lockfile for pptx');
+    expect(f.install).not.toHaveBeenCalled();
+
+    const context = f.context('x64');
+    expect(() => verifyPackagedMacSkills(context, f.root)).toThrow('Missing lockfile for pptx');
+  });
+
 });

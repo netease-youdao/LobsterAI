@@ -1,4 +1,5 @@
 import { i18nService } from '../../services/i18n';
+import { formatMessageDateTime } from '../../utils/tokenFormat';
 
 export interface AgentTaskRelativeTime {
   compact: string;
@@ -18,12 +19,16 @@ const CalendarUnit = {
   MonthsPerYear: 12,
 } as const;
 
-const formatDuration = (value: number, unitKey: string): AgentTaskRelativeTime => {
+const formatDuration = (
+  value: number,
+  unitKey: string,
+  timestamp: number,
+): AgentTaskRelativeTime => {
   const unit = i18nService.t(unitKey);
   const compact = i18nService.getLanguage() === 'zh' ? `${value} ${unit}` : `${value}${unit}`;
   return {
     compact,
-    full: compact,
+    full: formatMessageDateTime(timestamp) || compact,
   };
 };
 
@@ -32,28 +37,36 @@ export const formatAgentTaskRelativeTime = (timestamp: number): AgentTaskRelativ
   const diff = Math.max(0, Date.now() - safeTimestamp);
   const minutes = Math.max(1, Math.floor(diff / Milliseconds.Minute));
   if (minutes <= 60) {
-    return formatDuration(minutes, 'myAgentSidebarMinuteShort');
+    return formatDuration(minutes, 'myAgentSidebarMinuteShort', safeTimestamp);
   }
 
   const hours = Math.floor(diff / Milliseconds.Hour);
 
   if (hours < CalendarUnit.HoursPerDay) {
-    return formatDuration(hours, 'myAgentSidebarHourShort');
+    return formatDuration(hours, 'myAgentSidebarHourShort', safeTimestamp);
   }
 
   const days = Math.floor(diff / Milliseconds.Day);
   if (days < CalendarUnit.DaysPerWeek) {
-    return formatDuration(days, 'myAgentSidebarDayShort');
+    return formatDuration(days, 'myAgentSidebarDayShort', safeTimestamp);
   }
 
   if (days < CalendarUnit.DaysPerMonth) {
-    return formatDuration(Math.floor(days / CalendarUnit.DaysPerWeek), 'myAgentSidebarWeekShort');
+    return formatDuration(
+      Math.floor(days / CalendarUnit.DaysPerWeek),
+      'myAgentSidebarWeekShort',
+      safeTimestamp,
+    );
   }
 
   const months = Math.floor(days / CalendarUnit.DaysPerMonth);
   if (months < CalendarUnit.MonthsPerYear) {
-    return formatDuration(months, 'myAgentSidebarMonthShort');
+    return formatDuration(months, 'myAgentSidebarMonthShort', safeTimestamp);
   }
 
-  return formatDuration(Math.floor(months / CalendarUnit.MonthsPerYear), 'myAgentSidebarYearShort');
+  return formatDuration(
+    Math.floor(months / CalendarUnit.MonthsPerYear),
+    'myAgentSidebarYearShort',
+    safeTimestamp,
+  );
 };

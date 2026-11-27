@@ -9,7 +9,8 @@ import {
   isInternalCompactionSystemText,
   ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
-import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
+import { type CoworkTurnUsage, type CoworkTurnUsageAnchor, CoworkTurnUsageStatus, TurnUsageModelType } from '../../../shared/cowork/llmTurnUsage';
+import { isDshSubagentSpawn, SubagentToolName } from '../../../shared/cowork/subagent';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
@@ -100,6 +101,19 @@ export const getTurnReplyMessageIds = (turn: ConversationTurn): string[] => {
   return messageIds;
 };
 
+/** Assistant replies at the end of a turn after the last tool step, oldest first. */
+export const getTurnTrailingReplyMessageIds = (turn: ConversationTurn): string[] => {
+  const messageIds: string[] = [];
+  for (let index = turn.assistantItems.length - 1; index >= 0; index -= 1) {
+    const item = turn.assistantItems[index];
+    if (item.type === 'tool_group' || item.type === 'tool_result') break;
+    if (item.type === 'assistant' && !item.message.metadata?.isThinking) {
+      messageIds.push(item.message.id);
+    }
+  }
+  return messageIds.reverse();
+};
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const COWORK_DETAIL_CONTENT_CLASS = 'mx-auto w-full max-w-[760px]';
@@ -140,7 +154,12 @@ export const getStringArray = (value: unknown): string | null => {
   return lines.length > 0 ? lines.join('\n') : null;
 };
 
-export const normalizeToolName = (value: string): string => value.toLowerCase().replace(/[\s_]+/g, '');
+export const normalizeToolName = (value: string): string => {
+  let name = value.toLowerCase();
+  if (isDshSubagentSpawn(name)) name = SubagentToolName.Spawn;
+  if (name === SubagentToolName.DshWait) name = SubagentToolName.Yield;
+  return name.replace(/[\s_]+/g, '');
+};
 
 const MCP_TOOL_NAME_SEPARATOR = '__';
 
@@ -154,16 +173,32 @@ const getMcpToolActionName = (toolName: string): string => (
   toolName.slice(toolName.lastIndexOf(MCP_TOOL_NAME_SEPARATOR) + MCP_TOOL_NAME_SEPARATOR.length)
 );
 
+const NormalizedShellToolName = {
+  Bash: 'bash',
+  Exec: 'exec',
+  Shell: 'shell',
+  Pwsh: 'pwsh',
+} as const;
+
+const NormalizedJobToolName = {
+  Process: 'process',
+  JobOutput: 'joboutput',
+  JobList: 'joblist',
+  JobKill: 'jobkill',
+} as const;
+
 export const getToolDisplayName = (toolName: string | undefined): string => {
   if (!toolName) return 'Tool';
   const normalized = normalizeToolName(toolName);
   switch (normalized) {
     case 'cron':
       return 'Cron';
-    case 'exec':
-    case 'bash':
-    case 'shell':
+    case NormalizedShellToolName.Exec:
+    case NormalizedShellToolName.Bash:
+    case NormalizedShellToolName.Shell:
       return 'Bash';
+    case NormalizedShellToolName.Pwsh:
+      return 'PowerShell';
     case 'read':
     case 'readfile':
       return 'Read';
@@ -175,7 +210,10 @@ export const getToolDisplayName = (toolName: string | undefined): string => {
       return 'Edit';
     case 'multiedit':
       return 'MultiEdit';
-    case 'process':
+    case NormalizedJobToolName.Process:
+    case NormalizedJobToolName.JobOutput:
+    case NormalizedJobToolName.JobList:
+    case NormalizedJobToolName.JobKill:
       return 'Process';
     case 'sessionsspawn':
       return 'Subagent';
@@ -192,7 +230,10 @@ export const getToolDisplayName = (toolName: string | undefined): string => {
 export const isBashLikeToolName = (toolName: string | undefined): boolean => {
   if (!toolName) return false;
   const normalized = normalizeToolName(toolName);
-  return normalized === 'bash' || normalized === 'exec' || normalized === 'shell';
+  return normalized === NormalizedShellToolName.Bash
+    || normalized === NormalizedShellToolName.Exec
+    || normalized === NormalizedShellToolName.Shell
+    || normalized === NormalizedShellToolName.Pwsh;
 };
 
 export const getToolInputString = (
@@ -239,14 +280,28 @@ export const isPlanToolName = (toolName: string | undefined): boolean => (
 );
 
 const PROCESS_OUTPUT_ACTIONS = new Set(['poll', 'log', 'list']);
+const DSH_JOB_OUTPUT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  NormalizedJobToolName.JobOutput,
+  NormalizedJobToolName.JobList,
+]);
+const PROCESS_TOOL_NAMES: ReadonlySet<string> = new Set([
+  NormalizedJobToolName.Process,
+  NormalizedJobToolName.JobOutput,
+  NormalizedJobToolName.JobList,
+  NormalizedJobToolName.JobKill,
+]);
 
 /**
- * A `process` call that only reads what a background command printed
- * (poll/log/list): waiting on a command already on screen, not a new step.
+ * A `process` call (OpenClaw) or `job_output`/`job_list` call (DSH) that only
+ * reads what a background command printed: waiting on a command already on
+ * screen, not a new step.
  */
 export const isProcessOutputCheck = (group: ToolGroupItem): boolean => {
   const rawName = group.toolUse.metadata?.toolName;
-  if (typeof rawName !== 'string' || normalizeToolName(rawName) !== 'process') return false;
+  if (typeof rawName !== 'string') return false;
+  const normalized = normalizeToolName(rawName);
+  if (DSH_JOB_OUTPUT_TOOL_NAMES.has(normalized)) return true;
+  if (normalized !== NormalizedJobToolName.Process) return false;
   const action = getToolInputString(group.toolUse.metadata?.toolInput ?? {}, ['action']);
   return action !== null && PROCESS_OUTPUT_ACTIONS.has(action.trim().toLowerCase());
 };
@@ -411,9 +466,10 @@ export const getToolInputSummary = (
   switch (normalizedToolName) {
     case 'cron':
       return getCronToolSummary(input);
-    case 'bash':
-    case 'exec':
-    case 'shell':
+    case NormalizedShellToolName.Bash:
+    case NormalizedShellToolName.Exec:
+    case NormalizedShellToolName.Shell:
+    case NormalizedShellToolName.Pwsh:
       return getToolInputString(input, ['command', 'cmd', 'script'])
         ?? getStringArray(input.commands);
     case 'read':
@@ -443,15 +499,25 @@ export const getToolInputSummary = (
       const target = getToolInputString(input, ['url', 'name', 'selector', 'text']);
       return [action, target ? truncatePreview(target, 60) : null].filter(Boolean).join(' · ') || null;
     }
-    case 'process': {
+    case NormalizedJobToolName.Process: {
       const action = getToolInputString(input, ['action']);
       const sessionId = getToolInputString(input, ['sessionId', 'session_id']);
       if (action && sessionId) return `${action} · ${sessionId}`;
       return action ?? sessionId;
     }
+    case NormalizedJobToolName.JobOutput: {
+      const jobId = getToolInputString(input, ['job_id', 'jobId']);
+      return jobId ? `output · ${jobId}` : 'output';
+    }
+    case NormalizedJobToolName.JobList:
+      return 'list';
+    case NormalizedJobToolName.JobKill: {
+      const jobId = getToolInputString(input, ['job_id', 'jobId']);
+      return jobId ? `kill · ${jobId}` : 'kill';
+    }
     case 'sessionsspawn': {
-      const spawnAgent = getToolInputString(input, ['agentId', 'agent_id']);
-      const spawnTask = getToolInputString(input, ['task']);
+      const spawnAgent = getToolInputString(input, ['agentId', 'agent_id', 'name']);
+      const spawnTask = getToolInputString(input, ['task', 'description', 'prompt']);
       return [spawnAgent, spawnTask ? truncatePreview(spawnTask) : null].filter(Boolean).join(' · ');
     }
     default:
@@ -626,6 +692,10 @@ export const isContextCompactionMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ContextCompaction
 );
 
+export const isAutoContextCompactionMessage = (message: CoworkMessage): boolean => (
+  isContextCompactionMessage(message) && message.metadata?.mode === ContextCompactionMode.Auto
+);
+
 export const isModelChangeMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ModelChanged
   && !!message.metadata.modelChange
@@ -652,6 +722,7 @@ const isRenderableAssistantOrSystemMessage = (message: CoworkMessage): boolean =
     return false;
   }
   if (isModelChangeMessage(message)) return true;
+  if (isContextCompactionMessage(message)) return true;
   if (hasText(message.content) || hasText(message.metadata?.error)) {
     return true;
   }
@@ -889,7 +960,11 @@ export const buildConversationTurns = (
       currentTurn = null;
       continue;
     }
-    if (isContextCompactionMessage(message) && currentTurn?.assistantItems.length) {
+    if (
+      isContextCompactionMessage(message)
+      && !isAutoContextCompactionMessage(message)
+      && currentTurn?.assistantItems.length
+    ) {
       currentTurn = null;
     }
     const turn = ensureTurn(message.id);
@@ -943,22 +1018,25 @@ export interface MessageModelLabelParts {
   detail: string | null;
 }
 
+const concreteModelId = (value: unknown): string | undefined => {
+  const id = typeof value === 'string' ? value.trim() : '';
+  return id && !parseModelPresetModelId(id) ? id : undefined;
+};
+
+const readMessageModel = (metadata?: CoworkMessageMetadata | null) => {
+  const presetId = parseModelPresetId(metadata?.modelPresetId)
+    ?? parseModelPresetModelId(metadata?.model)
+    ?? parseModelPresetModelId(metadata?.resolvedModelId);
+  const resolved = concreteModelId(metadata?.resolvedModelId);
+  const modelId = (presetId ? resolved : undefined) ?? concreteModelId(metadata?.model) ?? resolved;
+  return { presetId, modelId };
+};
+
 export const getMessageModelLabelParts = (metadata?: CoworkMessageMetadata | null): MessageModelLabelParts | null => {
-  const modelPresetId = parseModelPresetId(metadata?.modelPresetId);
-  const resolved = typeof metadata?.resolvedModelId === 'string' ? metadata.resolvedModelId.trim() : '';
-  if (modelPresetId && resolved && !parseModelPresetModelId(resolved)) {
-    return {
-      name: modelPresetName(modelPresetId),
-      detail: formatModelDisplayName(resolved.split('/').pop() || resolved),
-    };
-  }
-  const model = typeof metadata?.model === 'string' ? metadata.model.trim() : '';
-  const actualModel = model && !parseModelPresetModelId(model) ? model
-    : resolved && !parseModelPresetModelId(resolved) ? resolved : '';
-  if (!actualModel) return null;
-  const label = formatModelDisplayName(actualModel.split('/').pop() || actualModel);
-  const presetId = modelPresetId ?? parseModelPresetModelId(model);
-  return presetId ? { name: modelPresetName(presetId), detail: label } : { name: label, detail: null };
+  const { presetId, modelId } = readMessageModel(metadata);
+  const label = modelId ? formatModelDisplayName(modelId.split('/').pop() || modelId) : null;
+  if (presetId) return { name: modelPresetName(presetId), detail: label };
+  return label ? { name: label, detail: null } : null;
 };
 
 export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null => {
@@ -967,24 +1045,28 @@ export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): s
   return parts.detail ? `${parts.name}（${parts.detail}）` : parts.name;
 };
 
-/**
- * Desktop turns stamp the selected preset on every message. IM and cron runs
- * resolve the preset inside OpenClaw, so only their user message records it.
- */
-export const withTurnModelPreset = (
+type TurnModelUsage = Pick<CoworkTurnUsage, 'status' | 'models' | 'modelUsage'>;
+
+const readSettledTextModel = (usage?: TurnModelUsage | null): string | undefined => {
+  if (usage?.status !== CoworkTurnUsageStatus.Settled) return undefined;
+  const models = usage.modelUsage?.length
+    ? usage.modelUsage.filter(row => row.type === TurnUsageModelType.Text).map(row => row.model)
+    : usage.models;
+  const concrete = [...new Set(models.map(concreteModelId).filter(id => id !== undefined))];
+  return concrete.length === 1 ? concrete[0] : undefined;
+};
+
+/** Uses the turn's recorded selection for replies that carry no model metadata. */
+export const resolveTurnModelMetadata = (
   assistant: CoworkMessageMetadata | undefined,
   user: CoworkMessageMetadata | null | undefined,
+  usage?: TurnModelUsage | null,
 ): CoworkMessageMetadata | undefined => {
-  const modelPresetId = parseModelPresetId(user?.modelPresetId);
-  if (!assistant || !modelPresetId || parseModelPresetId(assistant.modelPresetId)) return assistant;
-  const hasActualModel = [assistant.model, assistant.resolvedModelId].some(value => (
-    typeof value === 'string' && value.trim() && !parseModelPresetModelId(value)
-  ));
-  return {
-    ...assistant,
-    modelPresetId,
-    ...(hasActualModel ? {} : { resolvedModelId: user?.resolvedModelId }),
-  };
+  const reply = readMessageModel(assistant);
+  const turn = readMessageModel(user);
+  const modelPresetId = reply.presetId ?? turn.presetId ?? undefined;
+  const resolvedModelId = reply.modelId ?? turn.modelId ?? readSettledTextModel(usage);
+  return modelPresetId || resolvedModelId ? { modelPresetId, resolvedModelId } : undefined;
 };
 
 export const messageMetaClassName = (visible: boolean, align: 'left' | 'right' = 'left'): string => [
@@ -1578,8 +1660,12 @@ export const getTurnAnswerStartIndex = (chunks: ConsolidatedRenderChunk[]): numb
     const chunk = chunks[index - 1];
     if (chunk.kind !== 'item') break;
     const item = chunk.item;
-    // A reconnect row is process detail and folds away with the steps around it.
-    const isAnswerItem = (item.type === 'system' && !isModelReconnectMessage(item.message))
+    // Reconnect and auto-compaction rows are mid-turn process details and fold away with the steps around them.
+    const isAnswerItem = (
+      item.type === 'system'
+      && !isModelReconnectMessage(item.message)
+      && !isAutoContextCompactionMessage(item.message)
+    )
       || (item.type === 'assistant' && item.message.metadata?.isThinking !== true);
     if (!isAnswerItem) break;
     index -= 1;
@@ -1984,7 +2070,18 @@ const getWebSearchQuery = (
 ): string | null => {
   if (!toolInput || !isWebSearchToolName(toolName)) return null;
   const query = getToolInputString(toolInput, SEARCH_QUERY_INPUT_KEYS);
-  return query ? truncatePreview(query.replace(/\s+/g, ' ').trim(), ACTIVITY_TARGET_MAX_CHARS) : null;
+  if (query) {
+    return truncatePreview(query.replace(/\s+/g, ' ').trim(), ACTIVITY_TARGET_MAX_CHARS);
+  }
+  if (Array.isArray(toolInput.queries)) {
+    const queries = toolInput.queries
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map(item => item.replace(/\s+/g, ' ').trim());
+    if (queries.length > 0) {
+      return truncatePreview(queries.join(' / '), ACTIVITY_TARGET_MAX_CHARS);
+    }
+  }
+  return null;
 };
 
 const getWebFetchHost = (toolInput: Record<string, unknown> | undefined): string | null => {
@@ -2029,7 +2126,7 @@ const getDescriptiveStepLabel = (group: ToolGroupItem, isLive: boolean): string 
       .replace('{done}', String(doneCount))
       .replace('{total}', String(plan.steps.length));
   }
-  if (normalized === 'process') {
+  if (PROCESS_TOOL_NAMES.has(normalized)) {
     return isProcessOutputCheck(group)
       ? pick('coworkActivityStatusCommandOutput', 'coworkActivityDoneProcessOutput')
       : pick('coworkActivityLiveProcess', 'coworkActivityDoneProcess');
@@ -2090,7 +2187,14 @@ export const getActivityLiveStatusText = (item: ConsolidatedItem): string => {
     );
   }
   if (isBashLikeToolName(toolName)) return i18nService.t('coworkActivityStatusCommand');
-  if (normalized === 'process') return i18nService.t('coworkActivityStatusCommandOutput');
+  if (PROCESS_TOOL_NAMES.has(normalized)) {
+    return i18nService.t(
+      isProcessOutputCheck(item.group)
+        || (normalized === NormalizedJobToolName.Process && !getToolInputString(toolInput ?? {}, ['action']))
+        ? 'coworkActivityStatusCommandOutput'
+        : 'coworkActivityLiveProcess',
+    );
+  }
   if (READ_TOOL_NAMES.has(normalized)) {
     const path = toolInput ? getToolInputString(toolInput, FILE_PATH_INPUT_KEYS) : null;
     return i18nService.t(isSkillInstructionPath(path) ? 'coworkActivityStatusReadingSkill' : 'coworkActivityStatusReading');
@@ -2124,7 +2228,7 @@ export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind =>
   const rawName = item.group.toolUse.metadata?.toolName;
   const toolName = typeof rawName === 'string' ? rawName : undefined;
   const normalized = toolName ? normalizeToolName(toolName) : '';
-  if (isBashLikeToolName(toolName) || normalized === 'process') return ActivityStepKind.Command;
+  if (isBashLikeToolName(toolName) || PROCESS_TOOL_NAMES.has(normalized)) return ActivityStepKind.Command;
   if (READ_TOOL_NAMES.has(normalized)) return ActivityStepKind.Read;
   if (EDIT_TOOL_NAMES.has(normalized)) return ActivityStepKind.Edit;
   if (FILE_SEARCH_TOOL_NAMES.has(normalized) || MEMORY_TOOL_NAMES.has(normalized)) return ActivityStepKind.Search;

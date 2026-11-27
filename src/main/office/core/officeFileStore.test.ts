@@ -84,17 +84,16 @@ describe.each(Object.entries(KITS))('%s file store', (_name, kit) => {
     expect((await fs.readdir(directory)).sort()).toEqual([`alias${extension}`, `报告${extension}`].sort());
   });
 
-  test('atomic save keeps the mode, copies the original once and retries idempotently', async () => {
+  test('atomic save keeps the mode and retries idempotently', async () => {
     await fs.chmod(filePath, 0o640);
     const bytes = await kit.variant('已保存的编辑');
     unwrap(await store.checkpoint(1, write(bytes, 1)));
     const receipt = unwrap(await store.save(1, write(bytes, 1)));
     expect(receipt.version).toBe(hash(bytes));
-    expect(hash(await fs.readFile(receipt.originalCopyPath!))).toBe(opened.version);
     expect(await fs.readFile(filePath)).toEqual(Buffer.from(bytes));
     expect((await fs.stat(filePath)).mode & 0o777).toBe(0o640);
     expect(unwrap(await store.save(1, write(bytes, 1))).version).toBe(hash(bytes));
-    expect(await fs.readdir(drafts())).toEqual(['originals']);
+    expect(await fs.readdir(drafts())).toEqual([]);
     expect((await fs.readdir(directory)).some(name => name.endsWith('.tmp'))).toBe(false);
   });
 

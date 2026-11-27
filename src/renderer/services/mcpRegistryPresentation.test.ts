@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
+import { NeteaseMail } from '../../shared/neteaseMail/constants';
+import { mcpRegistry } from '../data/mcpRegistry';
 import type { McpRegistryEntry, McpServerConfig } from '../types/mcp';
 import { McpRegistryEntryKind } from '../types/mcp';
 import {
@@ -43,6 +45,14 @@ describe('mergeMarketplaceRegistry', () => {
     oauthProvider: 'qichacha',
     kind: McpRegistryEntryKind.Bundle,
     marketplacePosition: 4,
+  });
+
+  test('keeps NetEase Mail first and Qichacha fourth when merging the marketplace catalog', () => {
+    const remote = ['one', qichacha.id, 'two', NeteaseMail.RegistryId, 'three'].map(id => registryEntry(id));
+    expect(mergeMarketplaceRegistry(remote, mcpRegistry).map(entry => entry.id)).toEqual([
+      NeteaseMail.RegistryId, 'one', 'two', qichacha.id, 'three',
+    ]);
+    expect(mergeMarketplaceRegistry([], mcpRegistry)[0].id).toBe(NeteaseMail.RegistryId);
   });
 
   test('inserts a managed local entry at its 1-based preferred position', () => {

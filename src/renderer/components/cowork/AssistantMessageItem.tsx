@@ -1,6 +1,8 @@
 import './assistantMessageMeta.css';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import { ClockIcon, EllipsisHorizontalIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { stripAssistantImageDiagnostic } from '../../../shared/cowork/assistantImageDiagnostic';
 import {
@@ -17,6 +19,10 @@ import MessageForkIcon from '../icons/MessageForkIcon';
 import MarkdownContent from '../MarkdownContent';
 import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
+import {
+  collectMarkdownPreviewGallery,
+  type ImagePreviewGalleryState,
+} from './imagePreviewNavigation';
 import { MessageActionButton, MessageCopyButton } from './MessageActionButton';
 import {
   getMessageModelLabel,
@@ -24,6 +30,7 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
 } from './messageDisplayUtils';
 import MessageSpeechButton from './messageSpeech/MessageSpeechButton';
+import { resolveFixedPopoverPlacement, resolvePopoverBoundaryBounds } from './popoverPlacement';
 import ProposedPlanBlock from './ProposedPlanBlock';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 
@@ -88,6 +95,144 @@ export const MessageMetaDetails: React.FC<{
   );
 };
 
+const COMPACT_META_POPOVER_WIDTH_PX = 240;
+const COMPACT_META_POPOVER_ESTIMATED_HEIGHT_PX = 120;
+const COMPACT_META_POPOVER_GAP_PX = 6;
+const COMPACT_META_POPOVER_MARGIN_PX = 12;
+
+const CompactMetaOverflowButton: React.FC<{
+  timestamp: number;
+  turnMetadata?: CoworkMessageMetadata | null;
+  turnUsageSlot?: React.ReactNode;
+  goalCompletionLabel?: string | null;
+}> = ({ timestamp, turnMetadata, turnUsageSlot, goalCompletionLabel }) => {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<React.CSSProperties>({});
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const fullModelLabel = getMessageModelLabel(turnMetadata);
+  const isBalancedPreset = parseModelPresetId(turnMetadata?.modelPresetId) === ModelPresetId.Balanced;
+
+  const updatePosition = useCallback(() => {
+    const anchorEl = triggerRef.current;
+    if (!anchorEl) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const boundary = resolvePopoverBoundaryBounds(anchorEl);
+    const placement = resolveFixedPopoverPlacement({
+      anchor: rect,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      desiredWidth: COMPACT_META_POPOVER_WIDTH_PX,
+      estimatedHeight: COMPACT_META_POPOVER_ESTIMATED_HEIGHT_PX,
+      gap: COMPACT_META_POPOVER_GAP_PX,
+      margin: COMPACT_META_POPOVER_MARGIN_PX,
+      boundary,
+    });
+    setPosition({
+      width: placement.width,
+      left: placement.left,
+      ...(placement.direction === 'up'
+        ? { bottom: placement.bottom }
+        : { top: placement.top }),
+      maxHeight: placement.maxHeight,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const isInsideTurnUsagePopover = (target: EventTarget | null): boolean => (
+      target instanceof Element && Boolean(target.closest('[data-turn-usage-popover="true"]'))
+    );
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        (target instanceof Node && (triggerRef.current?.contains(target) || popoverRef.current?.contains(target)))
+        || isInsideTurnUsagePopover(target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    const handleViewportChange = (event: Event) => {
+      const target = event.target;
+      if (
+        (target instanceof Node && popoverRef.current?.contains(target))
+        || isInsideTurnUsagePopover(target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={triggerRef} className="inline-flex shrink-0 items-center">
+      <MessageActionButton
+        label={i18nService.t('more')}
+        pressed={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!open) {
+            updatePosition();
+          }
+          setOpen((prev) => !prev);
+        }}
+        className={MESSAGE_META_ACTION_CLASS_NAME}
+      >
+        <EllipsisHorizontalIcon className="h-4 w-4 shrink-0" />
+      </MessageActionButton>
+      {open && createPortal(
+        <div
+          ref={popoverRef}
+          role="dialog"
+          aria-label={i18nService.t('more')}
+          className="fixed z-[90] flex animate-scale-in flex-col gap-1.5 rounded-xl border border-border bg-surface px-3 py-2.5 text-[12px] font-normal leading-5 text-secondary shadow-popover"
+          style={position}
+        >
+          {goalCompletionLabel && (
+            <div className="flex items-center gap-1.5 text-secondary">
+              <GoalIcon className="h-3.5 w-3.5 shrink-0" />
+              <span>{goalCompletionLabel}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-1.5 tabular-nums">
+            <ClockIcon className="h-3.5 w-3.5 shrink-0 text-muted" />
+            <span>{formatMessageDateTime(timestamp)}</span>
+          </div>
+          {fullModelLabel && (
+            <div className="flex items-start gap-1.5 text-foreground">
+              {isBalancedPreset && <BalancedModelIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-secondary" />}
+              <span className="min-w-0 break-words">{fullModelLabel}</span>
+            </div>
+          )}
+          {turnUsageSlot && (
+            <div className="border-t border-border/70 pt-1.5 pl-2">
+              {turnUsageSlot}
+            </div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+};
+
 /** Shared by a text reply and a stopped turn that has no final text reply. */
 export const AssistantMessageMeta: React.FC<{
   message: CoworkMessage;
@@ -97,43 +242,92 @@ export const AssistantMessageMeta: React.FC<{
   turnUsageSlot?: React.ReactNode;
   onFork?: (messageId: string) => void;
   enableMessageSpeech?: boolean;
+  compactMeta?: boolean;
   goalCompletionLabel?: string | null;
 }> = ({ message, copyContent, timestamp = message.timestamp, turnMetadata, turnUsageSlot, onFork,
-  enableMessageSpeech = false, goalCompletionLabel }) => (
-  <div className={MESSAGE_META_CLASS_NAME} data-cowork-search-exclude="true">
-    {goalCompletionLabel && (
-      <span className="inline-flex shrink-0 items-center gap-1 text-secondary">
-        <GoalIcon className="h-3.5 w-3.5" />
-        <span>{goalCompletionLabel}</span>
-      </span>
-    )}
-    <MessageMetaDetails timestamp={timestamp} turnMetadata={turnMetadata} />
-    {turnUsageSlot}
-    <div className="-ml-1.5 flex shrink-0 items-center">
-      {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
-      <MessageCopyButton
-        className={MESSAGE_META_ACTION_CLASS_NAME}
-        content={copyContent}
-        disabled={!copyContent.trim()}
-        onCopy={(result) => reportConversationMessageAction({
-          actionType: 'copy_message',
-          message,
-          params: {
-            result,
-            copySource: 'assistant_message',
-            copiedLength: copyContent.length,
-          },
-        })}
-      />
-      {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
+  enableMessageSpeech = false, compactMeta = false, goalCompletionLabel }) => {
+  if (compactMeta) {
+    return (
+      <div
+        className="cowork-message-meta mt-1 -ml-1.5 flex min-w-0 items-center gap-0.5 text-[12px] font-normal leading-5 text-secondary select-none"
+        data-cowork-search-exclude="true"
+      >
+        {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
+        <MessageCopyButton
+          className={MESSAGE_META_ACTION_CLASS_NAME}
+          content={copyContent}
+          disabled={!copyContent.trim()}
+          onCopy={(result) => reportConversationMessageAction({
+            actionType: 'copy_message',
+            message,
+            params: {
+              result,
+              copySource: 'assistant_message',
+              copiedLength: copyContent.length,
+            },
+          })}
+        />
+        {enableMessageSpeech && (
+          <MessageSpeechButton
+            messageId={message.id}
+            content={copyContent}
+            className={MESSAGE_META_ACTION_CLASS_NAME}
+          />
+        )}
+        <CompactMetaOverflowButton
+          timestamp={timestamp}
+          turnMetadata={turnMetadata}
+          turnUsageSlot={turnUsageSlot}
+          goalCompletionLabel={goalCompletionLabel}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className={MESSAGE_META_CLASS_NAME} data-cowork-search-exclude="true">
+      {goalCompletionLabel && (
+        <span className="inline-flex shrink-0 items-center gap-1 text-secondary">
+          <GoalIcon className="h-3.5 w-3.5" />
+          <span>{goalCompletionLabel}</span>
+        </span>
+      )}
+      <MessageMetaDetails timestamp={timestamp} turnMetadata={turnMetadata} />
+      {turnUsageSlot}
+      <div className="-ml-1.5 flex shrink-0 items-center">
+        {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
+        <MessageCopyButton
+          className={MESSAGE_META_ACTION_CLASS_NAME}
+          content={copyContent}
+          disabled={!copyContent.trim()}
+          onCopy={(result) => reportConversationMessageAction({
+            actionType: 'copy_message',
+            message,
+            params: {
+              result,
+              copySource: 'assistant_message',
+              copiedLength: copyContent.length,
+            },
+          })}
+        />
+        {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export const getAssistantMessageCopyContent = (content: string): string => {
   const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(content));
   return [proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd(), proposedPlan.planText]
     .filter((part): part is string => Boolean(part)).join('\n\n');
+};
+
+export const getGoalCompletionLabel = (completedGoal?: CoworkGoal | null): string | null => {
+  const goalCompletionDuration = completedGoal
+    ? formatCoworkGoalCompletionDuration(completedGoal)
+    : null;
+  return goalCompletionDuration
+    ? i18nService.t('coworkGoalCompletedIn').replace('{duration}', goalCompletionDuration)
+    : null;
 };
 
 // ── AssistantMessageItem ─────────────────────────────────────────────────────
@@ -144,6 +338,7 @@ const AssistantMessageItem: React.FC<{
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
   enableMessageSpeech?: boolean;
+  compactMeta?: boolean;
   onFork?: (messageId: string) => void;
   turnMetadata?: CoworkMessageMetadata | null;
   completedGoal?: CoworkGoal | null;
@@ -159,6 +354,7 @@ const AssistantMessageItem: React.FC<{
   mapDisplayText,
   showCopyButton = false,
   enableMessageSpeech = false,
+  compactMeta = false,
   onFork,
   turnMetadata,
   completedGoal,
@@ -168,19 +364,15 @@ const AssistantMessageItem: React.FC<{
   onAdjustPlan,
   forceSearchExpanded = false,
 }) => {
-  const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [previewGallery, setPreviewGallery] = useState<ImagePreviewGalleryState | null>(null);
   const rawContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
   const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(rawContent));
   const displayContent = proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
   const copyContent = getAssistantMessageCopyContent(rawContent);
-  const goalCompletionDuration = completedGoal
-    ? formatCoworkGoalCompletionDuration(completedGoal)
-    : null;
-  const goalCompletionLabel = goalCompletionDuration
-    ? i18nService.t('coworkGoalCompletedIn').replace('{duration}', goalCompletionDuration)
-    : null;
+  const goalCompletionLabel = getGoalCompletionLabel(completedGoal);
   const showPlanConfirmationActions = planConfirmationMessageId === message.id;
-  const handleImageClick = useCallback((image: ImagePreviewSource) => {
+  const handleImageClick = useCallback((image: ImagePreviewSource, element?: HTMLImageElement) => {
     reportConversationMessageAction({
       actionType: 'open_message_image',
       message,
@@ -188,7 +380,7 @@ const AssistantMessageItem: React.FC<{
         messageRole: 'assistant',
       },
     });
-    setExpandedImage(image);
+    setPreviewGallery(collectMarkdownPreviewGallery(containerRef.current, element, image));
   }, [message]);
   useEffect(() => {
     if (!proposedPlan.didNormalizePlanText) return;
@@ -214,11 +406,13 @@ const AssistantMessageItem: React.FC<{
       turnUsageSlot={turnUsageSlot}
       onFork={onFork}
       enableMessageSpeech={enableMessageSpeech}
+      compactMeta={compactMeta}
       goalCompletionLabel={goalCompletionLabel}
     />
   ) : null;
   return (
     <div
+      ref={containerRef}
       className="relative focus:outline-none"
       data-cowork-assistant-message-id={message.id}
       data-cowork-search-message-id={message.id}
@@ -252,7 +446,12 @@ const AssistantMessageItem: React.FC<{
         )}
       </div>
       {!displayContent && metaRow}
-      <ImagePreviewModal image={expandedImage} onClose={() => setExpandedImage(null)} />
+      <ImagePreviewModal
+        images={previewGallery?.images}
+        currentIndex={previewGallery?.index ?? null}
+        onIndexChange={(index) => setPreviewGallery((current) => (current ? { ...current, index } : null))}
+        onClose={() => setPreviewGallery(null)}
+      />
     </div>
   );
 };

@@ -1,12 +1,28 @@
-import { XMarkIcon } from '@heroicons/react/24/outline';
-import { AgentLegacyIdentityCleanupStatus, AgentModelSelectionMode, AgentSource } from '@shared/agent';
-import type { Platform } from '@shared/platform';
-import { PlatformRegistry } from '@shared/platform';
+import {
+  ArrowTopRightOnSquareIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
+import {
+  AgentDraftErrorCode,
+  AgentDraftLanguage,
+  AgentDraftMode,
+  AgentLegacyIdentityCleanupStatus,
+  AgentModelSelectionMode,
+  AgentRulePolishDirective,
+  AgentSource,
+  AgentUiEvent,
+  normalizeSubagentCollaborationMode,
+  SubagentCollaborationMode,
+} from '@shared/agent';
 import { ProviderName } from '@shared/providers';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
+import { applyImBindingChanges, getAgentImPlatforms, getBoundImKeys } from '../../services/agentImBindings';
+import { saveAgentOnboardingMeta } from '../../services/agentOnboarding';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
@@ -16,37 +32,54 @@ import { captureExpertModelSelection } from '../../services/newTaskModelSelectio
 import { type RootState, store } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { Agent } from '../../types/agent';
-import type { DingTalkInstanceConfig, DiscordInstanceConfig, FeishuInstanceConfig, IMGatewayConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from '../../types/im';
+import type { IMGatewayConfig } from '../../types/im';
 import type { Skill } from '../../types/skill';
-import { getAgentDisplayName, getAgentDisplayNameById, isDefaultAgentId, usesManagedPresetAvatar } from '../../utils/agentDisplay';
+import { getAgentDisplayName, isDefaultAgentId, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/openclawModelRef';
-import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
 import TrashIcon from '../icons/TrashIcon';
+import ModelSelector from '../ModelSelector';
+import {
+  SETTINGS_DESCRIPTION_TEXT,
+  SETTINGS_ITEM_TITLE_TEXT,
+} from '../settings/settingsTypography';
 import AgentAvatarPicker from './AgentAvatarPicker';
+import {
+  countSelectedCollaborators,
+  getDisplayedCollaboratorIds,
+  hasCollaborationChanged,
+  isRestrictedCollaborationMode,
+  resolveCollaborationPayloadOnSave,
+  selectCollaborationScope,
+  toggleCollaboratorAgent,
+} from './agentCollaborationHelpers';
+import AgentCollaborationSettings from './AgentCollaborationSettings';
 import AgentConfirmDialog from './AgentConfirmDialog';
-import AgentDetailToolbar from './AgentDetailToolbar';
+import { formatAgentDraftError } from './agentDraftErrors';
 import {
   AGENT_DESCRIPTION_INPUT_CLASS,
   AGENT_HEADER_FIELDS_CLASS,
   AGENT_HEADER_IDENTITY_CLASS,
   AGENT_NAME_INPUT_CLASS,
 } from './agentHeaderStyles';
+import AgentImBindingList from './AgentImBindingList';
+import {
+  type AgentRuleTemplateOption,
+  deriveUnifiedInstructions,
+  resolveDescriptionOnAutoFill,
+  resolvePersonaFilesOnSave,
+  RulesUndoSource,
+  UnifiedInstructionSource,
+} from './agentPersonaHelpers';
+import AgentRulesToolbar from './AgentRulesToolbar';
 import AgentSkillSelector from './AgentSkillSelector';
-import { AgentConfirmDialogVariant, AgentDetailTab } from './constants';
-
-type MultiInstancePlatform = 'dingtalk' | 'feishu' | 'qq' | 'wecom' | 'nim' | 'telegram' | 'discord' | 'popo';
-type MultiInstanceConfig = DingTalkInstanceConfig | FeishuInstanceConfig | QQInstanceConfig | WecomInstanceConfig | NimInstanceConfig | TelegramInstanceConfig | DiscordInstanceConfig | PopoInstanceConfig;
-
-const MULTI_INSTANCE_PLATFORMS: MultiInstancePlatform[] = ['dingtalk', 'feishu', 'qq', 'wecom', 'nim', 'telegram', 'discord', 'popo'];
-
-const isMultiInstancePlatform = (platform: Platform): platform is MultiInstancePlatform =>
-  MULTI_INSTANCE_PLATFORMS.includes(platform as MultiInstancePlatform);
+import AgentWorkingDirectoryField from './AgentWorkingDirectoryField';
+import { AgentConfirmDialogVariant, AgentPersonaFileTab } from './constants';
 
 type AgentSettingsActionType =
   | 'open'
   | 'close'
-  | 'tab_change'
+  | 'ai_polish'
   | 'save_submit'
   | 'save_success'
   | 'save_failed'
@@ -57,9 +90,7 @@ type AgentSettingsActionType =
 const AGENT_SETTINGS_ANALYTICS_SOURCE = 'agent_settings_panel';
 
 const serializeAnalyticsList = (values: string[]): string | undefined => {
-  const normalizedValues = values
-    .map(value => value.trim())
-    .filter(Boolean);
+  const normalizedValues = values.map(value => value.trim()).filter(Boolean);
   return normalizedValues.length > 0 ? normalizedValues.join(',') : undefined;
 };
 
@@ -86,30 +117,84 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const skills = useSelector((state: RootState) => state.skill.skills);
+  const mcpServers = useSelector((state: RootState) => state.mcp.servers);
+
   const [agent, setAgent] = useState<Agent | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [identity, setIdentity] = useState('');
   const [userInfo, setUserInfo] = useState('');
+  const [unifiedText, setUnifiedText] = useState('');
+  const [unifiedSource, setUnifiedSource] = useState<UnifiedInstructionSource>(UnifiedInstructionSource.Soul);
+  const [unifiedEdited, setUnifiedEdited] = useState(false);
+  const [rawFilesEdited, setRawFilesEdited] = useState(false);
+
   const [icon, setIcon] = useState('');
   const [modelOverride, setModelOverride] = useState<Model | null | undefined>(undefined);
   const [modelSelectionMode, setModelSelectionMode] = useState<AgentModelSelectionMode>(AgentModelSelectionMode.Explicit);
   const [workingDirectory, setWorkingDirectory] = useState('');
+  const [restrictSkills, setRestrictSkills] = useState(false);
   const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [subagentCollaborationMode, setSubagentCollaborationMode] = useState<SubagentCollaborationMode>(
+    SubagentCollaborationMode.All,
+  );
   const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
   const [nameTouched, setNameTouched] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [polishing, setPolishing] = useState(false);
+  const [polishStreaming, setPolishStreaming] = useState(false);
+  const [activePolishDirective, setActivePolishDirective] = useState<AgentRulePolishDirective | null>(null);
+  const [polishError, setPolishError] = useState<string | null>(null);
+  const [undoRulesSnapshot, setUndoRulesSnapshot] = useState<{
+    text: string;
+    edited: boolean;
+    rawEdited: boolean;
+    source: RulesUndoSource;
+    previousDescription?: string;
+  } | null>(null);
+  const [rulesMenuOpen, setRulesMenuOpen] = useState(false);
+  const [pendingStarterPrompts, setPendingStarterPrompts] = useState<string[] | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showUnsavedConfirm, setShowUnsavedConfirm] = useState(false);
-  const [activeTab, setActiveTab] = useState<AgentDetailTab>(AgentDetailTab.Prompt);
-  const openedAgentIdRef = useRef<string | null>(null);
+  const [pendingOpenMemoryAfterDiscard, setPendingOpenMemoryAfterDiscard] = useState(false);
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
 
-  // IM binding state — keys are platform names or `platform:<instanceId>` for multi-instance platforms.
+  // Collapsible advanced sections
+  const [showImSection, setShowImSection] = useState(false);
+  const [showPersonaFilesSection, setShowPersonaFilesSection] = useState(false);
+  const [activePersonaFileTab, setActivePersonaFileTab] = useState<AgentPersonaFileTab>(AgentPersonaFileTab.Soul);
+
+  const openedAgentIdRef = useRef<string | null>(null);
+  const polishSeqRef = useRef(0);
+  const activePolishRequestIdRef = useRef<string | null>(null);
+  const polishSnapshotRef = useRef<{
+    text: string;
+    edited: boolean;
+    rawEdited: boolean;
+    description: string;
+    shouldAutoFillDescription: boolean;
+  } | null>(null);
+  const rulesTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // IM binding state
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
-  const [boundKeys, setBoundKeys] = useState<Set<string>>(new Set());
-  const [initialBoundKeys, setInitialBoundKeys] = useState<Set<string>>(new Set());
+  const [draftBoundKeys, setDraftBoundKeys] = useState<Set<string> | null>(null);
+  const language = i18nService.getLanguage();
+  const imPlatforms = useMemo(() => getAgentImPlatforms(imConfig, language), [imConfig, language]);
+  const initialBoundKeys = useMemo(
+    () => agentId ? getBoundImKeys(imPlatforms, agentId) : new Set<string>(),
+    [imPlatforms, agentId],
+  );
+  const boundKeys = draftBoundKeys ?? initialBoundKeys;
+
   const isMainAgent = isDefaultAgentId(agentId);
+  const enabledSkills = useMemo(() => skills.filter(skill => skill.enabled), [skills]);
+  const enabledMcpServers = useMemo(() => mcpServers.filter(server => server.enabled), [mcpServers]);
+  const effectiveSkillIds = useMemo(
+    () => (!isMainAgent && restrictSkills ? skillIds : []),
+    [isMainAgent, restrictSkills, skillIds],
+  );
 
   const storedModel = useMemo(
     () => (agent ? resolveOpenClawModelRef(agent.model, availableModels) ?? defaultSelectedModel ?? null : null),
@@ -118,7 +203,6 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const storedModelRef = storedModel ? toOpenClawModelRef(storedModel) : '';
   const model = modelOverride === undefined ? storedModel : modelOverride;
 
-  // Snapshot of initial values for dirty detection
   const initialValuesRef = useRef({
     name: '',
     description: '',
@@ -128,65 +212,92 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     icon: '',
     workingDirectory: '',
     skillIds: [] as string[],
+    subagentCollaborationMode: SubagentCollaborationMode.All as SubagentCollaborationMode,
     subagentAllowAgentIds: [] as string[],
   });
+
+  const resolvedPersona = useMemo(() => resolvePersonaFilesOnSave({
+    initialIdentity: initialValuesRef.current.identity,
+    initialSystemPrompt: initialValuesRef.current.systemPrompt,
+    rawIdentity: identity,
+    rawSystemPrompt: systemPrompt,
+    unifiedText,
+    unifiedSource,
+    unifiedEdited,
+    rawFilesEdited,
+  }), [identity, rawFilesEdited, systemPrompt, unifiedEdited, unifiedSource, unifiedText]);
 
   const getChangedFields = useCallback((): string[] => {
     const init = initialValuesRef.current;
     const changedFields: string[] = [];
     if (name !== init.name) changedFields.push('name');
     if (description !== init.description) changedFields.push('description');
-    if (systemPrompt !== init.systemPrompt) changedFields.push('systemPrompt');
-    if (identity !== init.identity) changedFields.push('identity');
+    if (resolvedPersona.systemPrompt !== init.systemPrompt) changedFields.push('systemPrompt');
+    if (resolvedPersona.identity !== init.identity) changedFields.push('identity');
     if (userInfo !== init.userInfo) changedFields.push('userInfo');
     if (icon !== init.icon) changedFields.push('icon');
     if ((model ? toOpenClawModelRef(model) : '') !== storedModelRef) changedFields.push('model');
-    if (modelSelectionMode !== (agent?.modelSelectionMode ?? AgentModelSelectionMode.Explicit)) changedFields.push('modelSelectionMode');
+    if (modelSelectionMode !== (agent?.modelSelectionMode ?? AgentModelSelectionMode.Explicit)) {
+      changedFields.push('modelSelectionMode');
+    }
     if (workingDirectory !== init.workingDirectory) changedFields.push('workingDirectory');
-    if (skillIds.length !== init.skillIds.length || skillIds.some((id, i) => id !== init.skillIds[i])) {
+    if (
+      effectiveSkillIds.length !== init.skillIds.length
+      || effectiveSkillIds.some((id, idx) => id !== init.skillIds[idx])
+    ) {
       changedFields.push('skillIds');
     }
-    if (
-      subagentAllowAgentIds.length !== init.subagentAllowAgentIds.length ||
-      subagentAllowAgentIds.some((id, i) => id !== init.subagentAllowAgentIds[i])
-    ) {
+    const collaborationDiff = hasCollaborationChanged(
+      {
+        mode: init.subagentCollaborationMode,
+        allowAgentIds: init.subagentAllowAgentIds,
+      },
+      resolveCollaborationPayloadOnSave({
+        mode: subagentCollaborationMode,
+        allowAgentIds: subagentAllowAgentIds,
+        initialAllowAgentIds: init.subagentAllowAgentIds,
+      }),
+    );
+    if (collaborationDiff.modeChanged) {
+      changedFields.push('subagentCollaborationMode');
+    }
+    if (collaborationDiff.allowAgentIdsChanged) {
       changedFields.push('subagentAllowAgentIds');
     }
-    if (boundKeys.size !== initialBoundKeys.size || [...boundKeys].some((k) => !initialBoundKeys.has(k))) {
+    if (boundKeys.size !== initialBoundKeys.size || [...boundKeys].some(k => !initialBoundKeys.has(k))) {
       changedFields.push('imBindings');
     }
     return changedFields;
   }, [
+    agent?.modelSelectionMode,
     boundKeys,
     description,
+    effectiveSkillIds,
     icon,
-    identity,
     initialBoundKeys,
     model,
     modelSelectionMode,
-    agent?.modelSelectionMode,
     name,
-    skillIds,
+    resolvedPersona.identity,
+    resolvedPersona.systemPrompt,
     storedModelRef,
     subagentAllowAgentIds,
-    systemPrompt,
+    subagentCollaborationMode,
     userInfo,
     workingDirectory,
   ]);
 
   const getSelectedSkills = useCallback((): Skill[] => (
-    skillIds
+    effectiveSkillIds
       .map(skillId => skills.find(skill => skill.id === skillId))
       .filter((skill): skill is Skill => Boolean(skill))
-  ), [skillIds, skills]);
+  ), [effectiveSkillIds, skills]);
 
   const getImPlatformsForAnalytics = useCallback((): string[] => {
     const platforms = new Set<string>();
     boundKeys.forEach((key) => {
       const platform = key.split(':')[0]?.trim();
-      if (platform) {
-        platforms.add(platform);
-      }
+      if (platform) platforms.add(platform);
     });
     return Array.from(platforms).sort();
   }, [boundKeys]);
@@ -194,29 +305,24 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const reportAgentSettingsAction = useCallback((
     actionType: AgentSettingsActionType,
     options: {
-      activeTab?: AgentDetailTab;
       changedFields?: string[];
       includeConfigDetails?: boolean;
       isDirty?: boolean;
       result?: 'success' | 'failed';
-      targetTab?: AgentDetailTab;
     } = {},
   ): void => {
     const changedFields = options.changedFields ?? [];
     const selectedSkills = options.includeConfigDetails ? getSelectedSkills() : [];
     const imPlatforms = options.includeConfigDetails ? getImPlatformsForAnalytics() : [];
-    console.debug(`[AgentSettingsPanel] reporting analytics action ${actionType}`);
     void reportYdAnalyzer({
       action: LogReporterAction.AgentSettingsAction,
       source: AGENT_SETTINGS_ANALYTICS_SOURCE,
       actionType,
       agentType: isDefaultAgentId(agentId) ? 'main' : 'custom',
-      activeTab: options.activeTab ?? activeTab,
-      targetTab: options.targetTab,
       isDirty: options.isDirty,
       changedFieldCount: changedFields.length,
       changedFields: changedFields.length > 0 ? changedFields.join(',') : undefined,
-      skillCount: skillIds.length,
+      skillCount: effectiveSkillIds.length,
       imBindingCount: boundKeys.size,
       hasModel: Boolean(model),
       hasWorkingDirectory: workingDirectory.trim().length > 0,
@@ -238,36 +344,60 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       imPlatforms: options.includeConfigDetails ? serializeAnalyticsList(imPlatforms) : undefined,
     });
   }, [
-    activeTab,
     agentId,
     boundKeys.size,
+    effectiveSkillIds.length,
     getImPlatformsForAnalytics,
     getSelectedSkills,
     model,
-    skillIds.length,
     workingDirectory,
   ]);
 
   useEffect(() => {
     if (!agentId) return;
     let cancelled = false;
-    setActiveTab(AgentDetailTab.Identity);
+    polishSeqRef.current += 1;
+    if (activePolishRequestIdRef.current) {
+      void agentService.cancelGenerateDraft(activePolishRequestIdRef.current);
+      activePolishRequestIdRef.current = null;
+    }
+    polishSnapshotRef.current = null;
     setShowDeleteConfirm(false);
     setShowUnsavedConfirm(false);
+    setPendingOpenMemoryAfterDiscard(false);
+    setMemoryCount(null);
     setNameTouched(false);
+    setPolishing(false);
+    setPolishStreaming(false);
+    setActivePolishDirective(null);
+    setPolishError(null);
+    setUndoRulesSnapshot(null);
+    setRulesMenuOpen(false);
+    setPendingStarterPrompts(null);
+    setShowImSection(false);
+    setShowPersonaFilesSection(false);
+    setActivePersonaFileTab(AgentPersonaFileTab.Soul);
 
     void (async () => {
       const a = await window.electron?.agents?.get(agentId);
       if (!a || cancelled) return;
 
-      // The workspace files are what the agent runs with (and may edit itself),
-      // so every agent shows them rather than the stored snapshot.
-      const [nextIdentity, nextSystemPrompt, nextUserInfo] = await Promise.all([
+      const [nextIdentity, nextSystemPrompt, nextUserInfo, memoryStats] = await Promise.all([
         coworkService.readBootstrapFile('IDENTITY.md', { agentId }),
         coworkService.readBootstrapFile('SOUL.md', { agentId }),
         coworkService.readBootstrapFile('USER.md', { agentId }),
+        coworkService.getMemoryStats({ agentId }).catch(() => null),
       ]);
       if (cancelled) return;
+      setMemoryCount(memoryStats?.created ?? 0);
+
+      const unified = deriveUnifiedInstructions({
+        identity: nextIdentity,
+        systemPrompt: nextSystemPrompt,
+      });
+
+      const loadedSkillIds = a.skillIds ?? [];
+      const nextCollaborationMode = normalizeSubagentCollaborationMode(a.subagentCollaborationMode);
 
       setAgent(a);
       setName(a.name);
@@ -275,11 +405,17 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       setSystemPrompt(nextSystemPrompt);
       setIdentity(nextIdentity);
       setUserInfo(nextUserInfo);
+      setUnifiedText(unified.text);
+      setUnifiedSource(unified.source);
+      setUnifiedEdited(false);
+      setRawFilesEdited(false);
       setIcon(a.icon);
       setModelOverride(undefined);
       setModelSelectionMode(a.modelSelectionMode ?? AgentModelSelectionMode.Explicit);
       setWorkingDirectory(a.workingDirectory ?? '');
-      setSkillIds(a.skillIds ?? []);
+      setSkillIds(loadedSkillIds);
+      setRestrictSkills(!isDefaultAgentId(agentId) && loadedSkillIds.length > 0);
+      setSubagentCollaborationMode(nextCollaborationMode);
       setSubagentAllowAgentIds(a.subagentAllowAgentIds ?? []);
       initialValuesRef.current = {
         name: a.name,
@@ -289,28 +425,25 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         userInfo: nextUserInfo,
         icon: a.icon,
         workingDirectory: a.workingDirectory ?? '',
-        skillIds: a.skillIds ?? [],
+        skillIds: loadedSkillIds,
+        subagentCollaborationMode: nextCollaborationMode,
         subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
       };
     })();
 
-    // Load IM config and status for bindings
-    imService.loadConfig().then((cfg) => {
-      if (cfg && !cancelled) {
-        setImConfig(cfg);
-        const bindings = cfg.settings?.platformAgentBindings || {};
-        const bound = new Set<string>();
-        for (const [key, boundAgentId] of Object.entries(bindings)) {
-          if (boundAgentId === agentId) {
-            bound.add(key);
-          }
-        }
-        setBoundKeys(bound);
-        setInitialBoundKeys(new Set(bound));
-      }
+    setImConfig(null);
+    setDraftBoundKeys(null);
+    void imService.loadConfig().then(cfg => {
+      if (!cancelled) setImConfig(cfg);
     });
+
     return () => {
       cancelled = true;
+      if (activePolishRequestIdRef.current) {
+        void agentService.cancelGenerateDraft(activePolishRequestIdRef.current);
+        activePolishRequestIdRef.current = null;
+      }
+      polishSnapshotRef.current = null;
     };
   }, [agentId]);
 
@@ -321,25 +454,35 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     }
     if (openedAgentIdRef.current === agentId) return;
     openedAgentIdRef.current = agentId;
-    reportAgentSettingsAction('open', {
-      activeTab: AgentDetailTab.Identity,
-      isDirty: false,
-    });
+    reportAgentSettingsAction('open', { isDirty: false });
   }, [agentId, reportAgentSettingsAction]);
 
-  const isDirty = useCallback((): boolean => {
-    return getChangedFields().length > 0;
-  }, [getChangedFields]);
-
   if (!agentId) return null;
+
+  const openAgentMemorySettings = () => {
+    onClose();
+    window.dispatchEvent(
+      new CustomEvent(AgentUiEvent.OpenMemorySettings, { detail: { agentId } }),
+    );
+  };
+
+  const handleOpenMemorySettings = () => {
+    const changedFields = getChangedFields();
+    if (changedFields.length > 0) {
+      setPendingOpenMemoryAfterDiscard(true);
+      reportAgentSettingsAction('discard_confirm_open', { changedFields, isDirty: true });
+      setShowUnsavedConfirm(true);
+      return;
+    }
+    reportAgentSettingsAction('close', { isDirty: false });
+    openAgentMemorySettings();
+  };
 
   const handleClose = () => {
     const changedFields = getChangedFields();
     if (changedFields.length > 0) {
-      reportAgentSettingsAction('discard_confirm_open', {
-        changedFields,
-        isDirty: true,
-      });
+      setPendingOpenMemoryAfterDiscard(false);
+      reportAgentSettingsAction('discard_confirm_open', { changedFields, isDirty: true });
       setShowUnsavedConfirm(true);
     } else {
       reportAgentSettingsAction('close', { isDirty: false });
@@ -352,8 +495,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       changedFields: getChangedFields(),
       isDirty: true,
     });
+    const shouldOpenMemory = pendingOpenMemoryAfterDiscard;
+    setPendingOpenMemoryAfterDiscard(false);
     setShowUnsavedConfirm(false);
-    onClose();
+    if (shouldOpenMemory) {
+      openAgentMemorySettings();
+    } else {
+      onClose();
+    }
   };
 
   const handleCancelDiscard = () => {
@@ -361,21 +510,213 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       changedFields: getChangedFields(),
       isDirty: true,
     });
+    setPendingOpenMemoryAfterDiscard(false);
     setShowUnsavedConfirm(false);
   };
 
-  const handleTabChange = (targetTab: AgentDetailTab) => {
-    if (targetTab === activeTab) return;
-    reportAgentSettingsAction('tab_change', {
-      activeTab,
-      isDirty: isDirty(),
-      targetTab,
+  const handleUnifiedTextChange = (nextText: string) => {
+    setUnifiedText(nextText);
+    setUnifiedEdited(true);
+    setRawFilesEdited(false);
+    if (polishError) setPolishError(null);
+    if (undoRulesSnapshot) setUndoRulesSnapshot(null);
+  };
+
+  const handleUndoRules = () => {
+    if (!undoRulesSnapshot || polishing) return;
+    setUnifiedText(undoRulesSnapshot.text);
+    setUnifiedEdited(undoRulesSnapshot.edited);
+    setRawFilesEdited(undoRulesSnapshot.rawEdited);
+    if (undoRulesSnapshot.previousDescription !== undefined) {
+      setDescription(undoRulesSnapshot.previousDescription);
+    }
+    setUndoRulesSnapshot(null);
+    setPolishError(null);
+  };
+
+  const cancelActivePolish = () => {
+    polishSeqRef.current += 1;
+    const activeId = activePolishRequestIdRef.current;
+    activePolishRequestIdRef.current = null;
+    if (activeId) {
+      void agentService.cancelGenerateDraft(activeId);
+    }
+    const snapshot = polishSnapshotRef.current;
+    polishSnapshotRef.current = null;
+    setPolishing(false);
+    setPolishStreaming(false);
+    setActivePolishDirective(null);
+    if (snapshot) {
+      setUnifiedText(snapshot.text);
+      setUnifiedEdited(snapshot.edited);
+      setRawFilesEdited(snapshot.rawEdited);
+      if (snapshot.shouldAutoFillDescription) {
+        setDescription(snapshot.description);
+      }
+    }
+  };
+
+  const handleRawPersonaChange = (file: AgentPersonaFileTab, value: string) => {
+    if (file === AgentPersonaFileTab.User) {
+      setUserInfo(value);
+      return;
+    }
+    const nextIdentity = file === AgentPersonaFileTab.Identity ? value : identity;
+    const nextSystemPrompt = file === AgentPersonaFileTab.Soul ? value : systemPrompt;
+    setIdentity(nextIdentity);
+    setSystemPrompt(nextSystemPrompt);
+    setRawFilesEdited(true);
+    setUnifiedEdited(false);
+    const derived = deriveUnifiedInstructions({
+      identity: nextIdentity,
+      systemPrompt: nextSystemPrompt,
     });
-    setActiveTab(targetTab);
+    setUnifiedText(derived.text);
+    setUnifiedSource(derived.source);
+  };
+
+  const handleApplyRuleTemplate = (template: AgentRuleTemplateOption) => {
+    if (polishing) return;
+    const content = i18nService.t(template.contentKey);
+    const autoFill = resolveDescriptionOnAutoFill(
+      description,
+      i18nService.t(template.descriptionKey),
+    );
+    const snapshot = {
+      text: unifiedText,
+      edited: unifiedEdited,
+      rawEdited: rawFilesEdited,
+      source: RulesUndoSource.Template,
+      ...(autoFill.didFill ? { previousDescription: description } : {}),
+    };
+    setUnifiedText(content);
+    setUnifiedEdited(true);
+    setRawFilesEdited(false);
+    if (autoFill.didFill) {
+      setDescription(autoFill.nextDescription);
+    }
+    setPolishError(null);
+    setUndoRulesSnapshot(snapshot);
+    requestAnimationFrame(() => {
+      rulesTextareaRef.current?.focus();
+    });
+  };
+
+  const handleAiPolish = async (
+    directive: AgentRulePolishDirective = AgentRulePolishDirective.Polish,
+  ) => {
+    if (polishing) {
+      cancelActivePolish();
+      return;
+    }
+    const reqSeq = ++polishSeqRef.current;
+    const requestId = `agent-polish-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const shouldAutoFillDescription = !description.trim();
+    const snapshot = {
+      text: unifiedText,
+      edited: unifiedEdited,
+      rawEdited: rawFilesEdited,
+      description,
+      shouldAutoFillDescription,
+    };
+    polishSnapshotRef.current = snapshot;
+    activePolishRequestIdRef.current = requestId;
+    setPolishing(true);
+    setPolishStreaming(false);
+    setActivePolishDirective(directive);
+    setPolishError(null);
+    setUndoRulesSnapshot(null);
+    reportAgentSettingsAction('ai_polish', { isDirty: getChangedFields().length > 0 });
+
+    const language = i18nService.getLanguage() === 'en'
+      ? AgentDraftLanguage.En
+      : AgentDraftLanguage.Zh;
+    const displayName = isMainAgent && !nameTouched
+      ? getAgentDisplayName({ id: agentId, name })
+      : name;
+
+    const result = await agentService.generateDraft(
+      {
+        requestId,
+        mode: AgentDraftMode.Polish,
+        name: displayName.trim() || undefined,
+        goal: description.trim() || displayName.trim(),
+        existingInstructions: snapshot.text.trim() || undefined,
+        ...(directive !== AgentRulePolishDirective.Polish ? { polishDirective: directive } : {}),
+        ...(shouldAutoFillDescription ? { includeDescription: true } : {}),
+        workingDirectory: workingDirectory.trim() || undefined,
+        language,
+      },
+      {
+        onProgress: (preview) => {
+          if (reqSeq !== polishSeqRef.current) return;
+          if (shouldAutoFillDescription && preview.description !== undefined) {
+            setPolishStreaming(true);
+            setDescription(preview.description);
+          }
+          if (preview.instructions) {
+            setPolishStreaming(true);
+            setUnifiedText(preview.instructions);
+            setUnifiedEdited(true);
+            setRawFilesEdited(false);
+            requestAnimationFrame(() => {
+              const el = rulesTextareaRef.current;
+              if (el) {
+                el.scrollTop = el.scrollHeight;
+              }
+            });
+          }
+        },
+      },
+    );
+
+    if (reqSeq !== polishSeqRef.current) return;
+    activePolishRequestIdRef.current = null;
+    polishSnapshotRef.current = null;
+    setPolishing(false);
+    setPolishStreaming(false);
+    setActivePolishDirective(null);
+
+    if (!result.success) {
+      setUnifiedText(snapshot.text);
+      setUnifiedEdited(snapshot.edited);
+      setRawFilesEdited(snapshot.rawEdited);
+      if (snapshot.shouldAutoFillDescription) {
+        setDescription(snapshot.description);
+      }
+      if (result.errorCode !== AgentDraftErrorCode.Cancelled) {
+        setPolishError(formatAgentDraftError(result.errorCode));
+      }
+      return;
+    }
+
+    setUnifiedText(result.draft.instructions);
+    setUnifiedEdited(true);
+    setRawFilesEdited(false);
+    const autoFill = snapshot.shouldAutoFillDescription
+      ? resolveDescriptionOnAutoFill(snapshot.description, result.draft.description)
+      : { nextDescription: description, didFill: false };
+    if (autoFill.didFill) {
+      setDescription(autoFill.nextDescription);
+    } else if (snapshot.shouldAutoFillDescription) {
+      setDescription(snapshot.description);
+    }
+    if (snapshot.text.trim() !== result.draft.instructions.trim() || autoFill.didFill) {
+      setUndoRulesSnapshot({
+        text: snapshot.text,
+        edited: snapshot.edited,
+        rawEdited: snapshot.rawEdited,
+        source: RulesUndoSource.Ai,
+        ...(autoFill.didFill ? { previousDescription: snapshot.description } : {}),
+      });
+    }
+    if (result.draft.starterPrompts.length > 0) {
+      setPendingStarterPrompts(result.draft.starterPrompts);
+    }
   };
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || saving) return;
     const changedFields = getChangedFields();
     reportAgentSettingsAction('save_submit', {
       changedFields,
@@ -385,21 +726,33 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     setSaving(true);
     try {
       const modelRef = model ? toOpenClawModelRef(model) : '';
+      const finalIdentity = resolvedPersona.identity;
+      const finalSystemPrompt = resolvedPersona.systemPrompt;
+
+      const resolvedCollaboration = resolveCollaborationPayloadOnSave({
+        mode: subagentCollaborationMode,
+        allowAgentIds: subagentAllowAgentIds,
+        initialAllowAgentIds: initialValuesRef.current.subagentAllowAgentIds,
+      });
+
       const result = await agentService.updateAgent(agentId, {
         name: name.trim(),
         description: description.trim(),
-        systemPrompt: systemPrompt.trim(),
-        identity: identity.trim(),
+        systemPrompt: finalSystemPrompt.trim(),
+        identity: finalIdentity.trim(),
         ...(!isMainAgent && agent?.source === AgentSource.Preset
-          && (changedFields.includes('modelSelectionMode') || modelOverride !== undefined) ? { modelSelectionMode } : {}),
+          && (changedFields.includes('modelSelectionMode') || modelOverride !== undefined)
+          ? { modelSelectionMode }
+          : {}),
         ...(modelOverride !== undefined ? { model: modelRef } : {}),
         ...(modelOverride !== undefined && modelRef !== storedModelRef
           ? { thinkingLevel: resolveThinkingLevelForModel(model) }
           : {}),
         workingDirectory: workingDirectory.trim(),
         ...(icon.trim() !== initialValuesRef.current.icon ? { icon: icon.trim() } : {}),
-        skillIds,
-        subagentAllowAgentIds,
+        skillIds: effectiveSkillIds,
+        subagentCollaborationMode: resolvedCollaboration.subagentCollaborationMode,
+        subagentAllowAgentIds: resolvedCollaboration.subagentAllowAgentIds,
       });
       if (!result) {
         reportAgentSettingsAction('save_failed', {
@@ -411,12 +764,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
         return;
       }
+
       const bootstrapSaved = await Promise.all([
-        coworkService.writeBootstrapFile('IDENTITY.md', identity, { agentId }),
-        coworkService.writeBootstrapFile('SOUL.md', systemPrompt, { agentId }),
+        coworkService.writeBootstrapFile('IDENTITY.md', finalIdentity, { agentId }),
+        coworkService.writeBootstrapFile('SOUL.md', finalSystemPrompt, { agentId }),
         coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
       ]);
-      if (bootstrapSaved.some((saved) => !saved)) {
+      if (bootstrapSaved.some(saved => !saved)) {
         reportAgentSettingsAction('save_failed', {
           changedFields,
           includeConfigDetails: true,
@@ -426,40 +780,30 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
         return;
       }
+
       if (changedFields.includes('identity')) {
         const cleanupResult = await agentService.cleanupLegacyIdentityBlock(agentId);
         if (cleanupResult.status === AgentLegacyIdentityCleanupStatus.Failed) {
           console.warn('[AgentSettingsPanel] failed to clean legacy AGENTS.md identity block:', cleanupResult.error);
         }
       }
-      // Persist IM bindings if changed
-      const bindingsChanged =
-        boundKeys.size !== initialBoundKeys.size ||
-        [...boundKeys].some((k) => !initialBoundKeys.has(k));
-      if (bindingsChanged && imConfig) {
-        const currentBindings = { ...(imConfig.settings?.platformAgentBindings || {}) };
-        // Remove old bindings for this agent
-        for (const key of Object.keys(currentBindings)) {
-          if (currentBindings[key] === agentId) {
-            delete currentBindings[key];
-          }
-        }
-        if (isMainAgent) {
-          // The main agent is the implicit default. Claiming an IM channel means
-          // removing any explicit binding held by another agent.
-          for (const key of boundKeys) {
-            delete currentBindings[key];
-          }
-        } else {
-          for (const key of boundKeys) {
-            currentBindings[key] = agentId;
-          }
-        }
-        await imService.persistConfig({
-          settings: { ...imConfig.settings, platformAgentBindings: currentBindings },
-        });
-        await imService.saveAndSyncConfig();
+
+      if (pendingStarterPrompts && pendingStarterPrompts.length > 0) {
+        saveAgentOnboardingMeta(agentId, { starterPrompts: pendingStarterPrompts });
       }
+
+      if (changedFields.includes('imBindings')) {
+        const latest = await imService.loadConfig();
+        if (!latest) throw new Error('Failed to load IM bindings');
+        const platformAgentBindings = applyImBindingChanges(
+          latest.settings?.platformAgentBindings, agentId, initialBoundKeys, boundKeys,
+        );
+        if (!await imService.persistConfig({ settings: { platformAgentBindings } })
+          || !await imService.saveAndSyncConfig()) {
+          throw new Error('Failed to save IM bindings');
+        }
+      }
+
       reportAgentSettingsAction('save_success', {
         changedFields,
         includeConfigDetails: true,
@@ -489,441 +833,557 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   };
 
   const handleToggleIMBinding = (key: string) => {
-    const next = new Set(boundKeys);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
-    }
-    setBoundKeys(next);
+    setDraftBoundKeys((prev) => {
+      const next = new Set(prev ?? initialBoundKeys);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
-  /** Check if a multi-instance platform has any enabled instances. */
-  const getEnabledInstances = (platform: MultiInstancePlatform) => {
-    if (!imConfig) return [];
-    const cfg = imConfig[platform];
-    const instances = cfg?.instances;
-    if (!Array.isArray(instances)) return [];
-    return instances.filter((inst: MultiInstanceConfig) => inst.enabled);
+  const handleSelectCollaborationScope = (restricted: boolean) => {
+    const next = selectCollaborationScope({
+      currentMode: subagentCollaborationMode,
+      allowAgentIds: subagentAllowAgentIds,
+      restricted,
+    });
+    setSubagentCollaborationMode(next.mode);
+    setSubagentAllowAgentIds(next.allowAgentIds);
   };
 
-  const isPlatformConfigured = (platform: Platform): boolean => {
-    if (!imConfig) return false;
-    if (isMultiInstancePlatform(platform)) {
-      return getEnabledInstances(platform).length > 0;
-    }
-    // email is a multi-instance platform
-    if (platform === 'email') {
-      return imConfig.email.instances.length > 0;
-    }
-    const cfg = imConfig[platform as keyof typeof imConfig];
-    if (!cfg || typeof cfg !== 'object') return false;
-    return 'enabled' in cfg && (cfg as { enabled: boolean }).enabled === true;
-  };
-
-  /** Resolve agent name by id */
-  const getAgentName = (aid: string): string | null => {
-    return getAgentDisplayNameById(aid, agents);
+  const handleToggleSubagentAllowAgent = (targetAgentId: string) => {
+    const next = toggleCollaboratorAgent({
+      mode: subagentCollaborationMode,
+      allowAgentIds: subagentAllowAgentIds,
+      targetAgentId,
+    });
+    setSubagentCollaborationMode(next.mode);
+    setSubagentAllowAgentIds(next.allowAgentIds);
   };
 
   const availableSubagentAgents = agents
-    .filter((candidate) => candidate.enabled && candidate.id !== agentId)
+    .filter(candidate => candidate.enabled && candidate.id !== agentId)
     .sort((left, right) => getAgentDisplayName(left).localeCompare(getAgentDisplayName(right)));
-
-  const handleToggleSubagentAllowAgent = (targetAgentId: string) => {
-    setSubagentAllowAgentIds((current) => {
-      if (current.includes(targetAgentId)) {
-        return current.filter(id => id !== targetAgentId);
-      }
-      return [...current, targetAgentId];
-    });
-  };
 
   const nameInputValue = isMainAgent && !nameTouched
     ? getAgentDisplayName({ id: agentId, name })
     : name;
 
-  const tabs: { key: AgentDetailTab; label: string }[] = [
-    { key: AgentDetailTab.Identity, label: i18nService.t('coworkBootstrapIdentityTitle') },
-    { key: AgentDetailTab.Prompt, label: i18nService.t('coworkBootstrapSoulTitle') },
-    { key: AgentDetailTab.User, label: i18nService.t('coworkBootstrapUserTitle') },
-    { key: AgentDetailTab.Skills, label: i18nService.t('agentTabSkills') },
-    { key: AgentDetailTab.Collaboration, label: i18nService.t('agentTabCollaboration') },
-    { key: AgentDetailTab.Im, label: i18nService.t('agentTabIM') },
-  ];
+  const isRestrictedCollab = isRestrictedCollaborationMode(subagentCollaborationMode);
+  const displayedAllowAgentIds = getDisplayedCollaboratorIds(subagentCollaborationMode, subagentAllowAgentIds);
+  const availableCandidateIds = new Set(availableSubagentAgents.map(candidate => candidate.id));
+  const selectedCollaboratorCount = countSelectedCollaborators(displayedAllowAgentIds, availableCandidateIds);
 
-  const renderTextEditor = (
-    value: string,
-    onChange: (value: string) => void,
-    placeholder: string,
-    ariaLabel: string,
-    hint?: string,
-  ) => (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      {hint && (
-        <p className="shrink-0 text-xs leading-5 text-secondary">
-          {hint}
-        </p>
-      )}
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        className="min-h-0 flex-1 w-full resize-none border border-transparent bg-transparent text-sm leading-6 text-foreground placeholder:text-secondary/45 focus:outline-none"
-      />
-    </div>
-  );
+  const collabDescription = !isRestrictedCollab
+    ? availableSubagentAgents.length > 0
+      ? i18nService.t('agentSubagentsScopeAllHint').replace('{count}', String(availableSubagentAgents.length))
+      : i18nService.t('agentSubagentsScopeAllEmptyHint')
+    : selectedCollaboratorCount > 0
+      ? i18nService.t('agentSubagentsScopeCustomCount').replace('{count}', String(selectedCollaboratorCount))
+      : i18nService.t('agentSubagentsAllowlistEmptyHint');
 
-  const renderCollaborationSettings = () => (
-    <div className="h-full overflow-y-auto">
-      <div className="mb-4">
-        <div className="text-sm font-semibold text-foreground">
-          {i18nService.t('agentSubagentsTitle')}
-        </div>
-        <p className="mt-1 text-xs leading-5 text-secondary">
-          {i18nService.t('agentSubagentsHint')}
-        </p>
-      </div>
-      {availableSubagentAgents.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-secondary">
-          {i18nService.t('agentSubagentsEmpty')}
-        </div>
-      ) : (
-        <div className="space-y-1">
-          {availableSubagentAgents.map((candidate) => {
-            const checked = subagentAllowAgentIds.includes(candidate.id);
-            return (
-              <label
-                key={candidate.id}
-                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-raised"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-sm">
-                    <span className="font-medium text-secondary">
-                      {getAgentDisplayName(candidate).slice(0, 1).toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {getAgentDisplayName(candidate)}
-                    </div>
-                    <div className="truncate text-xs text-secondary">
-                      {candidate.id}
-                    </div>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => handleToggleSubagentAllowAgent(candidate.id)}
-                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                  aria-label={getAgentDisplayName(candidate)}
-                />
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  const imSummaryLabel = boundKeys.size > 0
+    ? i18nService.t('agentSettingsImSummaryCount').replace('{count}', String(boundKeys.size))
+    : i18nService.t('agentSettingsImSummaryNone');
 
-  const renderToggle = (isOn: boolean) => (
-    <div
-      className={`relative w-9 h-5 rounded-full transition-colors ${
-        isOn ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
-      }`}
-    >
-      <div
-        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-          isOn ? 'translate-x-4' : 'translate-x-0.5'
-        }`}
-      />
-    </div>
-  );
+  const globalCapabilitiesSubtitle = enabledMcpServers.length > 0
+    ? i18nService.t('agentSettingsCapabilitiesGlobalStats')
+        .replace('{skills}', String(enabledSkills.length))
+        .replace('{mcps}', String(enabledMcpServers.length))
+    : i18nService.t('agentSettingsCapabilitiesGlobalSkillsOnly')
+        .replace('{skills}', String(enabledSkills.length));
 
-  const renderMultiInstancePlatform = (platform: MultiInstancePlatform) => {
-    const enabledInstances = getEnabledInstances(platform);
-    const logo = PlatformRegistry.logo(platform);
-    const bindings = imConfig?.settings?.platformAgentBindings || {};
+  const rawFileValue = activePersonaFileTab === AgentPersonaFileTab.Identity
+    ? resolvedPersona.identity
+    : activePersonaFileTab === AgentPersonaFileTab.Soul
+      ? resolvedPersona.systemPrompt
+      : userInfo;
 
-    if (enabledInstances.length === 0) {
-      // No enabled instances — show disabled row like single-instance unconfigured
-      return (
-        <div
-          key={platform}
-          className="flex items-center justify-between px-3 py-2.5 rounded-lg opacity-50"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center">
-              <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
-            </div>
-            <div>
-              <div className="text-sm font-medium text-foreground">
-                {i18nService.t(platform)}
-              </div>
-              <div className="text-xs text-secondary/50">
-                {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
-              </div>
-            </div>
-          </div>
-          <span className="text-xs text-secondary/50">
-            {i18nService.t('agentIMNotConfigured') || 'Not configured'}
-          </span>
-        </div>
-      );
-    }
+  const hasGlobalCapabilities = enabledSkills.length > 0 || enabledMcpServers.length > 0;
+  const capabilitiesDescription = !isMainAgent && restrictSkills && skillIds.length > 0
+    ? i18nService.t('agentSettingsSkillScopeCustomCount').replace('{count}', String(skillIds.length))
+    : hasGlobalCapabilities
+      ? globalCapabilitiesSubtitle
+      : i18nService.t('agentSettingsSkillScopeMainHint');
 
-    return (
-      <div key={platform} className="rounded-lg border border-border overflow-hidden">
-        {/* Platform header */}
-        <div className="flex items-center gap-3 px-3 py-2.5 bg-surface-raised">
-          <div className="flex h-8 w-8 items-center justify-center">
-            <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
-          </div>
-          <span className="text-sm font-semibold text-foreground">
-            {i18nService.t(platform)}
-          </span>
-        </div>
-        {/* Instance list */}
-        {enabledInstances.map((inst: MultiInstanceConfig, idx: number) => {
-          const bindingKey = `${platform}:${inst.instanceId}`;
-          const otherAgentId = bindings[bindingKey];
-          const claimingForMain = isMainAgent && boundKeys.has(bindingKey);
-          const boundToOther = Boolean(otherAgentId && otherAgentId !== agentId && !claimingForMain && !boundKeys.has(bindingKey));
-          const canToggle = !isMainAgent || boundToOther || claimingForMain;
-          const isBound = isMainAgent ? claimingForMain || !boundToOther : boundKeys.has(bindingKey);
-          const otherAgentName = boundToOther ? getAgentName(otherAgentId ?? '') : null;
+  const memoryDescription = memoryCount === null
+    ? i18nService.t('loading')
+    : isMainAgent
+      ? memoryCount > 0
+        ? i18nService.t('agentSettingsMemoryMainCount').replace('{count}', String(memoryCount))
+        : i18nService.t('agentSettingsMemoryMainEmpty')
+      : memoryCount > 0
+        ? i18nService.t('agentSettingsMemoryExpertCount').replace('{count}', String(memoryCount))
+        : i18nService.t('agentSettingsMemoryExpertEmpty');
 
-          return (
-            <div
-              key={inst.instanceId}
-              className={`flex items-center justify-between px-3 py-2 pl-14 transition-colors ${
-                idx < enabledInstances.length - 1 ? 'border-b border-border-subtle' : ''
-              } ${canToggle ? 'cursor-pointer hover:bg-surface-raised' : ''}`}
-              onClick={() => canToggle && handleToggleIMBinding(bindingKey)}
-            >
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-                <span className="text-sm text-foreground">
-                  {inst.instanceName}
-                </span>
-                {boundToOther && otherAgentName && (
-                  <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                    {(i18nService.t('agentIMBoundToOther') || '→ {agent}').replace('{agent}', otherAgentName)}
-                  </span>
-                )}
-              </div>
-              {renderToggle(isBound)}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const renderSingleInstancePlatform = (platform: Platform) => {
-    const logo = PlatformRegistry.logo(platform);
-    const configured = isPlatformConfigured(platform);
-    const bindings = imConfig?.settings?.platformAgentBindings || {};
-    const otherAgentId = bindings[platform];
-    const claimingForMain = isMainAgent && boundKeys.has(platform);
-    const boundToOther = Boolean(configured && otherAgentId && otherAgentId !== agentId && !claimingForMain && !boundKeys.has(platform));
-    const canToggle = configured && (!isMainAgent || boundToOther || claimingForMain);
-    const isBound = isMainAgent ? configured && (claimingForMain || !boundToOther) : boundKeys.has(platform);
-    const otherAgentName = boundToOther ? getAgentName(otherAgentId ?? '') : null;
-
-    return (
-      <div
-        key={platform}
-        className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors ${
-          !configured
-            ? 'opacity-50'
-            : canToggle
-                ? 'hover:bg-surface-raised cursor-pointer'
-                : ''
-        }`}
-        onClick={() => canToggle && handleToggleIMBinding(platform)}
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center">
-            <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
-          </div>
-          <div>
-            <div className="text-sm font-medium text-foreground">
-              {i18nService.t(platform)}
-            </div>
-            {!configured && (
-              <div className="text-xs text-secondary/50">
-                {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
-              </div>
-            )}
-          </div>
-          {boundToOther && otherAgentName && (
-            <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-              {(i18nService.t('agentIMBoundToOther') || '→ {agent}').replace('{agent}', otherAgentName)}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {configured ? (
-            renderToggle(isBound)
-          ) : (
-            <span className="text-xs text-secondary/50">
-              {i18nService.t('agentIMNotConfigured') || 'Not configured'}
-            </span>
-          )}
-        </div>
-      </div>
-    );
-  };
+  const hasRules = unifiedText.trim().length > 0;
 
   return (
     <>
       <Modal
         onClose={handleClose}
-        overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/10 dark:bg-black/50"
-        className="w-[calc(100vw-56px)] max-w-[854px] h-[82vh] max-h-[664px] rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.16)] bg-surface border border-surface flex flex-col overflow-hidden"
+        onEscape={showDeleteConfirm || showUnsavedConfirm || rulesMenuOpen ? undefined : handleClose}
+        overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop px-4"
+        className="modal-content flex h-[min(84vh,700px)] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-modal"
       >
-        <div className="flex shrink-0 items-start justify-between gap-4 px-7 py-5">
+        {/* Header */}
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-6 pt-5 pb-4">
           <div className={AGENT_HEADER_IDENTITY_CLASS}>
-            <AgentAvatarPicker value={icon} onChange={setIcon} expertFallback={usesManagedPresetAvatar(agent) && icon === agent?.icon} />
+            <AgentAvatarPicker
+              value={icon}
+              onChange={setIcon}
+              expertFallback={usesManagedPresetAvatar(agent) && icon === agent?.icon}
+            />
             <div className={AGENT_HEADER_FIELDS_CLASS}>
-              <input
-                type="text"
-                value={nameInputValue}
-                onChange={(e) => {
-                  setNameTouched(true);
-                  setName(e.target.value);
-                }}
-                placeholder={i18nService.t('agentNamePlaceholder')}
-                aria-label={i18nService.t('agentName')}
-                className={AGENT_NAME_INPUT_CLASS}
-              />
+              <div className="flex max-w-full items-center gap-2">
+                <input
+                  type="text"
+                  value={nameInputValue}
+                  onChange={(e) => {
+                    setNameTouched(true);
+                    setName(e.target.value);
+                  }}
+                  placeholder={i18nService.t('agentNamePlaceholder')}
+                  aria-label={i18nService.t('agentName')}
+                  className={AGENT_NAME_INPUT_CLASS}
+                />
+                {!isMainAgent && agent?.source === AgentSource.Preset && (
+                  <span className="shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-[11px] font-normal text-secondary">
+                    {i18nService.t('agentSettingsSourcePresetBadge')}
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder={i18nService.t('agentDescriptionPlaceholder')}
+                readOnly={polishing}
+                placeholder={i18nService.t('agentSettingsDescriptionPlaceholder')}
+                title={i18nService.t('agentDescriptionHint')}
                 aria-label={i18nService.t('agentDescription')}
                 className={AGENT_DESCRIPTION_INPUT_CLASS}
               />
             </div>
           </div>
-          <button type="button" onClick={handleClose} className="mt-1 p-2 rounded-lg hover:bg-surface-raised transition-colors">
-            <XMarkIcon className="h-5 w-5 text-secondary" />
+          <button
+            type="button"
+            onClick={handleClose}
+            aria-label={i18nService.t('close')}
+            className="-mr-1 -mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+          >
+            <XMarkIcon className="h-[18px] w-[18px]" />
           </button>
         </div>
 
-        {/* Tab bar */}
-        <div className="flex shrink-0 border-b border-border px-7">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => handleTabChange(tab.key)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-                activeTab === tab.key
-                  ? 'text-foreground'
-                  : 'text-secondary hover:text-foreground'
+        {/* Scrollable Body */}
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5 [scrollbar-gutter:stable]">
+          {/* 1. Role & Rules */}
+          <section className="space-y-2.5">
+            <div className="px-0.5">
+              <h3 className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                {i18nService.t('agentRulesTitle')}
+              </h3>
+              <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                {i18nService.t('agentRulesHint')}
+              </p>
+            </div>
+
+            <div
+              className={`overflow-hidden rounded-xl border bg-surface transition-colors ${
+                polishing
+                  ? 'border-foreground/25 ring-2 ring-foreground/[0.06]'
+                  : 'border-border-input focus-within:border-foreground/25'
               }`}
             >
-              {tab.label}
-              {activeTab === tab.key && (
-                <div className="absolute bottom-[-1px] left-0 right-0 h-0.5 bg-foreground rounded-full" />
-              )}
-            </button>
-          ))}
-        </div>
+              <textarea
+                ref={rulesTextareaRef}
+                value={unifiedText}
+                onChange={(e) => handleUnifiedTextChange(e.target.value)}
+                readOnly={polishing}
+                placeholder={i18nService.t('agentRulesPlaceholder')}
+                aria-label={i18nService.t('agentRulesTitle')}
+                rows={6}
+                className={`block min-h-[168px] w-full resize-y bg-transparent px-3.5 pt-3 pb-2.5 ${SETTINGS_ITEM_TITLE_TEXT} leading-[1.65] text-foreground placeholder:text-secondary/45 focus:outline-none`}
+              />
+              <AgentRulesToolbar
+                hasRules={hasRules}
+                polishing={polishing}
+                polishStreaming={polishStreaming}
+                activePolishDirective={activePolishDirective}
+                undoSource={undoRulesSnapshot?.source ?? null}
+                undoRestoresPreviousText={Boolean(undoRulesSnapshot?.text.trim())}
+                onApplyTemplate={handleApplyRuleTemplate}
+                onAiPolish={(directive) => void handleAiPolish(directive)}
+                onCancelPolish={cancelActivePolish}
+                onUndo={handleUndoRules}
+                onMenuOpenChange={setRulesMenuOpen}
+              />
+            </div>
 
-        {/* Tab content */}
-        <div className="px-7 py-7 overflow-hidden flex-1 min-h-0">
-          {activeTab === AgentDetailTab.Prompt && renderTextEditor(
-            systemPrompt,
-            setSystemPrompt,
-            i18nService.t('coworkBootstrapPlaceholder'),
-            i18nService.t('coworkBootstrapSoulTitle'),
-            i18nService.t('coworkBootstrapSoulHint'),
-          )}
+            {polishError && (
+              <p className="px-0.5 text-xs text-amber-600 dark:text-amber-400">
+                {polishError}
+              </p>
+            )}
+          </section>
 
-          {activeTab === AgentDetailTab.Identity && renderTextEditor(
-            identity,
-            setIdentity,
-            i18nService.t('coworkBootstrapPlaceholder'),
-            i18nService.t('coworkBootstrapIdentityTitle'),
-            i18nService.t('coworkBootstrapIdentityHint'),
-          )}
+          {/* 2. Core Configuration Group */}
+          <section className="space-y-2">
+            <h3 className="px-0.5 text-xs font-medium text-secondary">
+              {i18nService.t('agentSettingsBasicsGroup')}
+            </h3>
+            <div className="divide-y divide-border rounded-xl border border-border bg-surface">
+              {/* Working Folder */}
+              <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                    {i18nService.t('agentSettingsFolderSection')}
+                  </div>
+                  <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                    {i18nService.t('agentSettingsFolderSectionHint')}
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <AgentWorkingDirectoryField
+                    value={workingDirectory}
+                    onChange={setWorkingDirectory}
+                    compact
+                    bordered
+                    placement="bottom"
+                  />
+                </div>
+              </div>
 
-          {activeTab === AgentDetailTab.User && renderTextEditor(
-            userInfo,
-            setUserInfo,
-            i18nService.t('coworkBootstrapPlaceholder'),
-            i18nService.t('coworkBootstrapUserTitle'),
-            i18nService.t('coworkBootstrapUserHint'),
-          )}
+              {/* Default Model */}
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                      {i18nService.t('agentSettingsModelSection')}
+                    </div>
+                    <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                      {i18nService.t('agentSettingsModelSectionHint')}
+                    </p>
+                  </div>
+                  <div className="inline-flex h-8 shrink-0 items-center rounded-lg border border-border bg-surface px-0.5">
+                    <ModelSelector
+                      compact
+                      hideCustomProviderName
+                      triggerMaxWidthClassName="max-w-[232px]"
+                      alignDropdownToTriggerEnd
+                      dropdownDirection="auto"
+                      value={model}
+                      onChange={(nextModel) => {
+                        setModelOverride(nextModel);
+                        setModelSelectionMode(AgentModelSelectionMode.Explicit);
+                      }}
+                      portal
+                    />
+                  </div>
+                </div>
+                {!isMainAgent && agent?.source === AgentSource.Preset && (
+                  <label
+                    className="mt-2.5 inline-flex cursor-pointer items-center gap-2 text-xs text-secondary transition-colors hover:text-foreground"
+                    title={i18nService.t('expertInheritModelHint')}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={modelSelectionMode === AgentModelSelectionMode.Inherit}
+                      onChange={(event) => {
+                        setModelSelectionMode(
+                          event.target.checked ? AgentModelSelectionMode.Inherit : AgentModelSelectionMode.Explicit,
+                        );
+                        if (event.target.checked) {
+                          setModelOverride(
+                            resolveOpenClawModelRef(
+                              captureExpertModelSelection(store.getState(), agentId).model,
+                              availableModels,
+                            ),
+                          );
+                        }
+                      }}
+                      className="h-3.5 w-3.5 rounded border-border accent-foreground"
+                    />
+                    <span>{i18nService.t('expertInheritModel')}</span>
+                  </label>
+                )}
+              </div>
 
-          {activeTab === AgentDetailTab.Skills && (
-            <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
-          )}
+              {/* Capabilities & Tools */}
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                      {i18nService.t('agentSettingsCapabilitiesSection')}
+                    </div>
+                    <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                      {capabilitiesDescription}
+                    </p>
+                  </div>
 
-          {activeTab === AgentDetailTab.Collaboration && renderCollaborationSettings()}
+                  {isMainAgent ? (
+                    <span className="shrink-0 text-xs text-secondary">
+                      {i18nService.t('agentSettingsSkillScopeAllShort')}
+                    </span>
+                  ) : (
+                    <div className="inline-flex shrink-0 rounded-lg bg-surface-raised p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setRestrictSkills(false)}
+                        className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                          !restrictSkills
+                            ? 'bg-surface font-medium text-foreground shadow-subtle'
+                            : 'text-secondary hover:text-foreground'
+                        }`}
+                      >
+                        {i18nService.t('agentSettingsSkillScopeAllShort')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRestrictSkills(true)}
+                        className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                          restrictSkills
+                            ? 'bg-surface font-medium text-foreground shadow-subtle'
+                            : 'text-secondary hover:text-foreground'
+                        }`}
+                      >
+                        {i18nService.t('agentSettingsSkillScopeCustomShort')}
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-          {activeTab === AgentDetailTab.Im && (
-            <div className="h-full overflow-y-auto">
-              <div className="space-y-1">
-                {PlatformRegistry.platforms
-                  .filter((platform) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(platform))
-                  .map((platform) => {
-                    if (isMultiInstancePlatform(platform)) {
-                      return renderMultiInstancePlatform(platform);
-                    }
-                    return renderSingleInstancePlatform(platform);
-                  })}
+                {!isMainAgent && restrictSkills && (
+                  <div className="mt-3 h-[340px] rounded-lg border border-border bg-surface-raised/25 p-3">
+                    <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
+                  </div>
+                )}
+
+                {enabledMcpServers.length > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border-subtle pt-2.5">
+                    <span
+                      className="mr-1 text-xs text-secondary"
+                      title={i18nService.t('agentSettingsMcpSummaryHint')}
+                    >
+                      {i18nService.t('agentSettingsMcpSummaryTitle')}
+                    </span>
+                    {enabledMcpServers.map(server => (
+                      <span
+                        key={server.id}
+                        className="max-w-[160px] truncate rounded-md bg-surface-raised px-2 py-0.5 text-xs text-foreground/85"
+                      >
+                        {server.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Long-Term Memory */}
+              <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                    {i18nService.t('agentSettingsMemorySection')}
+                  </div>
+                  <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                    {memoryDescription}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenMemorySettings}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
+                >
+                  <span>{i18nService.t('agentSettingsMemoryManageButton')}</span>
+                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 text-secondary" />
+                </button>
               </div>
             </div>
-          )}
+          </section>
+
+          {/* 3. Advanced Settings Group */}
+          <section className="space-y-2">
+            <h3 className="px-0.5 text-xs font-medium text-secondary">
+              {i18nService.t('agentSettingsAdvancedDivider')}
+            </h3>
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
+              {/* IM Channels */}
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showImSection}
+                  onClick={() => setShowImSection(prev => !prev)}
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-raised/50"
+                >
+                  <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                    {i18nService.t('agentTabIM')}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-secondary">
+                    <span>{imConfig && imSummaryLabel}</span>
+                    {showImSection ? (
+                      <ChevronDownIcon className="h-4 w-4 text-secondary/70" />
+                    ) : (
+                      <ChevronRightIcon className="h-4 w-4 text-secondary/70" />
+                    )}
+                  </span>
+                </button>
+                {showImSection && (
+                  <div className="border-t border-border-subtle bg-surface-raised/20 px-4 py-3.5">
+                    <AgentImBindingList
+                      platforms={imPlatforms}
+                      boundKeys={boundKeys}
+                      agents={agents}
+                      agentId={agentId}
+                      onToggleBinding={handleToggleIMBinding}
+                      onBeforeOpenImSettings={onClose}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Multi-Agent Collaboration */}
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                      {i18nService.t('agentSubagentsTitle')}
+                    </div>
+                    <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                      {collabDescription}
+                    </p>
+                  </div>
+
+                  <div
+                    className="inline-flex shrink-0 rounded-lg bg-surface-raised p-0.5"
+                    role="group"
+                    aria-label={i18nService.t('agentSubagentsTitle')}
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={!isRestrictedCollab}
+                      onClick={() => handleSelectCollaborationScope(false)}
+                      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                        !isRestrictedCollab
+                          ? 'bg-surface font-medium text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t('agentSubagentsScopeAllShort')}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={isRestrictedCollab}
+                      onClick={() => handleSelectCollaborationScope(true)}
+                      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                        isRestrictedCollab
+                          ? 'bg-surface font-medium text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t('agentSubagentsScopeCustomShort')}
+                    </button>
+                  </div>
+                </div>
+
+                {isRestrictedCollab && (
+                  <div className="mt-3 max-h-[240px] overflow-y-auto rounded-lg border border-border bg-surface-raised/25 p-2">
+                    <AgentCollaborationSettings
+                      allowAgentIds={displayedAllowAgentIds}
+                      candidates={availableSubagentAgents}
+                      onToggleAllowAgent={handleToggleSubagentAllowAgent}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Raw Persona Markdown Files */}
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showPersonaFilesSection}
+                  onClick={() => setShowPersonaFilesSection(prev => !prev)}
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-raised/50"
+                >
+                  <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                    {i18nService.t('agentSettingsPersonaFilesTitle')}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-secondary">
+                    <span>{i18nService.t('agentSettingsPersonaFilesBadge')}</span>
+                    {showPersonaFilesSection ? (
+                      <ChevronDownIcon className="h-4 w-4 text-secondary/70" />
+                    ) : (
+                      <ChevronRightIcon className="h-4 w-4 text-secondary/70" />
+                    )}
+                  </span>
+                </button>
+                {showPersonaFilesSection && (
+                  <div className="space-y-3 border-t border-border-subtle bg-surface-raised/20 px-4 py-3.5">
+                    <p className="text-xs leading-5 text-secondary">
+                      {i18nService.t('agentSettingsPersonaFilesHint')}
+                    </p>
+                    <div className="inline-flex rounded-lg bg-surface-raised p-0.5">
+                      {[
+                        AgentPersonaFileTab.Soul,
+                        AgentPersonaFileTab.Identity,
+                        AgentPersonaFileTab.User,
+                      ].map(fileTab => (
+                        <button
+                          key={fileTab}
+                          type="button"
+                          onClick={() => setActivePersonaFileTab(fileTab)}
+                          className={`rounded-md px-2.5 py-1 font-mono text-xs transition-colors ${
+                            activePersonaFileTab === fileTab
+                              ? 'bg-surface font-medium text-foreground shadow-subtle'
+                              : 'text-secondary hover:text-foreground'
+                          }`}
+                        >
+                          {fileTab}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      rows={6}
+                      value={rawFileValue}
+                      onChange={(e) => handleRawPersonaChange(activePersonaFileTab, e.target.value)}
+                      placeholder={i18nService.t('coworkBootstrapPlaceholder')}
+                      aria-label={activePersonaFileTab}
+                      className="w-full resize-y rounded-lg border border-border-input bg-surface px-3 py-2 font-mono text-xs leading-5 text-foreground placeholder:text-secondary/45 focus:border-foreground/25 focus:outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
         </div>
 
         {/* Footer */}
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t border-border">
-          {!isMainAgent && agent?.source === AgentSource.Preset && (
-            <label className="flex w-full cursor-pointer items-center gap-2 text-xs text-secondary" title={i18nService.t('expertInheritModelHint')}>
-              <input type="checkbox" checked={modelSelectionMode === AgentModelSelectionMode.Inherit}
-                onChange={event => {
-                  setModelSelectionMode(event.target.checked ? AgentModelSelectionMode.Inherit : AgentModelSelectionMode.Explicit);
-                  if (event.target.checked) {
-                    setModelOverride(resolveOpenClawModelRef(captureExpertModelSelection(store.getState(), agentId).model, availableModels));
-                  }
-                }}
-                className="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
-              {i18nService.t('expertInheritModel')}
-            </label>
-          )}
-          <AgentDetailToolbar
-            model={model}
-            onModelChange={nextModel => {
-              setModelOverride(nextModel);
-              setModelSelectionMode(AgentModelSelectionMode.Explicit);
-            }}
-            workingDirectory={workingDirectory}
-            onWorkingDirectoryChange={setWorkingDirectory}
-          />
-          <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-6 py-3.5">
+          <div>
             {!isMainAgent && (
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(true)}
-                className="inline-flex h-9 items-center gap-1.5 px-3 text-sm font-medium rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                title={i18nService.t('agentSettingsDeleteDescription')}
+                className={`-ml-2 inline-flex h-9 items-center gap-1.5 rounded-xl px-3 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-secondary transition-colors hover:bg-destructive/10 hover:text-destructive`}
               >
                 <TrashIcon className="h-4 w-4" />
-                {i18nService.t('delete')}
+                <span>{i18nService.t('delete')}</span>
               </button>
             )}
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleSave}
+              onClick={handleClose}
+              className={`h-9 rounded-xl border border-border bg-surface px-4 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]`}
+            >
+              {i18nService.t('cancel')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSave()}
               disabled={!name.trim() || saving}
-              className="h-9 px-5 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className={`h-9 rounded-xl bg-action px-5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40`}
             >
               {saving ? i18nService.t('saving') : i18nService.t('save')}
             </button>

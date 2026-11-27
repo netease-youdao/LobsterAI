@@ -274,10 +274,33 @@ describe('ProviderRegistry', () => {
     expect(global).toContain(ProviderName.Copilot);
   });
 
-  test('xai is en-only and ordered right after gemini', () => {
+  test('xai is visible in both zh and en locales and ordered right after gemini', () => {
     expect(ProviderRegistry.idsByRegion('china')).not.toContain(ProviderName.Xai);
+    const zh = ProviderRegistry.idsForZhLocale();
     const en = ProviderRegistry.idsForEnLocale();
+    expect(zh[zh.indexOf(ProviderName.Gemini) + 1]).toBe(ProviderName.Xai);
     expect(en[en.indexOf(ProviderName.Gemini) + 1]).toBe(ProviderName.Xai);
+  });
+
+  test('idsForZhLocale shows the same provider set as idsForEnLocale with global providers after xiaomi', () => {
+    const zh = ProviderRegistry.idsForZhLocale();
+    const en = ProviderRegistry.idsForEnLocale();
+    expect(new Set(zh)).toEqual(new Set(en));
+    expect(new Set(zh).size).toBe(zh.length);
+    expect(zh[0]).toBe(ProviderName.DeepSeek);
+
+    const xiaomiIdx = zh.indexOf(ProviderName.Xiaomi);
+    expect(zh.slice(xiaomiIdx + 1)).toEqual([
+      ProviderName.OpenAI,
+      ProviderName.Anthropic,
+      ProviderName.Gemini,
+      ProviderName.Xai,
+      ProviderName.Copilot,
+      ProviderName.OpenRouter,
+      ProviderName.Ollama,
+      ProviderName.LmStudio,
+    ]);
+    expect(zh).not.toContain(ProviderName.Custom);
   });
 
   test('idsForEnLocale starts with EN_PRIORITY providers in order', () => {

@@ -60,7 +60,11 @@ function encodeFilePathAsMarkdownImage(filePath: string): string {
   const normalized = trimmed.replace(/\\/g, '/');
   // Ensure correct file:// URL: file:///C:/... or file:///Users/...
   const urlPath = normalized.startsWith('/') ? normalized : `/${normalized}`;
-  const encoded = encodeURI(urlPath);
+  const encoded = encodeURI(urlPath)
+    .replace(/#/g, '%23')
+    .replace(/\?/g, '%3F')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29');
   return `![](file://${encoded})`;
 }
 

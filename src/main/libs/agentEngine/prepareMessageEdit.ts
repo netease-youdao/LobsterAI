@@ -8,6 +8,7 @@ import {
   type CoworkImageAttachmentPreview,
   isBrowserAnnotationTransportImage,
   isStoredOriginalImagePreview,
+  sniffImageMimeType,
 } from '../../../shared/cowork/imageAttachments';
 import type { CoworkMessageEditRequest } from '../../../shared/cowork/messageEdit';
 import type { ImageEditRequest } from '../../../shared/imageEditing/types';
@@ -18,7 +19,6 @@ import {
   type PersistedMediaReference,
   rebuildLegacyImageEditReferences,
   restoreMediaReferences,
-  sniffImageMimeType,
 } from './messageEditMedia';
 import type { CoworkContinueOptions, CoworkMediaAttachmentRef } from './types';
 
@@ -130,7 +130,8 @@ export async function prepareMessageEdit(
     attachments.push(attachment);
     attachmentsByIndex.set(index, attachment);
   }
-  if (!request.prompt.trim() && !attachments.length && !metadata.browserAnnotations?.length) throw new Error(t('coworkEditEmpty'));
+  if (!request.prompt.trim() && !attachments.length && !metadata.browserAnnotations?.length
+    && !metadata.selectedTextSnippets?.length && !metadata.localMediaAttachments?.length) throw new Error(t('coworkEditEmpty'));
   const references = legacyReferences ?? restoreMediaReferences(storedReferences, attachmentsByIndex);
   if (references === null) throw new Error(t('coworkEditMissingAttachment'));
   return {
@@ -140,6 +141,7 @@ export async function prepareMessageEdit(
     kitReferences: metadata.kitReferences,
     resolvedKitCapabilities: metadata.resolvedKitCapabilities,
     imageAttachments: attachments,
+    localMediaAttachments: metadata.localMediaAttachments,
     mediaSelection: editContext?.mediaSelection,
     workflowKind: editContext?.workflowKind,
     mediaReferences: filterMediaReferencesByPrompt(references, request.prompt),

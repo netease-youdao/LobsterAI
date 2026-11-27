@@ -1,7 +1,7 @@
 import {
   ArrowTopRightOnSquareIcon, ChevronDownIcon, FilmIcon, PhotoIcon, VideoCameraIcon,
 } from '@heroicons/react/24/outline';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import {
   ConfirmationBehavior,
@@ -12,14 +12,42 @@ import {
   MediaConfirmationStatus,
   readMediaConfirmationState,
   readVideoConfirmationDetails,
+  type VideoConfirmationReference,
   VideoReferenceKind,
 } from '../../../../shared/media/confirmation';
 import { i18nService } from '../../../services/i18n';
+import ImagePreviewModal, { type ImagePreviewSource } from '../ImagePreviewModal';
 import type { DockRequest } from './questionDockModel';
 
 const smallIcon = '!h-3.5 !w-3.5';
 const buttonClass = 'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-4 text-[13px] font-medium transition-colors disabled:cursor-default disabled:opacity-40';
 const formatCredits = (credits: number) => credits.toLocaleString(undefined, { maximumFractionDigits: 1 });
+
+export function buildReferencePreviewGallery(
+  references: readonly VideoConfirmationReference[],
+  imageLabel: string,
+): {
+  previewImages: ImagePreviewSource[];
+  previewIndexByReferenceIndex: number[];
+} {
+  const previewImages: ImagePreviewSource[] = [];
+  const previewIndexByReferenceIndex = references.map((reference) => {
+    if (reference.kind !== VideoReferenceKind.Image) return -1;
+    const src = reference.previewUrl ?? reference.thumbnail;
+    if (!src) return -1;
+    const previewIndex = previewImages.length;
+    const label = reference.name || imageLabel;
+    previewImages.push({
+      src,
+      fallbackSrc: reference.thumbnail && reference.thumbnail !== src ? reference.thumbnail : undefined,
+      thumbSrc: reference.thumbnail ?? src,
+      name: reference.name,
+      alt: label,
+    });
+    return previewIndex;
+  });
+  return { previewImages, previewIndexByReferenceIndex };
+}
 
 /**
  * Paid media confirmation, docked where questions appear. Cost and the primary
@@ -48,7 +76,23 @@ export default function MediaConfirmationCard({
   const [failed, setFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [failedThumbIndices, setFailedThumbIndices] = useState<Record<number, number>>({});
   const t = (key: string) => i18nService.t(key);
+  const referenceImageLabel = t('mediaVideoConfirmReferenceImage');
+  const { previewImages, previewIndexByReferenceIndex } = useMemo(
+    () => buildReferencePreviewGallery(details?.references ?? [], referenceImageLabel),
+    [details?.references, referenceImageLabel],
+  );
+  useEffect(() => {
+    setFailedThumbIndices({});
+  }, [details?.references]);
+  useEffect(() => {
+    if (hidden) setPreviewIndex(null);
+  }, [hidden]);
+  const activePreviewIndex = !hidden && previewIndex !== null && previewIndex < previewImages.length
+    ? previewIndex
+    : null;
   useEffect(() => {
     if (hidden || state.status !== MediaConfirmationStatus.Waiting) return;
     let sending = false;
@@ -185,14 +229,46 @@ export default function MediaConfirmationCard({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="mr-1 text-xs text-secondary">{t('mediaVideoConfirmReferences')}</span>
                 {details.references.map((reference, index) => {
-                  const label = t(reference.kind === VideoReferenceKind.Video ? 'mediaVideoConfirmReferenceVideo' : 'mediaVideoConfirmReferenceImage');
-                  return reference.thumbnail
-                    ? <img key={index} src={reference.thumbnail} alt={label} title={label} draggable={false}
-                      className="h-12 w-12 rounded-lg object-cover ring-1 ring-border" />
-                    : <span key={index} role="img" aria-label={label} title={label}
-                      className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface-raised text-secondary ring-1 ring-border">
+                  const label = reference.name || t(reference.kind === VideoReferenceKind.Video ? 'mediaVideoConfirmReferenceVideo' : 'mediaVideoConfirmReferenceImage');
+                  const thumbCandidates = [reference.thumbnail, reference.previewUrl]
+                    .filter((value, candidateIdx, all): value is string => Boolean(value) && all.indexOf(value) === candidateIdx);
+                  const failureCount = failedThumbIndices[index] ?? 0;
+                  const thumbSrc = thumbCandidates[failureCount];
+                  const previewIndexForRef = previewIndexByReferenceIndex[index];
+                  if (thumbSrc && previewIndexForRef >= 0) {
+                    const previewHint = t('mediaVideoConfirmPreviewReference');
+                    return (
+                      <button
+                        key={index}
+                        type="button"
+                        aria-label={`${label} - ${previewHint}`}
+                        title={reference.name ? `${reference.name} · ${previewHint}` : previewHint}
+                        onClick={() => setPreviewIndex(previewIndexForRef)}
+                        className="group relative h-12 w-12 cursor-zoom-in overflow-hidden rounded-lg ring-1 ring-border transition-[box-shadow,transform] hover:ring-primary/60"
+                      >
+                        <img
+                          src={thumbSrc}
+                          alt={label}
+                          draggable={false}
+                          onError={() => {
+                            setFailedThumbIndices(prev => ({ ...prev, [index]: (prev[index] ?? 0) + 1 }));
+                          }}
+                          className="h-full w-full object-cover transition-transform duration-150 group-hover:scale-105"
+                        />
+                      </button>
+                    );
+                  }
+                  return (
+                    <span
+                      key={index}
+                      role="img"
+                      aria-label={label}
+                      title={label}
+                      className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface-raised text-secondary ring-1 ring-border"
+                    >
                       {reference.kind === VideoReferenceKind.Video ? <VideoCameraIcon /> : <PhotoIcon />}
-                    </span>;
+                    </span>
+                  );
                 })}
               </div>
             )}
@@ -262,7 +338,7 @@ export default function MediaConfirmationCard({
         )}
         <button
           type="button"
-          className={`${buttonClass} bg-foreground text-background hover:bg-foreground/90`}
+          className={`${buttonClass} bg-action text-action-foreground hover:bg-action-hover`}
           disabled={busy || !visible}
           aria-busy={repricing}
           onClick={() => {
@@ -294,6 +370,12 @@ export default function MediaConfirmationCard({
           {finePrintAfter}
         </p>
       )}
+      <ImagePreviewModal
+        images={previewImages}
+        currentIndex={activePreviewIndex}
+        onIndexChange={setPreviewIndex}
+        onClose={() => setPreviewIndex(null)}
+      />
     </section>
   );
 }

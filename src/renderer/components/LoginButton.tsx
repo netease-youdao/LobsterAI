@@ -291,7 +291,7 @@ const AccountPlanAction: React.FC<AccountPlanActionProps> = ({
         <button
           type="button"
           onClick={() => void onUpgrade()}
-          className={`${ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME} bg-[#111111] text-white transition-colors hover:bg-[#2a2a2a] dark:bg-white dark:text-black dark:hover:bg-white/85`}
+          className={`${ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME} bg-action text-action-foreground transition-colors hover:bg-action-hover`}
         >
           {i18nService.t('authUpgradePlan')}
         </button>
@@ -350,6 +350,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
   const user = useSelector((state: RootState) => state.auth.user);
   const quota = useSelector((state: RootState) => state.auth.quota);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
+  const accessState = useSelector((state: RootState) => state.auth.accessState);
   const connectionState = useSelector((state: RootState) => getAccountConnectionState(state.auth));
   const isEn = i18nService.getLanguage() === 'en';
   // The menu fetches on mount, so start in the loading state to avoid a
@@ -812,6 +813,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
       {logoutConfirmOpen && (
         <LogoutConfirmDialog
           isLoggingOut={loggingOut}
+          loginRequired={Boolean(accessState?.loginRequired)}
           onCancel={() => setLogoutConfirmOpen(false)}
           onConfirm={() => void handleLogout()}
         />
@@ -1168,17 +1170,17 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         className={
           useSidebarPromoLogin
             ? `peer sidebar-login-rainbow inline-flex h-7 shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform] ${loginInProgress ? 'min-w-[5.75rem]' : 'w-[5.75rem]'}`
-            : 'inline-flex h-7 items-center justify-start gap-2 rounded-md px-1.5 text-sm font-normal text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] cursor-pointer'
+            : 'inline-flex h-8 min-w-0 items-center justify-start gap-2 rounded-[10px] px-2 text-[length:var(--lobster-text-sidebarCompact)] font-medium text-foreground/90 transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground cursor-pointer'
         }
       >
         {isLoggedIn || connectionState ? (
           <>
             {user?.avatarUrl ? (
-              <img src={user.avatarUrl} alt="" className="h-4 w-4 shrink-0 rounded-full" />
+              <img src={user.avatarUrl} alt="" className="h-5 w-5 shrink-0 rounded-full" />
             ) : (
-              <UserAvatarIcon className="h-4 w-4 shrink-0" />
+              <UserAvatarIcon className="h-5 w-5 shrink-0" />
             )}
-            <span className="truncate max-w-[80px]">{i18nService.t('myAccount')}</span>
+            <span className="truncate max-w-[120px]">{i18nService.t('myAccount')}</span>
             {connectionState === AccountConnectionState.Restoring && (
               <ArrowPathIcon className="h-3.5 w-3.5 shrink-0 animate-spin text-secondary" />
             )}

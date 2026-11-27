@@ -1,6 +1,6 @@
 import { PhotoIcon } from '@heroicons/react/24/outline';
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 
 import { hasGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
 import {
@@ -39,6 +39,10 @@ import {
 } from './ContextChipDetails';
 import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
+import {
+  collectMarkdownPreviewGallery,
+  type ImagePreviewGalleryState,
+} from './imagePreviewNavigation';
 import { resolveKitDetailSkills } from './kitDetailSkills';
 import {
   COWORK_DETAIL_CONTENT_CLASS,
@@ -239,7 +243,7 @@ const MESSAGE_IMAGE_THUMBNAIL_MAX_HEIGHT = 192;
 
 const MessageImageThumbnail: React.FC<{
   image: CoworkImageAttachment | CoworkImageAttachmentPreview;
-  onOpen: (image: ImagePreviewSource) => void;
+  onOpen: () => void;
 }> = React.memo(({ image, onOpen }) => {
   const src = `data:${image.mimeType};base64,${image.base64Data}`;
   // Size the box from the image header up front, so the message does not grow
@@ -259,11 +263,7 @@ const MessageImageThumbnail: React.FC<{
         className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border border-border hover:border-primary transition-colors"
         style={reservedSize ?? undefined}
         title={image.name}
-        onClick={() => onOpen({
-          src,
-          alt: image.name,
-          name: image.name,
-        })}
+        onClick={onOpen}
       />
       <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
         <PhotoIcon className="h-3 w-3 flex-shrink-0" />
@@ -277,6 +277,7 @@ const MessageImageThumbnail: React.FC<{
 
 const UserMessageItem: React.FC<{
   message: CoworkMessage;
+  delivery?: React.ReactNode;
   skills: Skill[];
   marketplaceKits?: MarketplaceKit[];
   /** Session the message belongs to; used to resolve browser annotation screenshot assets. */
@@ -289,9 +290,10 @@ const UserMessageItem: React.FC<{
   onLocateSelectedText?: (sourceMessageId: string) => void;
   /** Opens the annotation restore view in the artifact panel. */
   onOpenAnnotation?: (message: CoworkMessage, payload: BrowserAnnotationAttachmentOpenPayload) => void;
-}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, reEditDisabled, onSwitchVersion, versionSwitchDisabled, onLocateSelectedText, onOpenAnnotation }) => {
+}> = React.memo(({ message, delivery, skills, marketplaceKits = [], sessionId, onReEdit, reEditDisabled, onSwitchVersion, versionSwitchDisabled, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
+  const [previewGallery, setPreviewGallery] = useState<ImagePreviewGalleryState | null>(null);
+  const contentContainerRef = useRef<HTMLDivElement>(null);
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
@@ -351,8 +353,37 @@ const UserMessageItem: React.FC<{
   const userImageAttachments = allImageAttachments.filter(image =>
     !(browserAnnotationCount > 0 && isBrowserAnnotationTransportImage(image))
   );
-  const displayImageAttachments = userImageAttachments.filter(image =>
-    !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
+  const copyImages = useMemo<MessageImageSource[]>(() => {
+    if (userImageAttachments.length > 0) return userImageAttachments;
+    const localMedia = Array.isArray(metadata?.localMediaAttachments)
+      ? metadata.localMediaAttachments
+      : [];
+    return localMedia
+      .filter((attachment) => {
+        const mime = attachment.mimeType?.trim().toLowerCase() ?? '';
+        return Boolean(attachment.localPath?.trim())
+          && (!mime || mime.startsWith('image/') || mime === 'image/*');
+      })
+      .map((attachment, index) => ({
+        name: attachment.name?.trim() || `image-${index + 1}`,
+        mimeType: attachment.mimeType?.trim() || 'image/jpeg',
+        base64Data: '',
+        localPath: attachment.localPath,
+      }));
+  }, [metadata?.localMediaAttachments, userImageAttachments]);
+  const displayImageAttachments = useMemo(
+    () => userImageAttachments.filter(image =>
+      !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
+    ),
+    [imageEdits, userImageAttachments],
+  );
+  const attachmentPreviewImages = useMemo<ImagePreviewSource[]>(
+    () => displayImageAttachments.map((image) => ({
+      src: `data:${image.mimeType};base64,${image.base64Data}`,
+      alt: image.name,
+      name: image.name,
+    })),
+    [displayImageAttachments],
   );
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
   const capabilityChips = hasCapabilityBadges
@@ -367,13 +398,24 @@ const UserMessageItem: React.FC<{
     : null;
   const hasDisplayText = Boolean(displayContent?.trim());
   const hasPastedTexts = pastedTexts.length > 0;
-  const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
+  const handleSingleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
+    setPreviewGallery({ images: [image], index: 0 });
+  }, []);
+  const handleMarkdownImagePreviewOpen = useCallback((image: ImagePreviewSource, element?: HTMLImageElement) => {
     reportConversationMessageAction({
       actionType: 'open_message_image',
       message,
     });
-    setExpandedImage(image);
+    setPreviewGallery(collectMarkdownPreviewGallery(contentContainerRef.current, element, image));
   }, [message]);
+  const handleAttachmentImagePreviewOpen = useCallback((index: number) => {
+    if (index < 0 || index >= attachmentPreviewImages.length) return;
+    reportConversationMessageAction({
+      actionType: 'open_message_image',
+      message,
+    });
+    setPreviewGallery({ images: attachmentPreviewImages, index });
+  }, [attachmentPreviewImages, message]);
   const handleReEditClick = useCallback(() => {
     reportConversationMessageAction({
       actionType: 'reedit_user_message',
@@ -402,7 +444,7 @@ const UserMessageItem: React.FC<{
       onOpenAnnotation(message, payload);
       return;
     }
-    setExpandedImage({ src: payload.src, name: payload.name });
+    setPreviewGallery({ images: [{ src: payload.src, name: payload.name }], index: 0 });
   }, [message, onOpenAnnotation]);
 
   return (
@@ -433,7 +475,7 @@ const UserMessageItem: React.FC<{
                       draftKey={sessionId ?? ''}
                       batches={browserAnnotations}
                       align="right"
-                      onPreviewImage={setExpandedImage}
+                      onPreviewImage={handleSingleImagePreviewOpen}
                       onOpenAnnotation={handleOpenAnnotationAttachment}
                       readOnly
                     />
@@ -465,11 +507,11 @@ const UserMessageItem: React.FC<{
                 )}
                 {displayContent?.trim() && (
                   <UserMessageCollapsible>
-                    <div data-cowork-search-message-id={message.id}>
+                    <div ref={contentContainerRef} data-cowork-search-message-id={message.id}>
                       <UserMessageContent
                         content={displayContent}
                         className="max-w-none"
-                        onImageClick={handleImagePreviewOpen}
+                        onImageClick={handleMarkdownImagePreviewOpen}
                         leading={capabilityChips}
                       />
                     </div>
@@ -483,7 +525,7 @@ const UserMessageItem: React.FC<{
                 {displayImageAttachments.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${displayContent?.trim() ? 'mt-2' : ''}`}>
                     {displayImageAttachments.map((img, idx) => (
-                      <MessageImageThumbnail key={idx} image={img} onOpen={handleImagePreviewOpen} />
+                      <MessageImageThumbnail key={idx} image={img} onOpen={() => handleAttachmentImagePreviewOpen(idx)} />
                     ))}
                   </div>
                 )}
@@ -495,12 +537,13 @@ const UserMessageItem: React.FC<{
                   />
                 )}
               </div>
+              {delivery}
               <div className="flex w-full items-center justify-end gap-2">
                 <div className={messageMetaClassName(isHovered, 'right')} aria-hidden={!isHovered}>
                   <span>{formatMessageDateTime(message.timestamp)}</span>
                   <CopyButton
                     content={copyContent}
-                    images={userImageAttachments}
+                    images={copyImages}
                     onCopy={(result) => reportConversationMessageAction({
                       actionType: 'copy_message',
                       message,
@@ -508,7 +551,7 @@ const UserMessageItem: React.FC<{
                         result,
                         copySource: 'user_message',
                         copiedLength: copyContent.length,
-                        copiedImageCount: userImageAttachments.length,
+                        copiedImageCount: copyImages.length,
                       },
                     })}
                     visible={isHovered}
@@ -539,7 +582,12 @@ const UserMessageItem: React.FC<{
           </div>
         </div>
       </div>
-      <ImagePreviewModal image={expandedImage} onClose={() => setExpandedImage(null)} />
+      <ImagePreviewModal
+        images={previewGallery?.images}
+        currentIndex={previewGallery?.index ?? null}
+        onIndexChange={(index) => setPreviewGallery((current) => (current ? { ...current, index } : null))}
+        onClose={() => setPreviewGallery(null)}
+      />
     </div>
   );
 });

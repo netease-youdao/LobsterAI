@@ -265,6 +265,17 @@ describe('resolveConversationAgentIdFromMappings', () => {
     ).toBe('agent-feishu-bot-1');
   });
 
+  test('uses the full instance override for a short delivery account after reclaiming a group bot', () => {
+    const mappings = [
+      { imConversationId: 'group:oc_1', agentId: 'expert' },
+      { imConversationId: 'group:oc_1', agentId: 'main' },
+    ];
+    const platformAgentBindings = { 'feishu:12345678': 'expert', 'feishu:12345678-abcd': 'main' };
+    expect(resolveConversationAgentIdFromMappings(mappings, 'group:oc_1', '12345678', {
+      platform: 'feishu', platformAgentBindings,
+    })).toBe('main');
+  });
+
   test('falls back to the most recent peer match and accepts full conversation ids', () => {
     expect(
       resolveConversationAgentIdFromMappings(mappings, 'zhangsan@corp.example.com'),
@@ -337,6 +348,16 @@ describe('dedupeConversationMappings', () => {
 });
 
 describe('filterConversationMappingsForSelectedAccount', () => {
+  test('selects the current task when one DSH bot has group history under two agents', () => {
+    const bot = 'feishu:12345678-abcd';
+    const current = { platform: bot, imConversationId: 'group:oc_shared', agentId: 'expert' };
+    const previous = { ...current, agentId: 'main' };
+    const olderTarget = { ...previous, imConversationId: 'group:oc_older' };
+    expect(filterConversationMappingsForSelectedAccount(
+      [previous, olderTarget, current], 'feishu', '12345678', { feishu: 'expert' },
+    )).toEqual([olderTarget, current]);
+  });
+
   test('keeps only the selected account bound agent for account-less group mappings', () => {
     const result = filterConversationMappingsForSelectedAccount(
       [

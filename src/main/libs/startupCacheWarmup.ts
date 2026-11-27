@@ -23,6 +23,9 @@ export type StartupCacheWarmupDeps = {
 export type StartupCacheWarmupResult = {
   subscriptionStatus: string;
   mediaGenerationEntitled: boolean;
+  quota?: Record<string, unknown> | null;
+  serverModels?: ServerModelEntry[];
+  modelsChanged?: boolean;
 };
 
 const WARMUP_TIMEOUT = 5000;
@@ -56,6 +59,9 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
 
   let subscriptionStatus = cachedSubscriptionStatus;
   let mediaGenerationEntitled = false;
+  let quotaSnapshot: Record<string, unknown> | null | undefined;
+  let serverModels: ServerModelEntry[] | undefined;
+  let modelsChanged = false;
 
   await Promise.allSettled([
     (async () => {
@@ -71,6 +77,7 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
           standardPlanName: t('authPlanStandard'),
           fallbackSubscriptionStatus: cachedSubscriptionStatus,
         });
+        quotaSnapshot = quota as unknown as Record<string, unknown>;
         const gateState = authQuotaGateStateFromQuota(quota);
         subscriptionStatus = gateState.subscriptionStatus;
         mediaGenerationEntitled = gateState.mediaGenerationEntitled;
@@ -89,7 +96,8 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
         if (!resp.ok) return;
         const data = (await resp.json()) as { code: number; data: ServerModelEntry[] };
         if (data.code !== 0 || !data.data) return;
-        updateServerModelMetadataFromResponse(data.data);
+        serverModels = data.data;
+        modelsChanged = Boolean(updateServerModelMetadataFromResponse(data.data));
         console.log(`[Main] startup cache warmup: loaded ${data.data.length} server models`);
       } catch (err) {
         console.debug('[Main] startup cache warmup: models fetch failed (non-fatal):', err);
@@ -97,5 +105,11 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
     })(),
   ]);
 
-  return { subscriptionStatus, mediaGenerationEntitled };
+  return {
+    subscriptionStatus,
+    mediaGenerationEntitled,
+    ...(quotaSnapshot !== undefined ? { quota: quotaSnapshot } : {}),
+    ...(serverModels !== undefined ? { serverModels } : {}),
+    modelsChanged,
+  };
 }

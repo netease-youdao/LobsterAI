@@ -1,6 +1,6 @@
-import { type AvailableModelPreset, isChatPresetSession, type ModelPresetId, ModelPresetIpc, modelPresetModelId, modelPresetPreferenceKey, parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
+import { type AvailableModelPreset, type ModelPresetId, ModelPresetIpc, modelPresetModelId, modelPresetPreferenceKey, parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
 import { type ModelThinkingLevel, OpenClawProviderId, parseModelThinkingConfig, parseModelThinkingLevel } from '../../shared/providers';
-import { selectableContextWindows } from '../../shared/providers/modelContextWindow';
+import { isManualContextWindowSession, selectableContextWindows } from '../../shared/providers/modelContextWindow';
 import { getServerModelMetadata, type ServerModelMetadataInput } from './claudeSettings';
 import { rememberedContextWindow,sessionContextWindowSelection } from './modelContextWindows';
 import { recordSessionModelChange } from './sessionModelChange';
@@ -86,14 +86,20 @@ export function registerModelPresetIpc(dependencies: {
     try { return { success: true, data: await operation() }; }
     catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
   };
-  const resolveSelection = async (sessionId: string, presetId: ModelPresetId, requiresImage: boolean, initial: boolean) => {
+  const resolveSelection = async (
+    sessionId: string,
+    presetId: ModelPresetId,
+    requiresImage: boolean,
+    initial: boolean,
+    requestedThinkingLevel?: ModelThinkingLevel,
+  ) => {
     const isCurrent = dependencies.isAccountCurrent();
     const owner = dependencies.ownerAccountKey();
     if (!owner) throw new Error(t('modelPresetLoginRequired'));
     const revision = (selectionRevision.get(sessionId) ?? 0) + 1;
     selectionRevision.set(sessionId, revision);
     const session = getSessions().getSession(sessionId);
-    if (!session || !isChatPresetSession(session)) throw new Error(t('modelPresetInvalidSession'));
+    if (!session) throw new Error(t('modelPresetInvalidSession'));
     if (initial && session.modelPresetId === presetId && session.modelOverride) return session;
     if (!initial && (session.status === 'running' || dependencies.getRuntime().isSessionActive(sessionId))) throw new Error(t('modelPresetSessionBusy'));
     await dependencies.ensureModelsReady();
@@ -102,12 +108,18 @@ export function registerModelPresetIpc(dependencies: {
     if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
     if (selectionRevision.get(sessionId) !== revision) throw new Error(t('modelPresetModelMismatch'));
     const modelRef = `${OpenClawProviderId.LobsteraiServer}/${model.modelId}`;
-    const config = parseModelThinkingConfig(model.thinkingConfig);
-    const thinkingLevel = config?.defaultLevel ?? '';
-    const contextOwner = dependencies.contextWindowOwnerKey?.() ?? null;
     const contextModel = getServerModelMetadata(model.modelId);
-    const contextWindowOverride = rememberedContextWindow(dependencies.getStore(), contextOwner, model.modelId, presetId,
-      selectableContextWindows(contextModel, presetId));
+    const config = parseModelThinkingConfig(model.thinkingConfig) ?? contextModel?.thinkingConfig;
+    const thinkingLevel: ModelThinkingLevel | '' = config
+      ? (requestedThinkingLevel && config.options.some(option => option.level === requestedThinkingLevel)
+          ? requestedThinkingLevel
+          : config.defaultLevel)
+      : (requestedThinkingLevel ?? '');
+    const contextOwner = dependencies.contextWindowOwnerKey?.() ?? null;
+    const contextWindowOverride = isManualContextWindowSession(session)
+      ? rememberedContextWindow(dependencies.getStore(), contextOwner, model.modelId, presetId,
+        selectableContextWindows(contextModel, presetId))
+      : null;
     if (!initial) {
       const patched = await dependencies.getRuntime().patchSession?.(sessionId, {
         model: modelRef,
@@ -128,7 +140,7 @@ export function registerModelPresetIpc(dependencies: {
     const key = `${dependencies.ownerAccountKey()}:${sessionId}:${presetId}:${requiresImage}:${initial}:${thinkingLevel ?? ''}`;
     const existing = selections.get(key);
     if (existing) return existing;
-    const selection = resolveSelection(sessionId, presetId, requiresImage, initial);
+    const selection = resolveSelection(sessionId, presetId, requiresImage, initial, thinkingLevel);
     selections.set(key, selection);
     void selection.finally(() => { if (selections.get(key) === selection) selections.delete(key); }).catch((): void => {});
     return selection;

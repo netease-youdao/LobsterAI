@@ -25,6 +25,8 @@ export type WordReadOnlyReason = typeof WordReadOnlyReason[keyof typeof WordRead
 /** What admission learned about a package besides its validity. */
 export interface WordPackageInfo extends OfficePackageInfo<WordReadOnlyReason> {
   fonts: WordDocumentFontDecl[];
+  /** Font families actually referenced by story parts or active styles (excludes unused template styles). */
+  activeFonts?: string[];
 }
 
 export const WORD_PACKAGE_LIMITS: OfficePackageLimits = {

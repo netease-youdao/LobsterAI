@@ -19,7 +19,9 @@ import {
   __mcpLaunchResolverTestUtils,
   isRecoverableNodeRuntimeResolutionError,
   isStaleInstallingResolution,
+  MCP_PACKAGES_DIR_NAME,
   packageRootFromInstallDir,
+  resolveMcpPackageInstallDir,
 } from './mcpLaunchResolverManager';
 
 test('packageRootFromInstallDir preserves scoped npm package paths', () => {
@@ -81,4 +83,14 @@ test('isRecoverableNodeRuntimeResolutionError detects Windows node shim ENOENT',
     error: 'npm view exited with code 1',
     updatedAt: Date.now(),
   })).toBe(false);
+});
+
+test('resolveMcpPackageInstallDir uses engine-independent <userData>/mcp-packages directory', () => {
+  const userData = path.join('/tmp', 'LobsterAI');
+  const installDir = resolveMcpPackageInstallDir(userData, 'srv-1', '@modelcontextprotocol/server-filesystem');
+
+  expect(installDir).toBe(
+    path.join(userData, MCP_PACKAGES_DIR_NAME, 'srv-1-modelcontextprotocol-server-filesystem'),
+  );
+  expect(installDir).not.toContain('openclaw');
 });

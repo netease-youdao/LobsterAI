@@ -11,25 +11,39 @@ vi.mock('electron', () => ({
   session: { defaultSession: { webRequest: { onBeforeSendHeaders: vi.fn() } } },
 }));
 
+import { KitStoreKey } from '../../shared/kit/constants';
+import { CoreSkillId, EMAIL_SKILL_CONFIG_DIR_NAME } from '../../shared/skills/constants';
+import { SkinPackKitId, SkinPackSkillId } from '../../shared/skin/kit';
 import type { SqliteStore } from '../sqliteStore';
-import { RETIRED_BUNDLED_SKILL_IDS,RetiredBundledSkillId } from './retiredBundledSkills';
+import { RETIRED_BUNDLED_SKILL_IDS, RetiredBundledSkillId } from './retiredBundledSkills';
 import { SkillManager } from './skillManager';
 
 let manager: SkillManager;
 let userRoot: string;
 let bundledRoot: string;
-let state: unknown;
-const saveState = vi.fn((_key: string, value: unknown) => { state = structuredClone(value); });
+let emailConfigDir: string;
+let kvStore: Map<string, unknown>;
+let saveState: ReturnType<typeof vi.fn>;
 
-const writeSkill = (root: string, id: string): void => {
+const writeSkill = (
+  root: string,
+  id: string,
+  extraFrontmatter = '',
+): string => {
   const dir = path.join(root, id);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${id}\ndescription: test skill\n---\n# ${id}\n`);
+  const frontmatter = [
+    `name: ${id}`,
+    'description: test skill',
+    ...(extraFrontmatter ? [extraFrontmatter.trim()] : []),
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\n${frontmatter}\n---\n# ${id}\n`);
+  return dir;
 };
 
-const writeConfig = (root: string, defaults: Record<string, unknown>): void => {
+const writeConfig = (root: string, defaults: Record<string, unknown>, version = 2): void => {
   fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, 'skills.config.json'), JSON.stringify({ version: 1, description: 'Keep this', defaults }));
+  fs.writeFileSync(path.join(root, 'skills.config.json'), JSON.stringify({ version, description: 'Keep this', defaults }));
 };
 
 const readConfig = () => JSON.parse(fs.readFileSync(path.join(userRoot, 'skills.config.json'), 'utf8'));
@@ -38,11 +52,17 @@ beforeEach(() => {
   fixture.root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-skill-bundled-sync-'));
   userRoot = path.join(fixture.root, 'SKILLs');
   bundledRoot = path.join(fixture.root, 'app', 'SKILLs');
-  state = undefined;
-  saveState.mockClear();
-  const store = { get: () => structuredClone(state), set: saveState } as unknown as SqliteStore;
+  emailConfigDir = path.join(fixture.root, EMAIL_SKILL_CONFIG_DIR_NAME);
+  kvStore = new Map<string, unknown>();
+  saveState = vi.fn((key: string, value: unknown) => {
+    kvStore.set(key, structuredClone(value));
+  });
+  const store = {
+    get: (key: string) => structuredClone(kvStore.get(key)),
+    set: saveState,
+  } as unknown as SqliteStore;
   manager = new SkillManager(() => store);
-  vi.spyOn(manager as unknown as { getBundledSkillsRoot(): string }, 'getBundledSkillsRoot').mockReturnValue(bundledRoot);
+  vi.spyOn(manager, 'getBundledSkillsRoot').mockReturnValue(bundledRoot);
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
@@ -54,23 +74,51 @@ afterEach(() => {
   fs.rmSync(fixture.root, { recursive: true, force: true });
 });
 
-test('the shipped bundle no longer contains retired skill files or defaults', () => {
+test('the shipped bundle contains only the 9 always-enabled core skills and no retired or migrated vertical skills', () => {
   const root = path.resolve(__dirname, '../../../SKILLs');
   const config = JSON.parse(fs.readFileSync(path.join(root, 'skills.config.json'), 'utf8'));
+  const expectedCoreIds = Object.values(CoreSkillId).sort();
+  expect(Object.keys(config.defaults).sort()).toEqual(expectedCoreIds);
+
+  for (const id of expectedCoreIds) {
+    expect(config.defaults[id]).toMatchObject({ enabled: true, alwaysEnabled: true });
+    expect(fs.existsSync(path.join(root, id, 'SKILL.md'))).toBe(true);
+  }
   for (const id of RETIRED_BUNDLED_SKILL_IDS) {
     expect(config.defaults).not.toHaveProperty(id);
     expect(fs.existsSync(path.join(root, id, 'SKILL.md'))).toBe(false);
   }
+  // Migrated vertical skills and skin-creator must no longer live in SKILLs/
+  for (const movedId of ['article-writer', 'weather', 'remotion', 'skin-creator']) {
+    expect(config.defaults).not.toHaveProperty(movedId);
+    expect(fs.existsSync(path.join(root, movedId, 'SKILL.md'))).toBe(false);
+  }
 });
 
-test('a fresh install syncs current skills without restoring stale retired bundle directories', () => {
-  writeSkill(bundledRoot, 'weather');
-  // Also cover sync's legacy fallback when the bundle has no config allowlist.
+test('a fresh install loads bundled core skills read-only without copying them into userData/SKILLs', () => {
+  writeSkill(bundledRoot, 'docx');
+  writeSkill(bundledRoot, 'skill-creator', 'disable-model-invocation: true');
+  writeSkill(bundledRoot, 'lobsterai-image-processing', 'user-invocable: false');
   for (const id of RETIRED_BUNDLED_SKILL_IDS) writeSkill(bundledRoot, id);
+  writeConfig(bundledRoot, {
+    docx: { enabled: true, order: 1, alwaysEnabled: true },
+    'skill-creator': { enabled: true, order: 2, alwaysEnabled: true },
+    'lobsterai-image-processing': { enabled: true, order: 3, alwaysEnabled: true },
+  });
 
   manager.syncBundledSkillsToUserData();
 
-  expect(manager.listSkills().map(skill => skill.id)).toEqual(['weather']);
+  const skills = manager.listSkills();
+  expect(skills.map((s) => s.id)).toEqual(['docx', 'skill-creator', 'lobsterai-image-processing']);
+  expect(skills.every((s) => s.isBuiltIn && s.enabled && s.canDisable === false)).toBe(true);
+  expect(skills.find((s) => s.id === 'docx')?.skillPath).toBe(path.join(bundledRoot, 'docx', 'SKILL.md'));
+  expect(skills.find((s) => s.id === 'skill-creator')?.modelInvocable).toBe(false);
+  expect(skills.find((s) => s.id === 'skill-creator')?.userInvocable).toBe(true);
+  expect(skills.find((s) => s.id === 'lobsterai-image-processing')?.modelInvocable).toBe(true);
+  expect(skills.find((s) => s.id === 'lobsterai-image-processing')?.userInvocable).toBe(false);
+
+  // Bundled core skills are NOT copied into userRoot
+  expect(fs.existsSync(path.join(userRoot, 'docx'))).toBe(false);
   for (const id of RETIRED_BUNDLED_SKILL_IDS) {
     expect(fs.existsSync(path.join(userRoot, id))).toBe(false);
     expect(manager.buildAutoRoutingPrompt()).not.toContain(id);
@@ -78,13 +126,13 @@ test('a fresh install syncs current skills without restoring stale retired bundl
   expect(saveState).not.toHaveBeenCalled();
 });
 
-test('a skill dropped from the bundle without retirement stays installed as a deletable user skill', async () => {
-  // An older app version bundled "legacy-skill" and copied it into user data.
-  writeSkill(userRoot, 'legacy-skill');
-  writeSkill(bundledRoot, 'weather');
-  writeConfig(bundledRoot, { weather: { enabled: true, order: 210 } });
-  writeConfig(userRoot, { 'legacy-skill': { enabled: true, order: 50 }, weather: { enabled: true, order: 210 } });
-  state = { 'legacy-skill': { enabled: false } };
+test('a skill dropped from the bundle without retirement stays installed as a toggleable/deletable user skill', async () => {
+  // An older app version bundled "article-writer" and copied it into user data.
+  writeSkill(userRoot, 'article-writer');
+  writeSkill(bundledRoot, 'docx');
+  writeConfig(bundledRoot, { docx: { enabled: true, order: 1, alwaysEnabled: true } });
+  writeConfig(userRoot, { 'article-writer': { enabled: true, order: 50 }, docx: { enabled: true, order: 1 } });
+  kvStore.set('skills_state', { 'article-writer': { enabled: false } });
 
   // The copy must survive every launch, not only the first one after the upgrade.
   for (let launch = 0; launch < 2; launch += 1) {
@@ -92,64 +140,84 @@ test('a skill dropped from the bundle without retirement stays installed as a de
     manager.recoverInterruptedUpgrades();
   }
 
-  expect(manager.listSkills().map(skill => [skill.id, skill.isBuiltIn, skill.enabled])).toEqual([
-    ['legacy-skill', false, false],
-    ['weather', true, true],
+  expect(manager.listSkills().map((skill) => [skill.id, skill.isBuiltIn, skill.canDisable, skill.enabled])).toEqual([
+    ['docx', true, false, true],
+    ['article-writer', false, true, false],
   ]);
-  expect(readConfig().defaults).toHaveProperty('legacy-skill');
-  expect(saveState).not.toHaveBeenCalled();
+  expect(readConfig().defaults).toHaveProperty('article-writer');
 
   // Deleting restarts the directory watcher, whose handles would outlive the fixture.
   vi.spyOn(manager, 'startWatching').mockImplementation(() => {});
-  await expect(manager.deleteSkill('weather')).rejects.toThrow('Built-in skills cannot be deleted');
-  expect((await manager.deleteSkill('legacy-skill')).map(skill => skill.id)).toEqual(['weather']);
-  expect(fs.existsSync(path.join(userRoot, 'legacy-skill'))).toBe(false);
+  await expect(manager.deleteSkill('docx')).rejects.toThrow('Built-in skills cannot be deleted');
+  expect((await manager.deleteSkill('article-writer')).map((skill) => skill.id)).toEqual(['docx']);
+  expect(fs.existsSync(path.join(userRoot, 'article-writer'))).toBe(false);
+});
+
+test('always-enabled core skills heal stale disabled state on startup and reject disable calls', () => {
+  writeSkill(bundledRoot, 'docx');
+  writeSkill(userRoot, 'docx'); // Stale copy from older version
+  writeSkill(userRoot, 'custom-skill');
+  writeConfig(bundledRoot, { docx: { enabled: true, order: 1, alwaysEnabled: true } });
+  kvStore.set('skills_state', {
+    docx: { enabled: false },
+    'custom-skill': { enabled: true },
+  });
+
+  manager.syncBundledSkillsToUserData();
+
+  // Stale user copy of core skill is cleaned up and stale disabled state is removed.
+  expect(fs.existsSync(path.join(userRoot, 'docx'))).toBe(false);
+  expect(manager.isSkillEnabled('docx')).toBe(true);
+  expect(kvStore.get('skills_state')).toEqual({
+    'custom-skill': { enabled: true },
+  });
+
+  // Direct disable throws
+  expect(() => manager.setSkillEnabled('docx', false)).toThrow('Built-in skills cannot be disabled');
+
+  // Batch disable skips always-enabled core skills while disabling user skills
+  manager.setSkillsEnabledBatch(['docx', 'custom-skill'], false);
+  expect(manager.isSkillEnabled('docx')).toBe(true);
+  expect(manager.isSkillEnabled('custom-skill')).toBe(false);
 });
 
 test('upgrades remove retired copies, defaults and state while preserving other skills and preferences', () => {
-  const retiredDefaults = Object.fromEntries([...RETIRED_BUNDLED_SKILL_IDS].map(id => [id, { enabled: true, order: 222 }]));
+  const retiredDefaults = Object.fromEntries([...RETIRED_BUNDLED_SKILL_IDS].map((id) => [id, { enabled: true, order: 222 }]));
   for (const id of RETIRED_BUNDLED_SKILL_IDS) writeSkill(userRoot, id);
   writeSkill(userRoot, 'custom-skill');
-  writeSkill(bundledRoot, 'weather');
-  writeConfig(bundledRoot, { weather: { enabled: true, order: 210 } });
-  writeConfig(userRoot, { ...retiredDefaults, weather: { enabled: false, order: 5 }, 'custom-skill': { order: 1 } });
-  state = { ...retiredDefaults, weather: { enabled: false }, 'custom-skill': { enabled: true } };
+  writeSkill(bundledRoot, 'docx');
+  writeConfig(bundledRoot, { docx: { enabled: true, order: 210, alwaysEnabled: true } });
+  writeConfig(userRoot, { ...retiredDefaults, 'custom-skill': { order: 1 } });
+  kvStore.set('skills_state', { ...retiredDefaults, 'custom-skill': { enabled: true } });
 
   manager.syncBundledSkillsToUserData();
   manager.recoverInterruptedUpgrades();
 
-  expect(manager.listSkills().map(skill => skill.id)).toEqual(['custom-skill', 'weather']);
-  expect(manager.listSkills().find(skill => skill.id === 'weather')?.enabled).toBe(false);
-  expect(state).toEqual({ weather: { enabled: false }, 'custom-skill': { enabled: true } });
+  expect(manager.listSkills().map((skill) => skill.id)).toEqual(['custom-skill', 'docx']);
+  expect(kvStore.get('skills_state')).toEqual({ 'custom-skill': { enabled: true } });
   expect(readConfig()).toEqual({
-    version: 1,
+    version: 2,
     description: 'Keep this',
-    defaults: { weather: { enabled: false, order: 5 }, 'custom-skill': { order: 1 } },
+    defaults: { 'custom-skill': { order: 1 } },
   });
   for (const id of RETIRED_BUNDLED_SKILL_IDS) expect(fs.existsSync(path.join(userRoot, id))).toBe(false);
-
-  const configBeforeRestart = fs.readFileSync(path.join(userRoot, 'skills.config.json'), 'utf8');
-  manager.syncBundledSkillsToUserData();
-  manager.recoverInterruptedUpgrades();
-  expect(fs.readFileSync(path.join(userRoot, 'skills.config.json'), 'utf8')).toBe(configBeforeRestart);
-  expect(saveState).toHaveBeenCalledTimes(1);
 });
 
 test('cleanup runs with a missing bundle and prevents interrupted upgrades from restoring retired skills', () => {
   for (const id of RETIRED_BUNDLED_SKILL_IDS) writeSkill(userRoot, `${id}.upgrading`);
   writeSkill(userRoot, RetiredBundledSkillId.FilmsSearch);
   writeSkill(userRoot, 'custom-skill.upgrading');
-  state = [
+  kvStore.set('skills_state', [
     { id: RetiredBundledSkillId.FilmsSearch, enabled: true },
     { id: RetiredBundledSkillId.MusicSearch, enabled: false },
     { id: 'custom-skill', enabled: false },
-  ];
+  ]);
 
   manager.syncBundledSkillsToUserData();
   manager.recoverInterruptedUpgrades();
 
-  expect(manager.listSkills().map(skill => skill.id)).toEqual(['custom-skill']);
-  expect(state).toEqual({ 'custom-skill': { enabled: false } });
+  expect(manager.listSkills().map((skill) => skill.id)).toEqual(['custom-skill']);
+  expect(kvStore.get('skills_state')).toEqual({ 'custom-skill': { enabled: false } });
   for (const id of RETIRED_BUNDLED_SKILL_IDS) {
     expect(fs.existsSync(path.join(userRoot, id))).toBe(false);
     expect(fs.existsSync(path.join(userRoot, `${id}.upgrading`))).toBe(false);
@@ -157,20 +225,21 @@ test('cleanup runs with a missing bundle and prevents interrupted upgrades from 
   expect(fs.existsSync(path.join(userRoot, 'custom-skill', 'SKILL.md'))).toBe(true);
 });
 
-test('a malformed user config does not block directory and state cleanup or syncing other skills', () => {
+test('a malformed user config does not block directory and state cleanup or reading bundled skills', () => {
   for (const id of RETIRED_BUNDLED_SKILL_IDS) writeSkill(userRoot, id);
   const configPath = path.join(userRoot, 'skills.config.json');
   fs.writeFileSync(configPath, '{broken');
-  state = { [RetiredBundledSkillId.MusicSearch]: { enabled: false } };
-  writeSkill(bundledRoot, 'weather');
+  kvStore.set('skills_state', { [RetiredBundledSkillId.MusicSearch]: { enabled: false } });
+  writeSkill(bundledRoot, 'docx');
+  writeConfig(bundledRoot, { docx: { enabled: true, order: 1, alwaysEnabled: true } });
   const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
   manager.syncBundledSkillsToUserData();
 
   expect(error).toHaveBeenCalled();
   expect(fs.readFileSync(configPath, 'utf8')).toBe('{broken');
-  expect(state).toEqual({});
-  expect(fs.existsSync(path.join(userRoot, 'weather', 'SKILL.md'))).toBe(true);
+  expect(kvStore.get('skills_state')).toEqual({});
+  expect(manager.listSkills().map((s) => s.id)).toEqual(['docx']);
   for (const id of RETIRED_BUNDLED_SKILL_IDS) expect(fs.existsSync(path.join(userRoot, id))).toBe(false);
 });
 
@@ -199,22 +268,250 @@ test('a locked retired backup is not restored and cleanup retries on the next st
   expect(fs.existsSync(backup)).toBe(false);
 });
 
-test('a newer bundled web-search version replaces the stale copy and keeps user credentials', () => {
-  const writeWebSearch = (root: string, version: string, startServer: string): string => {
-    const dir = path.join(root, 'web-search');
-    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: web-search\ndescription: test skill\nversion: ${version}\n---\n# web-search\n`);
-    fs.writeFileSync(path.join(dir, 'scripts', 'start-server.sh'), startServer);
-    return dir;
-  };
-  const userDir = writeWebSearch(userRoot, '1.0.2', 'old\n');
-  fs.writeFileSync(path.join(userDir, 'tsconfig.json'), '{}\n');
-  fs.writeFileSync(path.join(userDir, '.env'), 'TOKEN=keep\n');
-  writeWebSearch(bundledRoot, '1.0.3', 'new\n');
+test('migrates legacy imap-smtp-email accounts.json and .env to userData/email-skill before cleaning stale copy', () => {
+  const userDir = writeSkill(userRoot, 'imap-smtp-email');
+  const savedAccounts = JSON.stringify({
+    version: 1,
+    defaultAccountId: 'work',
+    accounts: [
+      {
+        id: 'work',
+        name: 'Work Mail',
+        enabled: true,
+        provider: '163',
+        email: 'alice@163.com',
+        password: 'auth-code-123',
+        imapHost: 'imap.163.com',
+        imapPort: 993,
+        imapTls: true,
+        imapRejectUnauthorized: true,
+        smtpHost: 'smtp.163.com',
+        smtpPort: 465,
+        smtpSecure: true,
+        smtpRejectUnauthorized: true,
+        smtpFrom: 'alice@163.com',
+        mailbox: 'INBOX',
+        requireSendConfirmation: true,
+      },
+    ],
+  }, null, 2) + '\n';
+  fs.writeFileSync(path.join(userDir, 'accounts.json'), savedAccounts, 'utf8');
+  fs.writeFileSync(path.join(userDir, '.env'), 'IMAP_USER=legacy@163.com\nIMAP_PASS=legacy-pass\n', 'utf8');
+  writeSkill(bundledRoot, 'imap-smtp-email');
+  writeConfig(bundledRoot, { 'imap-smtp-email': { enabled: true, order: 211, alwaysEnabled: true } });
 
   manager.syncBundledSkillsToUserData();
 
-  expect(fs.readFileSync(path.join(userDir, 'scripts', 'start-server.sh'), 'utf8')).toBe('new\n');
-  expect(fs.existsSync(path.join(userDir, 'tsconfig.json'))).toBe(false);
-  expect(fs.readFileSync(path.join(userDir, '.env'), 'utf8')).toBe('TOKEN=keep\n');
+  // Credentials migrated cleanly to <userData>/email-skill/
+  expect(fs.readFileSync(path.join(emailConfigDir, 'accounts.json'), 'utf8')).toBe(savedAccounts);
+  expect(fs.readFileSync(path.join(emailConfigDir, '.env'), 'utf8')).toBe(
+    'IMAP_USER=legacy@163.com\nIMAP_PASS=legacy-pass\n',
+  );
+  // Stale user copy of core skill was cleaned up only AFTER verified migration
+  expect(fs.existsSync(userDir)).toBe(false);
+  expect(manager.hasEnabledEmailAccount()).toBe(true);
+});
+
+test('aborts stale imap-smtp-email directory cleanup if credential migration fails', () => {
+  const userDir = writeSkill(userRoot, 'imap-smtp-email');
+  fs.writeFileSync(path.join(userDir, 'accounts.json'), '{"version":1,"accounts":[]}', 'utf8');
+  writeSkill(bundledRoot, 'imap-smtp-email');
+  writeConfig(bundledRoot, { 'imap-smtp-email': { enabled: true, order: 211, alwaysEnabled: true } });
+
+  // Block creating email-skill directory by placing a regular file at that path
+  fs.writeFileSync(emailConfigDir, 'blocking-file', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  manager.syncBundledSkillsToUserData();
+
+  expect(warn).toHaveBeenCalled();
+  // Legacy user directory and accounts.json MUST remain untouched on migration failure
+  expect(fs.existsSync(path.join(userDir, 'accounts.json'))).toBe(true);
+});
+
+test('SkillManager persists and reads email accounts.json under userData/email-skill and falls back to legacy .env', () => {
+  writeSkill(bundledRoot, 'imap-smtp-email');
+  writeConfig(bundledRoot, { 'imap-smtp-email': { enabled: true, order: 211, alwaysEnabled: true } });
+  fs.mkdirSync(emailConfigDir, { recursive: true });
+
+  // Initially no enabled email account
+  expect(manager.hasEnabledEmailAccount()).toBe(false);
+
+  // Legacy .env fallback when accounts.json does not exist yet
+  fs.writeFileSync(
+    path.join(emailConfigDir, '.env'),
+    [
+      'IMAP_HOST=imap.163.com',
+      'IMAP_PORT=993',
+      'IMAP_USER=legacy@163.com',
+      'IMAP_PASS=legacy-secret',
+      'SMTP_HOST=smtp.163.com',
+      'SMTP_PORT=465',
+      'SMTP_SECURE=true',
+    ].join('\n') + '\n',
+    'utf8',
+  );
+  expect(manager.hasEnabledEmailAccount()).toBe(true);
+
+  const migrated = manager.getEmailAccountsConfig('imap-smtp-email');
+  expect(migrated.success).toBe(true);
+  expect(migrated.config?.defaultAccountId).toBe('default');
+  expect(migrated.config?.accounts).toHaveLength(1);
+  expect(migrated.config?.accounts[0]).toMatchObject({
+    id: 'default',
+    enabled: true,
+    email: 'legacy@163.com',
+    password: 'legacy-secret',
+    imapHost: 'imap.163.com',
+    imapPort: 993,
+    smtpHost: 'smtp.163.com',
+    smtpPort: 465,
+    smtpSecure: true,
+  });
+
+  // Saving multi-account config writes accounts.json under <userData>/email-skill and reloads cleanly
+  const saveResult = manager.setEmailAccountsConfig('imap-smtp-email', {
+    version: 1,
+    defaultAccountId: 'personal',
+    accounts: [
+      {
+        id: 'work',
+        name: 'Work',
+        enabled: false,
+        provider: 'gmail',
+        email: 'work@gmail.com',
+        password: 'pw-1',
+        imapHost: 'imap.gmail.com',
+        imapPort: 993,
+        smtpHost: 'smtp.gmail.com',
+        smtpPort: 587,
+      },
+      {
+        id: 'personal',
+        name: 'Personal',
+        enabled: true,
+        provider: '163',
+        email: 'alice@163.com',
+        password: 'pw-2',
+        imapHost: 'imap.163.com',
+        imapPort: 993,
+        smtpHost: 'smtp.163.com',
+        smtpPort: 465,
+        smtpSecure: true,
+      },
+    ],
+  });
+  expect(saveResult).toEqual({ success: true });
+  expect(fs.existsSync(path.join(emailConfigDir, 'accounts.json'))).toBe(true);
+  expect(manager.hasEnabledEmailAccount()).toBe(true);
+
+  const reloaded = manager.getEmailAccountsConfig('imap-smtp-email');
+  expect(reloaded.success).toBe(true);
+  expect(reloaded.config?.defaultAccountId).toBe('personal');
+  expect(reloaded.config?.accounts.map((a) => ({ id: a.id, email: a.email, enabled: a.enabled }))).toEqual([
+    { id: 'work', email: 'work@gmail.com', enabled: false },
+    { id: 'personal', email: 'alice@163.com', enabled: true },
+  ]);
+});
+
+test('importing a skill with a reserved core built-in ID auto-suffixes without shadowing built-in', async () => {
+  writeSkill(bundledRoot, 'docx');
+  writeConfig(bundledRoot, { docx: { enabled: true, order: 1, alwaysEnabled: true } });
+  const localSource = writeSkill(path.join(fixture.root, 'external'), 'docx');
+  vi.spyOn(manager, 'startWatching').mockImplementation(() => {});
+
+  const result = await manager.downloadSkill(localSource, undefined, { skipSecurityScan: true });
+  expect(result.success).toBe(true);
+  expect(manager.listSkills().map((s) => [s.id, s.isBuiltIn])).toEqual([
+    ['docx', true],
+    ['docx-1', false],
+  ]);
+});
+
+test('hides skin-creator from listSkills unless ai-skin-designer Kit is installed', () => {
+  writeSkill(bundledRoot, 'docx');
+  writeConfig(bundledRoot, { docx: { enabled: true, order: 1, alwaysEnabled: true } });
+  writeSkill(userRoot, 'skin-creator');
+
+  expect(manager.listSkills().map((s) => s.id)).toEqual(['docx']);
+
+  kvStore.set(KitStoreKey.Installed, {
+    [SkinPackKitId.BuiltIn]: { id: SkinPackKitId.BuiltIn, installedAt: Date.now() },
+  });
+  expect(manager.listSkills().map((s) => s.id)).toEqual(['docx', 'skin-creator']);
+});
+
+test('importing a kit-owned name remains visible and intact after startup sync', async () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const source = writeSkill(path.join(fixture.root, 'external'), id);
+  const userId = `${id}-1`;
+  vi.spyOn(manager, 'startWatching').mockImplementation(() => {});
+  const result = await manager.downloadSkill(source, undefined, { skipSecurityScan: true });
+
+  expect(result.installedIds).toEqual([userId]);
+  expect(result.skills).toContainEqual(expect.objectContaining({ id: userId, isBuiltIn: false }));
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills().map(skill => skill.id)).toEqual([userId]);
+  expect(fs.readFileSync(path.join(userRoot, userId, 'SKILL.md')))
+    .toEqual(fs.readFileSync(path.join(source, 'SKILL.md')));
+});
+
+test('startup preserves a pre-fix custom skin-creator, its files and its disabled state', () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const existing = writeSkill(userRoot, id);
+  fs.writeFileSync(path.join(existing, 'notes.txt'), 'user notes');
+  writeSkill(userRoot, `${id}-1`);
+  kvStore.set('skills_state', { [id]: { enabled: false } });
+
+  manager.syncBundledSkillsToUserData();
+  manager.syncBundledSkillsToUserData();
+
+  expect(manager.listSkills()).toContainEqual(expect.objectContaining({ id: `${id}-2`, enabled: false }));
+  expect(fs.readFileSync(path.join(userRoot, `${id}-2`, 'notes.txt'), 'utf8')).toBe('user notes');
+  expect(fs.existsSync(existing)).toBe(false);
+});
+
+test('startup cleans the old stock skin template but keeps a user-edited reference', () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const source = path.resolve('resources', 'skin-pack', id);
+  const target = path.join(userRoot, id);
+  fs.cpSync(source, target, { recursive: true });
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills()).toEqual([]);
+  expect(fs.existsSync(target)).toBe(false);
+
+  fs.cpSync(source, target, { recursive: true });
+  const reference = path.join('references', 'asset-contract.md');
+  fs.appendFileSync(path.join(target, reference), '\nLocal instructions\n');
+  manager.syncBundledSkillsToUserData();
+  expect(fs.readFileSync(path.join(userRoot, `${id}-1`, reference), 'utf8')).toContain('Local instructions');
+});
+
+test('startup keeps a case-variant legacy ID associated with its disabled preference', () => {
+  const id = SkinPackSkillId.BuiltIn.toUpperCase();
+  writeSkill(userRoot, id);
+  kvStore.set('skills_state', { [id]: { enabled: false } });
+  const collides = fs.existsSync(path.join(userRoot, SkinPackSkillId.BuiltIn));
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills()).toContainEqual(expect.objectContaining({
+    id: collides ? `${id}-1` : id, enabled: false,
+  }));
+});
+
+test('a locked pre-fix upgrade backup keeps its files and preferences until recovery succeeds', () => {
+  const id = SkinPackSkillId.BuiltIn;
+  const source = writeSkill(userRoot, id);
+  const backup = `${source}.upgrading`;
+  fs.renameSync(source, backup);
+  const state = { [id]: { enabled: false } };
+  kvStore.set('skills_state', state);
+  const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('locked'); });
+  expect(() => manager.syncBundledSkillsToUserData()).toThrow('locked');
+  expect(fs.existsSync(path.join(backup, 'SKILL.md'))).toBe(true);
+  expect(kvStore.get('skills_state')).toEqual(state);
+
+  rename.mockRestore();
+  manager.syncBundledSkillsToUserData();
+  expect(manager.listSkills()).toContainEqual(expect.objectContaining({ id: `${id}-1`, enabled: false }));
+  expect(fs.existsSync(backup)).toBe(false);
 });

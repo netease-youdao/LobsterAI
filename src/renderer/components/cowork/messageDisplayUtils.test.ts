@@ -6,6 +6,8 @@ import {
   CoworkSystemMessageKind,
   ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
+import { CoworkTurnUsageStatus, TurnUsageModelType } from '../../../shared/cowork/llmTurnUsage';
+import { ModelPresetId, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import type { CoworkMessage } from '../../types/cowork';
 import { ActivityStepKind } from './constants';
 import { computeDiffStats } from './DiffView';
@@ -47,16 +49,19 @@ import {
   getTurnMessageIds,
   getTurnReplyMessageIds,
   getTurnStartTimestamp,
+  getVisibleAssistantItems,
   isAbandonedToolPlaceholder,
   isActivityConsolidatedItem,
   isActivityItemLive,
+  isBashLikeToolName,
+  isProcessOutputCheck,
   isToolGroupSettled,
   isTransientActivityItem,
   parseActivityPlan,
+  resolveTurnModelMetadata,
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
   TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS,
   turnHasSelfIndicatingActivity,
-  withTurnModelPreset,
 } from './messageDisplayUtils';
 
 const createToolResultMessage = (content: string): CoworkMessage => ({
@@ -312,7 +317,7 @@ test('a turn that began before the loaded message window keeps its real start', 
   expect(getTurnStartTimestamp(userTurn)).toBe(5000);
 });
 
-test('a context compaction split keeps timing the work it continues', () => {
+test('a manual context compaction split keeps timing the work it continues', () => {
   const turns = buildConversationTurns(buildDisplayItems([{
     id: 'user-1', type: 'user', content: 'long task', timestamp: 1000,
   }, {
@@ -330,12 +335,12 @@ test('a context compaction split keeps timing the work it continues', () => {
   }, {
     id: 'compaction-1',
     type: 'system',
-    content: 'Context compaction completed, continuing task',
+    content: 'Context compacted manually',
     timestamp: 3000,
     metadata: {
       kind: CoworkSystemMessageKind.ContextCompaction,
-      mode: ContextCompactionMode.Auto,
-      status: ContextCompactionStatus.Retrying,
+      mode: ContextCompactionMode.Manual,
+      status: ContextCompactionStatus.Completed,
     },
   }, {
     id: 'assistant-1', type: 'assistant', content: 'finished', timestamp: 4000,
@@ -345,6 +350,50 @@ test('a context compaction split keeps timing the work it continues', () => {
   expect(turns[1].userMessage).toBeNull();
   expect(getTurnStartTimestamp(turns[1])).toBe(1000);
   expect(getTurnEndTimestamp(turns[1])).toBe(4000);
+});
+
+test('mid-turn auto context compaction stays in one turn and folds into the process', () => {
+  const turns = buildConversationTurns(buildDisplayItems([{
+    id: 'user-1', type: 'user', content: 'audit scheduled tasks', timestamp: 1000,
+  }, {
+    id: 'assistant-pre', type: 'assistant', content: 'Let me unpack the archive first.', timestamp: 1500,
+  }, {
+    id: 'tool-1',
+    type: 'tool_use',
+    content: '',
+    timestamp: 2000,
+    metadata: { toolUseId: 'tool-use-1', toolName: 'exec' },
+  }, {
+    id: 'tool-result-1',
+    type: 'tool_result',
+    content: 'done',
+    timestamp: 2500,
+    metadata: { toolUseId: 'tool-use-1' },
+  }, {
+    id: 'compaction-auto-1',
+    type: 'system',
+    content: '',
+    timestamp: 3000,
+    metadata: {
+      kind: CoworkSystemMessageKind.ContextCompaction,
+      mode: ContextCompactionMode.Auto,
+      status: ContextCompactionStatus.Completed,
+    },
+  }, {
+    id: 'assistant-final', type: 'assistant', content: 'Full audit report.', timestamp: 4000,
+  }]));
+
+  expect(turns).toHaveLength(1);
+  expect(turns[0].userMessage?.id).toBe('user-1');
+  const visible = getVisibleAssistantItems(turns[0].assistantItems);
+  expect(visible.some(item => item.type === 'system' && item.message.id === 'compaction-auto-1')).toBe(true);
+  const chunks = chunkConsolidatedItemsForDisplay(visible);
+  const answerStart = getTurnAnswerStartIndex(chunks);
+  expect(answerStart).toBe(chunks.length - 1);
+  expect(chunks[answerStart]).toMatchObject({
+    kind: 'item',
+    item: { type: 'assistant', message: { id: 'assistant-final' } },
+  });
 });
 
 test('turn end timestamp is the latest message time and duration formats in locale units', () => {
@@ -1099,6 +1148,8 @@ test('a short live run folds nothing', () => {
 test('web searches name their query, built-in or MCP', () => {
   expect(getActivityStepDoneLabel(activityToolItem('s-1', 'web_search', { result: 1 }, { query: 'Anthropic 2026 valuation' })))
     .toBe('搜索了「Anthropic 2026 valuation」');
+  expect(getActivityStepDoneLabel(activityToolItem('s-1b', 'web_search', { result: 1 }, { queries: ['Node 24', 'Vitest'] })))
+    .toBe('搜索了「Node 24 / Vitest」');
   expect(getActivityCurrentActionText(activityToolItem('s-2', 'tavily__tavily_search', undefined, { query: 'Claude Cowork' })))
     .toBe('正在搜索「Claude Cowork」');
   expect(getActivityLiveStatusText(activityToolItem('s-3', 'tavily__tavily_search', undefined, { query: 'x' })))
@@ -1206,15 +1257,138 @@ test('IM/cron replies take the preset recorded on their user message', () => {
   const desktopLabel = getMessageModelLabel({ modelPresetId: 'balanced', resolvedModelId: 'deepseek-flash-YoudaoInner' });
   const user = { modelPresetId: 'balanced' as const, resolvedModelId: 'deepseek-flash-YoudaoInner' };
 
-  expect(getMessageModelLabel(withTurnModelPreset({ model: 'deepseek-flash-YoudaoInner' }, user))).toBe(desktopLabel);
-  expect(getMessageModelLabel(withTurnModelPreset({}, user))).toBe(desktopLabel);
+  expect(getMessageModelLabel(resolveTurnModelMetadata({ model: 'deepseek-flash-YoudaoInner' }, user))).toBe(desktopLabel);
+  expect(getMessageModelLabel(resolveTurnModelMetadata({}, user))).toBe(desktopLabel);
   expect(desktopLabel).not.toBe(getMessageModelLabel({ model: 'deepseek-flash-YoudaoInner' }));
 });
 
-test('a reply keeps its own preset and gets none without one on the user message', () => {
-  const assistant = { modelPresetId: 'ultimate' as const, resolvedModelId: 'glm-5' };
+test('a reply prefers its own model and can inherit the named model from the turn', () => {
+  const assistant = { modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'glm-5' };
 
-  expect(withTurnModelPreset(assistant, { modelPresetId: 'balanced' })).toBe(assistant);
-  expect(withTurnModelPreset({ model: 'glm-5' }, {})).toEqual({ model: 'glm-5' });
-  expect(withTurnModelPreset(undefined, { modelPresetId: 'balanced' })).toBeUndefined();
+  expect(resolveTurnModelMetadata(assistant, { modelPresetId: ModelPresetId.Balanced })).toEqual(assistant);
+  expect(getMessageModelLabel(resolveTurnModelMetadata({ model: 'glm-5' }, { resolvedModelId: 'qwen4-max' }))).toBe('glm-5');
+  expect(getMessageModelLabel(resolveTurnModelMetadata({}, { resolvedModelId: 'lobsterai-server/glm-5' }))).toBe('glm-5');
+  expect(resolveTurnModelMetadata(undefined, {})).toBeUndefined();
+});
+
+test('an unresolved preset uses the sole settled text model beside credits', () => {
+  const presetId = ModelPresetId.Ultimate;
+  const assistant = { modelPresetId: presetId, resolvedModelId: modelPresetModelId(presetId) };
+  const billedModel = 'qwen4-max';
+  const counts = { count: 1, creditsUsed: 10, uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
+  const usage = {
+    status: CoworkTurnUsageStatus.Settled,
+    models: [billedModel, 'image-model'],
+    modelUsage: [
+      { type: TurnUsageModelType.Image, model: 'image-model', ...counts },
+      { type: TurnUsageModelType.Text, model: billedModel, ...counts },
+    ],
+  };
+  expect(resolveTurnModelMetadata(assistant, undefined, usage)).toEqual({ modelPresetId: presetId, resolvedModelId: billedModel });
+  expect(resolveTurnModelMetadata(assistant, undefined, {
+    ...usage, modelUsage: [...usage.modelUsage, { type: TurnUsageModelType.Text, model: 'glm-5', ...counts }],
+  })).toEqual({ modelPresetId: presetId, resolvedModelId: undefined });
+  expect(resolveTurnModelMetadata(undefined, undefined, { status: usage.status, models: [billedModel] }))
+    .toEqual({ modelPresetId: undefined, resolvedModelId: billedModel });
+});
+
+test('recognizes pwsh as a bash-like command tool with PowerShell display name and command card semantics', () => {
+  expect(isBashLikeToolName('pwsh')).toBe(true);
+  expect(isBashLikeToolName('PWSH')).toBe(true);
+  expect(getToolDisplayName('pwsh')).toBe('PowerShell');
+  expect(getToolInputSummary('pwsh', { command: 'npm run dev', description: 'Start dev server' }))
+    .toBe('npm run dev');
+  expect(getShellCommandDescription('pwsh', { command: 'npm run dev', description: 'Start dev server' }))
+    .toBe('Start dev server');
+  expect(getActivityStepKind(activityToolItem('pwsh-1', 'pwsh'))).toBe(ActivityStepKind.Command);
+  expect(getActivityStepDisplay(activityToolItem(
+    'pwsh-2',
+    'pwsh',
+    undefined,
+    { command: 'Get-ChildItem' },
+  ))).toEqual({ name: 'PowerShell', summary: 'Get-ChildItem' });
+  expect(getActivityStepDisplay(activityToolItem(
+    'pwsh-3',
+    'pwsh',
+    undefined,
+    { command: 'npm run dev', description: '启动本地开发服务' },
+  ))).toEqual({ name: '启动本地开发服务', summary: null });
+  expect(getActivityCurrentActionText(activityToolItem(
+    'pwsh-4',
+    'pwsh',
+    undefined,
+    { command: 'npm run dev', description: '启动本地开发服务' },
+  ))).toBe('启动本地开发服务');
+  expect(getActivityCurrentActionText(activityToolItem(
+    'pwsh-5',
+    'pwsh',
+    undefined,
+    { command: 'npm run dev' },
+  ))).toBe('正在运行命令');
+  expect(getActivityStepDoneLabel(activityToolItem(
+    'pwsh-6',
+    'pwsh',
+    { result: 1 },
+    { command: 'npm run dev', description: '启动本地开发服务' },
+  ))).toBe('启动本地开发服务');
+  expect(getActivityLiveStatusText(runningToolItem('pwsh', { command: 'npm run dev' }))).toBe('正在运行命令');
+  expect(getActivityLiveDetail(runningToolItem(
+    'pwsh',
+    { command: 'npm run dev' },
+    { content: 'VITE v6.0.0\n  Local: http://localhost:5173/\n', isFinal: false },
+  ))).toEqual({ kind: 'output', text: 'Local: http://localhost:5173/' });
+});
+
+test('recognizes DSH job_output, job_list, and job_kill tools alongside legacy process', () => {
+  expect(getToolDisplayName('job_output')).toBe('Process');
+  expect(getToolDisplayName('job_list')).toBe('Process');
+  expect(getToolDisplayName('job_kill')).toBe('Process');
+
+  expect(getToolInputSummary('job_output', { job_id: 'job-42', wait: true })).toBe('output · job-42');
+  expect(getToolInputSummary('job_list', {})).toBe('list');
+  expect(getToolInputSummary('job_kill', { job_id: 'job-42', reason: 'done' })).toBe('kill · job-42');
+
+  const jobOutputItem = activityToolItem('j-1', 'job_output', { result: 1 }, { job_id: 'job-42' });
+  const jobListItem = activityToolItem('j-2', 'job_list', { result: 1 }, {});
+  const jobKillItem = activityToolItem('j-3', 'job_kill', { result: 1 }, { job_id: 'job-42' });
+
+  expect(getActivityStepKind(jobOutputItem)).toBe(ActivityStepKind.Command);
+  expect(getActivityStepKind(jobListItem)).toBe(ActivityStepKind.Command);
+  expect(getActivityStepKind(jobKillItem)).toBe(ActivityStepKind.Command);
+
+  expect(isProcessOutputCheck((jobOutputItem as Extract<ConsolidatedItem, { type: 'tool_group' }>).group)).toBe(true);
+  expect(isProcessOutputCheck((jobListItem as Extract<ConsolidatedItem, { type: 'tool_group' }>).group)).toBe(true);
+  expect(isProcessOutputCheck((jobKillItem as Extract<ConsolidatedItem, { type: 'tool_group' }>).group)).toBe(false);
+
+  expect(isTransientActivityItem(jobOutputItem)).toBe(true);
+  expect(isTransientActivityItem(jobListItem)).toBe(true);
+  expect(isTransientActivityItem(jobKillItem)).toBe(false);
+
+  expect(getActivityCurrentActionText(activityToolItem('j-4', 'job_output', undefined, { job_id: 'job-42', wait: true })))
+    .toBe('正在等待命令输出');
+  expect(getActivityStepDoneLabel(jobOutputItem)).toBe('查看了命令输出');
+  expect(getActivityCurrentActionText(activityToolItem('j-5', 'job_list', undefined, {})))
+    .toBe('正在等待命令输出');
+  expect(getActivityStepDoneLabel(jobListItem)).toBe('查看了命令输出');
+  expect(getActivityCurrentActionText(activityToolItem('j-6', 'job_kill', undefined, { job_id: 'job-42' })))
+    .toBe('正在操作后台命令');
+  expect(getActivityStepDoneLabel(jobKillItem)).toBe('操作了后台命令');
+
+  expect(getActivityLiveStatusText(runningToolItem('job_output', { job_id: 'job-42', wait: true }))).toBe('正在等待命令输出');
+  expect(getActivityLiveStatusText(runningToolItem('job_list', {}))).toBe('正在等待命令输出');
+  expect(getActivityLiveStatusText(runningToolItem('job_kill', { job_id: 'job-42' }))).toBe('正在操作后台命令');
+
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('pwsh-start', 'pwsh', { result: 1 }, { command: 'npm run dev', description: '启动本地开发服务' }),
+    jobOutputItem,
+    jobListItem,
+  ])).toBe('启动本地开发服务');
+
+  const liveWindow = getLiveActivityWindow([
+    windowEntry(0, activityToolItem('pwsh-1', 'pwsh', { result: 1 }, { command: 'npm run dev' })),
+    windowEntry(1, jobOutputItem),
+    windowEntry(2, jobListItem),
+    windowEntry(3, activityToolItem('pwsh-2', 'pwsh', undefined, { command: 'curl http://localhost:5173' })),
+  ]);
+  expect(liveWindow.recent.map((entry) => entry.index)).toEqual([0, 3]);
 });

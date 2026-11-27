@@ -1,4 +1,5 @@
 import { CloudIcon, ComputerDesktopIcon, KeyIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { AuthGateReason } from '@shared/auth/constants';
 import React, { useEffect, useState } from 'react';
 
 import { authService } from '../../services/auth';
@@ -11,31 +12,57 @@ import { useBrowserLoginSession } from './useBrowserLoginSession';
 const SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
 
 interface FirstRunLoginIntroductionProps {
-  onContinueAsGuest: () => Promise<void>;
+  onContinueAsGuest?: () => Promise<void>;
+  forced?: boolean;
+  gateReason?: AuthGateReason | null;
 }
 
-/** The first-run gate is completed by authentication or an explicit guest choice. */
-const FirstRunLoginIntroduction: React.FC<FirstRunLoginIntroductionProps> = ({ onContinueAsGuest }) => {
+/**
+ * First-run and forced-login gate.
+ * - Legacy installations (`forced === false`) allow an explicit guest choice.
+ * - New installations (`forced === true`) require verified sign-in.
+ */
+const FirstRunLoginIntroduction: React.FC<FirstRunLoginIntroductionProps> = ({
+  onContinueAsGuest,
+  forced = false,
+  gateReason = AuthGateReason.FirstRun,
+}) => {
   const session = useBrowserLoginSession();
   const [showGuest, setShowGuest] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [continueFailed, setContinueFailed] = useState(false);
   const t = i18nService.t.bind(i18nService);
+  const analyticsSource = forced ? 'forced_login_gate' : 'first_run_gate';
 
   useEffect(() => {
-    reportOnboardingAction('login_introduction_exposure', { source: 'first_run_gate' });
+    reportOnboardingAction('login_introduction_exposure', {
+      source: analyticsSource,
+      authGateReason: gateReason ?? AuthGateReason.FirstRun,
+    });
     // Exposure alone must never persist a completed first-run choice.
-  }, []);
+  }, [analyticsSource, gateReason]);
+
+  useEffect(() => {
+    if (forced && showGuest) {
+      setShowGuest(false);
+    }
+  }, [forced, showGuest]);
 
   const start = () => {
-    reportOnboardingAction('guide_start_experience_click', { source: 'first_run_gate' });
+    reportOnboardingAction('guide_start_experience_click', {
+      source: analyticsSource,
+      authGateReason: gateReason ?? AuthGateReason.FirstRun,
+    });
     void authService.login().catch(() => {
       // The shared login session retains the inline error and retry action.
     });
   };
 
   const cancel = () => {
-    reportOnboardingAction('login_cancel_click', { source: 'first_run_gate' });
+    reportOnboardingAction('login_cancel_click', {
+      source: analyticsSource,
+      authGateReason: gateReason ?? AuthGateReason.FirstRun,
+    });
     void authService.cancelLogin();
     setShowGuest(false);
   };
@@ -44,25 +71,34 @@ const FirstRunLoginIntroduction: React.FC<FirstRunLoginIntroductionProps> = ({ o
     if (continuing) return;
     if (session) {
       cancel();
-    } else {
-      setContinueFailed(false);
-      setShowGuest(value => !value);
+      return;
     }
+    if (forced || !onContinueAsGuest) return;
+    setContinueFailed(false);
+    setShowGuest(value => !value);
   };
 
   const continueAsGuest = async () => {
-    if (continuing) return;
+    if (forced || !onContinueAsGuest || continuing) return;
     setContinuing(true);
     setContinueFailed(false);
     try {
       await onContinueAsGuest();
-      reportOnboardingAction('login_introduction_skip_click', { source: 'first_run_gate' });
+      reportOnboardingAction('login_introduction_skip_click', { source: analyticsSource });
     } catch (error) {
       console.error('[Onboarding] failed to complete the guest choice:', error);
       setContinueFailed(true);
       setContinuing(false);
     }
   };
+
+  const forcedNoticeKey = forced
+    ? gateReason === AuthGateReason.SessionExpired
+      ? 'forcedLoginSessionExpiredNotice'
+      : gateReason === AuthGateReason.LoggedOut
+        ? 'forcedLoginLoggedOutNotice'
+        : null
+    : null;
 
   const [noticeBefore, noticeAfter] = t('welcomeAgreementNotice').split('{link}');
   const agreement = (
@@ -80,11 +116,12 @@ const FirstRunLoginIntroduction: React.FC<FirstRunLoginIntroductionProps> = ({ o
       loginPending={session !== null}
       onStart={start}
       onClose={close}
-      showcasePaused={session !== null || showGuest}
-      hideClose={session !== null || showGuest}
+      showcasePaused={session !== null || (!forced && showGuest)}
+      hideClose={forced || session !== null || showGuest}
       dismissOnBackdrop={false}
+      allowEscape={!forced || session !== null}
     >
-      {session ? <BrowserLoginWaitPanel session={session} onRetry={start} onCancel={cancel} /> : showGuest ? (
+      {session ? <BrowserLoginWaitPanel session={session} onRetry={start} onCancel={cancel} /> : !forced && showGuest ? (
         <div className="login-first-run-panel" data-testid="first-run-guest">
           <div>
             <p className="login-first-run-eyebrow">{t('firstRunGuestEyebrow')}</p>
@@ -106,7 +143,7 @@ const FirstRunLoginIntroduction: React.FC<FirstRunLoginIntroductionProps> = ({ o
           {agreement}
         </div>
       ) : (
-        <div className="login-first-run-panel" data-testid="first-run-welcome">
+        <div className="login-first-run-panel" data-testid={forced ? 'forced-login-welcome' : 'first-run-welcome'}>
           <div className="relative isolate">
             <div className="login-introduction-glow" aria-hidden="true" />
             <p className="login-first-run-eyebrow">{t('chatLoginExperienceTitlePrefix')}</p>
@@ -115,6 +152,11 @@ const FirstRunLoginIntroduction: React.FC<FirstRunLoginIntroductionProps> = ({ o
             </h1>
             <p className="login-first-run-description">{t('firstRunLoginDescription')}</p>
           </div>
+          {forcedNoticeKey && (
+            <p role="status" className="login-first-run-notice">
+              {t(forcedNoticeKey)}
+            </p>
+          )}
           <div className="login-first-run-benefits">
             <p><SparklesIcon aria-hidden="true" />{t('firstRunAccountModels')}</p>
             <p><CloudIcon aria-hidden="true" />{t('firstRunCloudResources')}</p>

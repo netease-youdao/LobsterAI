@@ -39,7 +39,7 @@
   border-radius: 5px;
   font-size: 12px;
 }
-.lobster-office-statusbar button, .lobster-office-notice button, .lobster-office-footer button {
+.lobster-office-statusbar button, .lobster-office-notice button, .lobster-office-footer > button {
   padding: 4px 8px;
   border: 1px solid rgba(128, 128, 128, .25);
 }
@@ -57,8 +57,9 @@
   font-size: 12px;
   padding: 0 4px;
 }
-.lobster-office-toolbar-divider { width: 1px; height: 18px; background: rgba(128, 128, 128, .2); margin: 0 4px; }
-.lobster-office-footer { font-size: 11px; opacity: .65; border-top: 1px solid rgba(128, 128, 128, .18); min-height: 34px; }
+.lobster-office-toolbar-divider { width: 1px; height: 16px; background: rgba(128, 128, 128, .2); margin: 0 3px; }
+.lobster-office-footer { font-size: 11px; color: rgba(36, 36, 36, .68); border-top: 1px solid rgba(128, 128, 128, .18); min-height: 30px; padding: 4px 12px; }
+.dark .lobster-office-footer { color: rgba(225, 225, 225, .68); }
 .lobster-office-notice { padding: 10px 12px; font-size: 12px; background: rgba(245, 158, 11, .09); flex-shrink: 0; }
 .dark .lobster-office-editor { color: #e1e1e1; }
 .dark .lobster-office-toolbar select option { background: #26292d; color: #e1e1e1; }

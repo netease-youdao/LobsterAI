@@ -132,7 +132,7 @@ export default function UserMessageInlineEditor({ message, initialPrompt, initia
           </button>
           <button type="button" disabled={!canSubmit} onClick={submit}
             title={i18nService.t('coworkEditNotice')} aria-describedby={noticeId}
-            className="h-8 rounded-xl bg-foreground px-3 text-sm font-medium text-background transition-colors hover:bg-foreground/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground/40 disabled:opacity-50">
+            className="h-8 rounded-xl bg-action px-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary/40 disabled:opacity-50">
             {i18nService.t(busy ? 'coworkEditSending' : 'coworkEditSave')}
           </button>
         </div>

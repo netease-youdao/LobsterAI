@@ -41,4 +41,28 @@ describe('resolveSettingsEscapeAction', () => {
     expect(topmost).toHaveBeenCalledTimes(1);
     expect(below).not.toHaveBeenCalled();
   });
+
+  test('prompts for unsaved changes when no stacked layer is open', () => {
+    const result = resolveSettingsEscapeAction({
+      isBlocked: false,
+      layers: [{ isOpen: false, dismiss: vi.fn() }],
+      hasUnsavedChanges: true,
+    });
+
+    expect(result.action).toBe(SettingsEscapeAction.PromptUnsaved);
+  });
+
+  test('still dismisses an open stacked layer before prompting for unsaved changes', () => {
+    const dismiss = vi.fn();
+    const result = resolveSettingsEscapeAction({
+      isBlocked: false,
+      layers: [{ isOpen: true, dismiss }],
+      hasUnsavedChanges: true,
+    });
+
+    expect(result.action).toBe(SettingsEscapeAction.DismissLayer);
+    if (result.action !== SettingsEscapeAction.DismissLayer) return;
+    result.dismiss();
+    expect(dismiss).toHaveBeenCalledTimes(1);
+  });
 });

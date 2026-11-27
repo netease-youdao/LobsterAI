@@ -4,6 +4,7 @@ import { MediaPreferenceMode, MediaSelectionSource } from '../../../shared/media
 import { SkinAssetSlot, SkinWorkflowKind } from '../../../shared/skin/constants';
 import {
   buildMediaGenerationTurnInstruction,
+  buildSkinPackInstruction,
   MANAGED_MEDIA_GENERATION_POLICY_PROMPT,
 } from './mediaGenerationTurnInstruction';
 
@@ -34,27 +35,18 @@ describe('buildMediaGenerationTurnInstruction', () => {
     expect(instruction).toContain('soft budget of about two serial lobsterai_image_generate calls');
     expect(instruction).toContain('guidance, not a hard quota');
     expect(instruction).toContain('Extra serial attempts are allowed');
-    expect(instruction).toContain('action="status" exactly once');
+    expect(instruction).toContain('action="status" and waitForResult=true');
     expect(instruction).toContain('action="register_asset" succeeds');
     expect(instruction).toContain('action="apply" with the same skinId');
     expect(instruction).toContain('Never start parallel generations');
     expect(instruction).not.toContain('you must call the lobsterai_image_generate tool exactly once');
   });
 
-  test('uses the native image route for a skin workflow without LobsterAI image selection', () => {
-    const instruction = buildMediaGenerationTurnInstruction(
-      undefined,
-      false,
-      SkinWorkflowKind.SkinPack,
-    );
-
-    expect(instruction).toContain('[AI skin pack workflow: two-asset serial flow]');
-    expect(instruction).toContain('locked to the OpenClaw-native image_generate tool');
-    expect(instruction).toContain('soft budget of about two serial image_generate calls');
-    expect(instruction).toContain('(count=1)');
-    expect(instruction).toContain('There is no lobsterai_image_generate status step');
-    expect(instruction).toContain('lobsterai_skin_manage');
-    expect(instruction).not.toContain('LobsterAI media generation tools - NOT AVAILABLE');
+  test('stops a skin workflow without an available LobsterAI image route', () => {
+    const instruction = buildMediaGenerationTurnInstruction(undefined, false, SkinWorkflowKind.SkinPack);
+    expect(instruction).toContain('needs an available LobsterAI image model');
+    expect(instruction).not.toContain('image_generate');
+    expect(instruction).not.toContain('create_draft');
   });
 
   test('uses the LobsterAI image route for auto media selection', () => {
@@ -107,4 +99,35 @@ test('a skin workflow cannot bypass a persistent image off preference', () => {
   );
   expect(instruction).toContain('disabled by the user');
   expect(instruction).not.toContain('locked to the OpenClaw-native');
+});
+
+test('skin pack instruction supports direct reuse of attached images with or without image generation', () => {
+  const ref = {
+    token: '@图片1',
+    mediaType: 'image' as const,
+    index: 1,
+    fileId: '/uploads/wow.jpg',
+    fileName: 'wow.jpg',
+    mimeType: 'image/jpeg',
+    localPath: '/uploads/wow.jpg',
+  };
+
+  const withModel = buildSkinPackInstruction({ mode: 'image', imageModelId: 'image-model' }, [ref]);
+  expect(withModel).toContain('Direct reuse mode');
+  expect(withModel).toContain('"@图片1"');
+  expect(withModel).toContain('backdropVisibility="vivid"');
+  expect(withModel).toContain('do NOT misinterpret "1:1" as a square aspect ratio');
+
+  const withoutModel = buildSkinPackInstruction(undefined, [ref]);
+  expect(withoutModel).toContain('Do NOT call lobsterai_image_generate');
+  expect(withoutModel).toContain('"@图片1"');
+  expect(withoutModel).toContain('action="register_asset"');
+
+  const disabledWithRef = buildSkinPackInstruction(
+    { mode: 'none', imagePreference: MediaPreferenceMode.Off, preferencesRevision: 1 },
+    [ref],
+  );
+  expect(disabledWithRef).toContain('Image generation is disabled by the user');
+  expect(disabledWithRef).toContain('"@图片1"');
+  expect(disabledWithRef).toContain('Do NOT call lobsterai_image_generate');
 });

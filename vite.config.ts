@@ -76,7 +76,22 @@ function pdfJsStaticAssetsPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+function silkWasmAssetPlugin(): Plugin {
+  const silkWasmSource = path.resolve(__dirname, 'node_modules/silk-wasm/lib/silk.wasm');
+  return {
+    name: 'silk-wasm-asset',
+    writeBundle(outputOptions) {
+      if (!fs.existsSync(silkWasmSource)) return;
+      const outputDir = outputOptions.dir || path.resolve(__dirname, 'dist-electron');
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.copyFileSync(silkWasmSource, path.join(outputDir, 'silk.wasm'));
+    },
+  };
+}
+
+export default defineConfig(({ command }) => {
+  const productionMinify = command === 'build' ? 'esbuild' : false;
+  return {
   define: {
     // KaTeX ESM bundle references this compile-time constant.
     __VERSION__: JSON.stringify(katexVersion),
@@ -89,16 +104,26 @@ export default defineConfig({
         // 主进程入口文件
         entry: 'src/main/main.ts',
         vite: {
+          plugins: [silkWasmAssetPlugin()],
+          resolve: {
+            // Force Node/CJS entries for audio WASM decoders:
+            // - silk-wasm CJS avoids Vite rewriting `new URL("silk.wasm", import.meta.url)`
+            //   into a `data:` URI (which Node's fs.readFileSync cannot open).
+            // - @eshaz/web-worker Node CJS avoids its browser field evaluating
+            //   global `Worker` at module top level in Electron's main process.
+            alias: {
+              'silk-wasm': path.resolve(__dirname, 'node_modules/silk-wasm/lib/index.cjs'),
+              '@eshaz/web-worker': path.resolve(__dirname, 'node_modules/@eshaz/web-worker/cjs/node.js'),
+            },
+          },
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
             rollupOptions: {
               external: (id) => {
-                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate'];
-                if (staticExternals.includes(id)) return true;
-                if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
-                return false;
+                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'playwright-core'];
+                return staticExternals.includes(id);
               },
               output: {
                 // Keep CJS format (default), but load via ESM loader.mjs
@@ -117,7 +142,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -128,9 +153,14 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
+        onstart() {},
+      },
+      {
+        entry: 'src/main/office/word/wordPanelPreload.ts',
+        vite: { build: { sourcemap: true, outDir: 'dist-electron', minify: productionMinify } },
         onstart() {},
       },
       {
@@ -140,7 +170,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -152,7 +182,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -164,13 +194,23 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
       },
     ]),
     renderer(),
+    {
+      name: 'word-panel-dev-refresh',
+      apply: 'serve',
+      transformIndexHtml(html, context) {
+        if (context.path !== '/word-panel.html') return;
+        // Vite injects an inline React Refresh preamble and uses a loopback WebSocket in development.
+        return html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+          .replace("connect-src 'self'", "connect-src 'self' ws://localhost:* ws://127.0.0.1:*");
+      },
+    },
   ],
   base: process.env.NODE_ENV === 'development' ? '/' : './',
   // The syntax-highlighting worker loads grammars on demand; ES module workers allow that code splitting.
@@ -188,12 +228,13 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
-    minify: false,
+    minify: productionMinify,
     rollupOptions: {
       // library-thumbnail.html is built by vite.thumbnail.config.ts so the
       // sandboxed thumbnail page never shares chunks with the app entry.
       input: {
         main: path.resolve(__dirname, 'index.html'),
+        wordPanel: path.resolve(__dirname, 'word-panel.html'),
         desktopCompanion: path.resolve(__dirname, 'desktop-companion.html'),
         companionComposer: path.resolve(__dirname, 'companion-composer.html'),
         companionScreenshot: path.resolve(__dirname, 'companion-screenshot.html'),
@@ -232,7 +273,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
+    exclude: ['electron'],
     esbuildOptions: {
       target: rendererTarget,
       define: {
@@ -241,4 +282,5 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  };
 });

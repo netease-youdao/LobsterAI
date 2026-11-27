@@ -284,7 +284,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                     type="button"
                     onClick={handleCreateNew}
                     disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
-                    className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-action text-action-foreground hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <PlusIcon className="h-5 w-5" aria-hidden="true" />
                     <span>{i18nService.t('scheduledTasksNewTask')}</span>

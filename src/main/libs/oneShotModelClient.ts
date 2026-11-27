@@ -3,7 +3,14 @@ import { ApiFormat, OpenClawApi, ProviderName } from '../../shared/providers';
 import { resolveRawApiConfig } from './claudeSettings';
 import { buildAnthropicMessagesUrl } from './coworkModelApi';
 import type { ResolvedPresetModel } from './modelPresets';
-import { buildProviderSelection } from './openclawConfigSync';
+import {
+  buildProviderSelection,
+  PROXY_TOKEN_PLACEHOLDER,
+  ProxyRouteSegment,
+  resolveProxyBackedBaseUrl,
+  stripChatCompletionsSuffix,
+  stripResponsesSuffix,
+} from './providerSelection';
 import {
   readAnthropicStreamEvent,
   readGeminiStreamEvent,
@@ -22,7 +29,33 @@ import {
  * openclaw.json, so they always match what the agent runtime uses.
  */
 
-const PROXY_TOKEN_PLACEHOLDER = '${LOBSTER_PROXY_TOKEN}';
+const LOOPBACK_PROXY_PATH_PATTERN = /^\/v1(?:\/(?:lobsterai-server|lobster|lobsterai|youdao|github-copilot|copilot|openai-codex|xai-oauth))?$/;
+const CODEX_PROXY_PATH_PATTERN = new RegExp(`^/v1/${ProxyRouteSegment.OpenAICodex}$`, 'i');
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+function isLoopbackProxyBaseUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    return isLoopbackHost(parsed.hostname) && LOOPBACK_PROXY_PATH_PATTERN.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isOpenAICodexProxyBaseUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    return isLoopbackHost(parsed.hostname) && CODEX_PROXY_PATH_PATTERN.test(pathname);
+  } catch {
+    return false;
+  }
+}
 
 export const OneShotTargetError = {
   NoModel: 'no-model',
@@ -34,6 +67,7 @@ const SUPPORTED_APIS: ReadonlySet<string> = new Set([
   OpenClawApi.AnthropicMessages,
   OpenClawApi.OpenAICompletions,
   OpenClawApi.OpenAIResponses,
+  OpenClawApi.OpenAICodexResponses,
   OpenClawApi.GoogleGenerativeAI,
 ]);
 
@@ -75,6 +109,8 @@ export type OneShotRequest = {
   system: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   maxTokens: number;
+  /** Minimize hidden reasoning latency for interactive quick-generation calls (e.g. Codex `reasoning.effort: 'low'`). */
+  lowLatency?: boolean;
 };
 
 type SelectionLike = Pick<ReturnType<typeof buildProviderSelection>, 'sessionModelId' | 'providerConfig'>;
@@ -90,24 +126,43 @@ export function toOneShotTarget(options: {
   providerName: string;
   apiKey: string;
   proxyToken: string | null;
+  proxyBaseUrl?: string | null;
+  authType?: 'apikey' | 'oauth';
 }): OneShotTargetResolution {
   const { providerConfig } = options.selection;
   const api = providerConfig.models[0]?.api ?? providerConfig.api;
   if (!SUPPORTED_APIS.has(api)) {
     return { error: OneShotTargetError.UnsupportedModel, detail: api };
   }
-  // OAuth providers whose credential lives in OpenClaw's auth-profile store
-  // (e.g. xAI OAuth) render no apiKey at all.
+  // External OAuth providers without a direct key or local proxy route render no apiKey.
   if (providerConfig.apiKey === undefined) {
     return { error: OneShotTargetError.UnsupportedModel, detail: 'oauth' };
   }
-  const apiKey = providerConfig.apiKey === PROXY_TOKEN_PLACEHOLDER
-    ? options.proxyToken ?? ''
-    : options.apiKey;
+  let baseUrl = providerConfig.baseUrl.replace(/\/+$/, '');
+  let apiKey: string;
+  if (providerConfig.apiKey === PROXY_TOKEN_PLACEHOLDER) {
+    if (!isLoopbackProxyBaseUrl(baseUrl)) {
+      const rewritten = resolveProxyBackedBaseUrl(options.providerName, options.proxyBaseUrl, options.authType);
+      if (rewritten) {
+        baseUrl = rewritten;
+      }
+    }
+    // Never send the local loopback proxy secret directly to an upstream server.
+    if (!isLoopbackProxyBaseUrl(baseUrl)) {
+      return { error: OneShotTargetError.UnsupportedModel, detail: 'proxy-unavailable' };
+    }
+    apiKey = options.proxyToken ?? '';
+  } else {
+    apiKey = options.apiKey;
+  }
+  const resolvedApi =
+    providerConfig.apiKey === PROXY_TOKEN_PLACEHOLDER && isOpenAICodexProxyBaseUrl(baseUrl)
+      ? OpenClawApi.OpenAICodexResponses
+      : (api as OpenClawApi);
   return {
     target: {
-      api: api as OpenClawApi,
-      baseUrl: providerConfig.baseUrl.replace(/\/+$/, ''),
+      api: resolvedApi,
+      baseUrl,
       apiKey,
       model: options.selection.sessionModelId,
       providerName: options.providerName,
@@ -116,7 +171,10 @@ export function toOneShotTarget(options: {
 }
 
 /** Resolve the current default model into a one-shot target. */
-export function resolveOneShotTarget(deps: { getProxyToken: () => string | null }): OneShotTargetResolution {
+export function resolveOneShotTarget(deps: {
+  getProxyToken: () => string | null;
+  getProxyBaseUrl?: () => string | null;
+}): OneShotTargetResolution {
   const raw = resolveRawApiConfig();
   const config = raw.config;
   const metadata = raw.providerMetadata;
@@ -124,6 +182,7 @@ export function resolveOneShotTarget(deps: { getProxyToken: () => string | null 
     return { error: OneShotTargetError.NoModel, detail: raw.error };
   }
   const providerName = metadata?.providerName ?? '';
+  const proxyBaseUrl = deps.getProxyBaseUrl?.() ?? null;
   const selection = buildProviderSelection({
     apiKey: config.apiKey,
     baseURL: config.baseURL,
@@ -136,16 +195,19 @@ export function resolveOneShotTarget(deps: { getProxyToken: () => string | null 
     codingPlanEnabled: metadata?.codingPlanEnabled,
     supportsImage: metadata?.supportsImage,
     modelName: metadata?.modelName,
+    proxyBaseUrl,
   });
   return toOneShotTarget({
     selection,
     providerName,
     apiKey: config.apiKey,
     proxyToken: deps.getProxyToken(),
+    proxyBaseUrl,
+    authType: metadata?.authType,
   });
 }
 
-const MAX_COMPLETION_TOKENS_MODEL_PREFIXES = ['gpt-5', 'o1', 'o3', 'o4'];
+const MAX_COMPLETION_TOKENS_MODEL_PREFIXES = ['gpt-5', 'gpt-6', 'o1', 'o3', 'o4'];
 
 /** OpenAI's reasoning models reject max_tokens on Chat Completions. */
 const usesMaxCompletionTokens = (target: OneShotTarget): boolean => {
@@ -155,6 +217,21 @@ const usesMaxCompletionTokens = (target: OneShotTarget): boolean => {
   return MAX_COMPLETION_TOKENS_MODEL_PREFIXES.some(prefix => resolved.startsWith(prefix));
 };
 
+function toCodexInputItem(message: OneShotRequest['messages'][number]): Record<string, unknown> {
+  if (message.role === 'assistant') {
+    return {
+      type: 'message',
+      role: 'assistant',
+      status: 'completed',
+      content: [{ type: 'output_text', text: message.content, annotations: [] }],
+    };
+  }
+  return {
+    role: 'user',
+    content: [{ type: 'input_text', text: message.content }],
+  };
+}
+
 export function buildOneShotHttpRequest(target: OneShotTarget, request: OneShotRequest): {
   url: string;
   init: RequestInit;
@@ -163,6 +240,26 @@ export function buildOneShotHttpRequest(target: OneShotTarget, request: OneShotR
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
+  });
+
+  const buildCodexResponses = () => ({
+    // ChatGPT Codex Responses (`chatgpt.com/backend-api/codex/responses`) requires
+    // top-level `instructions`, `store: false`, `stream: true`, structured input items,
+    // and rejects `max_output_tokens`.
+    url: `${stripResponsesSuffix(target.baseUrl)}/responses`,
+    init: json({
+      Authorization: `Bearer ${target.apiKey}`,
+      Accept: 'text/event-stream',
+      'OpenAI-Beta': 'responses=experimental',
+      originator: 'pi',
+    }, {
+      model: target.model,
+      store: false,
+      stream: true,
+      instructions: request.system.trim() || 'You are a helpful assistant.',
+      input: request.messages.map(toCodexInputItem),
+      ...(request.lowLatency ? { reasoning: { effort: 'low' }, text: { verbosity: 'low' } } : {}),
+    }),
   });
 
   switch (target.api) {
@@ -180,7 +277,7 @@ export function buildOneShotHttpRequest(target: OneShotTarget, request: OneShotR
       };
     case OpenClawApi.OpenAICompletions:
       return {
-        url: `${target.baseUrl}/chat/completions`,
+        url: `${stripChatCompletionsSuffix(target.baseUrl)}/chat/completions`,
         init: json({ Authorization: `Bearer ${target.apiKey}` }, {
           model: target.model,
           messages: [{ role: 'system', content: request.system }, ...request.messages],
@@ -188,11 +285,16 @@ export function buildOneShotHttpRequest(target: OneShotTarget, request: OneShotR
           stream: true,
         }),
       };
+    case OpenClawApi.OpenAICodexResponses:
+      return buildCodexResponses();
     case OpenClawApi.OpenAIResponses:
+      if (isOpenAICodexProxyBaseUrl(target.baseUrl)) {
+        return buildCodexResponses();
+      }
       // System text rides in `input`: OpenClaw only sends `instructions` and
       // `store` to endpoints verified to honor them.
       return {
-        url: `${target.baseUrl}/responses`,
+        url: `${stripResponsesSuffix(target.baseUrl)}/responses`,
         init: json({ Authorization: `Bearer ${target.apiKey}` }, {
           model: target.model,
           input: [{ role: 'system', content: request.system }, ...request.messages],
@@ -221,6 +323,7 @@ export function readOneShotStreamEvent(api: OpenClawApi, event: SseEvent): Strea
     case OpenClawApi.OpenAICompletions:
       return readOpenAIChatStreamEvent(event);
     case OpenClawApi.OpenAIResponses:
+    case OpenClawApi.OpenAICodexResponses:
       return readOpenAIResponsesStreamEvent(event);
     default:
       return readAnthropicStreamEvent(event);

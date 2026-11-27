@@ -51,6 +51,7 @@ export const ShortcutAction = {
   OpenSettingsMemory: 'openSettingsMemory',
   OpenSettingsDreaming: 'openSettingsDreaming',
   OpenSettingsPlugins: 'openSettingsPlugins',
+  OpenSettingsDataPrivacy: 'openSettingsDataPrivacy',
   OpenSettingsShortcuts: 'openSettingsShortcuts',
   OpenSettingsAbout: 'openSettingsAbout',
 } as const;
@@ -63,10 +64,10 @@ export type ShortcutConfig = Record<ShortcutAction, string> & {
 
 export const FontPreferences = {
   UiFontSizeDefault: 15,
-  UiFontSizeMin: 11,
-  UiFontSizeMax: 16,
+  UiFontSizeMin: 12,
+  UiFontSizeMax: 20,
   CodeFontSizeDefault: 14,
-  CodeFontSizeMin: 8,
+  CodeFontSizeMin: 10,
   CodeFontSizeMax: 24,
 } as const;
 
@@ -80,6 +81,16 @@ export const CODE_FONT_SIZE_MIGRATION_VERSION = 1;
 // default follow it once. v1: task search Cmd/Ctrl+F -> K, focus prompt K -> L,
 // find in conversation gets its own Cmd/Ctrl+F action.
 export const SHORTCUTS_MIGRATION_VERSION = 1;
+
+// Bump to force-reset stored artifactAutoPreviewEnabled to the current default
+// one more time. hydrateStoredConfig persists the applied version, so each
+// version resets at most once and later user choices survive upgrades.
+export const ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION = 1;
+
+// Bump when adding newly retired default model IDs to REMOVED_PROVIDER_MODELS.
+// hydrateStoredConfig persists the applied version so each cleanup runs once
+// and models explicitly re-added or discovered by the user survive restarts.
+export const REMOVED_PROVIDER_MODELS_MIGRATION_VERSION = 1;
 
 export const normalizeFontPreference = (
   value: unknown,
@@ -98,7 +109,7 @@ export const normalizeFontPreference = (
   return Math.min(max, Math.max(min, Math.round(numericValue)));
 };
 
-export const resolveArtifactAutoPreviewEnabled = (value: unknown): boolean => value !== false;
+export const resolveArtifactAutoPreviewEnabled = (value: unknown): boolean => value === true;
 
 // 配置类型定义
 export interface AppConfig {
@@ -123,6 +134,8 @@ export interface AppConfig {
   };
   providers?: Record<string, ProviderConfig>;
   providerModelMigrationVersions?: Record<string, number>;
+  // 已应用的下线默认模型清理版本(见 REMOVED_PROVIDER_MODELS_MIGRATION_VERSION)
+  removedProviderModelsMigrationVersion?: number;
   // 主题配置
   theme: 'light' | 'dark' | 'system';
   // Optional for configs created before exact default theme persistence was introduced.
@@ -143,8 +156,8 @@ export interface AppConfig {
   useSystemProxy: boolean;
   // 是否在生成可预览内容后自动打开 Artifact 预览面板
   artifactAutoPreviewEnabled?: boolean;
-  // 是否启用 SQLite 自动备份与恢复
-  sqliteAutoBackupEnabled?: boolean;
+  // 已应用的自动打开文件预览默认值迁移版本(见 ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION)
+  artifactAutoPreviewMigrationVersion?: number;
   // 是否允许发送基础产品使用统计
   usageAnalyticsEnabled?: boolean;
   // 通知配置
@@ -197,6 +210,7 @@ export const defaultConfig: AppConfig = {
     defaultModelProvider: 'deepseek',
   },
   providers: buildDefaultProviders(),
+  removedProviderModelsMigrationVersion: REMOVED_PROVIDER_MODELS_MIGRATION_VERSION,
   theme: 'system',
   uiFontSize: FontPreferences.UiFontSizeDefault,
   uiFontSizeMigrationVersion: UI_FONT_SIZE_MIGRATION_VERSION,
@@ -204,8 +218,8 @@ export const defaultConfig: AppConfig = {
   codeFontSizeMigrationVersion: CODE_FONT_SIZE_MIGRATION_VERSION,
   language: 'zh',
   useSystemProxy: false,
-  artifactAutoPreviewEnabled: true,
-  sqliteAutoBackupEnabled: false,
+  artifactAutoPreviewEnabled: false,
+  artifactAutoPreviewMigrationVersion: ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
   usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
@@ -261,6 +275,7 @@ export const defaultConfig: AppConfig = {
     [ShortcutAction.OpenSettingsMemory]: '',
     [ShortcutAction.OpenSettingsDreaming]: '',
     [ShortcutAction.OpenSettingsPlugins]: '',
+    [ShortcutAction.OpenSettingsDataPrivacy]: '',
     [ShortcutAction.OpenSettingsShortcuts]: '',
     [ShortcutAction.OpenSettingsAbout]: '',
   }
@@ -283,7 +298,7 @@ export const GLOBAL_PROVIDERS = ProviderRegistry.idsByRegion('global');
 
 export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] => {
   if (language === 'zh') {
-    return [...CHINA_PROVIDERS];
+    return ProviderRegistry.idsForZhLocale();
   }
   return ProviderRegistry.idsForEnLocale();
 };

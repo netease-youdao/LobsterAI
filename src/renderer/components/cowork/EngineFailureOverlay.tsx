@@ -189,7 +189,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
             type="button"
             onClick={primaryAction.onClick}
             disabled={isActionRunning}
-            className="inline-flex h-6 shrink-0 items-center justify-center gap-1 rounded-full bg-primary px-2.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
+            className="inline-flex h-6 shrink-0 items-center justify-center gap-1 rounded-full bg-action px-2.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
           >
             {primaryAction.running
               ? <ArrowPathIcon className="h-3 w-3 animate-spin" />
@@ -241,7 +241,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
             type="button"
             onClick={primaryAction.onClick}
             disabled={isActionRunning}
-            className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
+            className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl bg-action px-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
           >
             {primaryAction.running
               ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -253,7 +253,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
           {onRequestAppSettings ? (
             <button
               type="button"
-              onClick={() => onRequestAppSettings({ initialTab: 'coworkAgentEngine' })}
+              onClick={() => onRequestAppSettings({ initialTab: 'general' })}
               className="text-xs text-secondary underline-offset-2 transition-colors hover:text-foreground hover:underline"
             >
               {i18nService.t('coworkOpenClawGoToSettingsInstall')}

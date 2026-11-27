@@ -26,7 +26,7 @@ import { ENGINE_SWITCHED_CODE } from './types';
 
 type RouterDeps = {
   getCurrentEngine: () => CoworkAgentEngine;
-  openclawRuntime: CoworkRuntime;
+  dshRuntime: CoworkRuntime;
   analytics?: TaskUsageAnalytics;
 };
 
@@ -43,10 +43,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     super();
     this.analytics = deps.analytics;
     this.getCurrentEngine = deps.getCurrentEngine;
-    this.runtime = deps.openclawRuntime;
+    this.runtime = deps.dshRuntime;
     this.currentEngine = this.safeResolveEngine();
 
-    this.bindRuntimeEvents('openclaw', deps.openclawRuntime);
+    this.bindRuntimeEvents('dsh', deps.dshRuntime);
   }
 
   override on<U extends keyof CoworkRuntimeEvents>(
@@ -89,6 +89,25 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.clearRequestEngineBySession(sessionId);
       throw error;
     }
+  }
+
+  async forkDshSession(
+    sessionId: string,
+    atSeq?: number,
+  ): Promise<{ dshSessionId: string; storedSessionId: string } | null> {
+    if (!this.runtime.forkDshSession) return null;
+    return this.runtime.forkDshSession(sessionId, atSeq);
+  }
+
+  async updateQueuedMessage(
+    sessionId: string,
+    itemId: string,
+    action: { kind: 'edit'; content: Array<{ type: 'text'; text: string }> } | { kind: 'remove' } | { kind: 'steer' },
+  ): Promise<{ accepted: boolean }> {
+    if (!this.runtime.updateQueuedMessage) {
+      throw new Error('Queued message update is unavailable.');
+    }
+    return this.runtime.updateQueuedMessage(sessionId, itemId, action);
   }
 
   async submitSteer(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse> {
@@ -212,15 +231,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     }
     const engine = this.requestEngine.get(requestId);
     if (engine) {
-      this.runtime.respondToPermission(requestId, result);
+      const response = this.runtime.respondToPermission(requestId, result);
       if (result.behavior === 'allow' || result.behavior === 'deny') {
         this.requestEngine.delete(requestId);
         this.requestSession.delete(requestId);
       }
-      return;
+      return response;
     }
 
-    this.runtime.respondToPermission(requestId, result);
+    return this.runtime.respondToPermission(requestId, result);
   }
 
   isSessionActive(sessionId: string): boolean {

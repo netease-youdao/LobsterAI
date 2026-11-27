@@ -19,7 +19,7 @@ import type { MediaSelection } from '../../../shared/media/defaultPolicy';
 import type { SkinWorkflowKind } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 
-export type CoworkAgentEngine = 'openclaw';
+export type CoworkAgentEngine = 'dsh';
 
 export type PermissionResult =
   | {
@@ -67,12 +67,19 @@ export interface CoworkRuntimeEvents {
   sessionStopped: (sessionId: string, turn?: CoworkStoppedTurn) => void;
 }
 
+export type CoworkContextUsageBreakdown = {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+};
+
 export type CoworkContextUsage = {
   sessionId: string;
   sessionKey?: string;
   usedTokens?: number;
   contextTokens?: number;
   percent?: number;
+  breakdown?: CoworkContextUsageBreakdown;
   compactionCount?: number;
   status: 'unknown' | 'normal' | 'warning' | 'danger' | 'compacting';
   latestCompactionCheckpointId?: string;
@@ -95,6 +102,12 @@ export type CoworkForkCompactionSummary = {
 
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
 
+export type CoworkLocalMediaAttachment = {
+  localPath: string;
+  mimeType?: string;
+  name?: string;
+};
+
 export type CoworkMediaAttachmentRef = {
   imageEdit?: import('../../../shared/imageEditing/types').ImageEditRequest;
   token: string;
@@ -112,8 +125,13 @@ export type CoworkMediaAttachmentRef = {
 export type CoworkMediaSelection = MediaSelection;
 
 export type CoworkStartOptions = {
+  submissionOwner?: string;
+  requestId?: string;
+  checkAccount?: () => void;
   analytics?: UsageContext;
   skipInitialUserMessage?: boolean;
+  /** Optional user-facing message text to persist when it differs from the model prompt. */
+  userMessageContent?: string;
   skillIds?: string[];
   messageSkillIds?: string[];
   kitIds?: string[];
@@ -124,6 +142,7 @@ export type CoworkStartOptions = {
   workspaceRoot?: string;
   confirmationMode?: 'modal' | 'text';
   imageAttachments?: CoworkImageAttachment[];
+  localMediaAttachments?: CoworkLocalMediaAttachment[];
   agentId?: string;
   mediaSelection?: CoworkMediaSelection;
   workflowKind?: SkinWorkflowKind;
@@ -133,12 +152,16 @@ export type CoworkStartOptions = {
 };
 
 export type CoworkContinueOptions = {
-  /** Internal edit coordinator fields; never accepted from renderer IPC. */
+  submissionOwner?: string;
+  checkAccount?: () => void;
+  /** The edit operation and acceptance callback belong to the main process. */
   messageEditOperationId?: string;
   requestId?: string;
   onAccepted?: () => void;
   analytics?: UsageContext;
   skipInitialUserMessage?: boolean;
+  /** Optional user-facing message text to persist when it differs from the model prompt. */
+  userMessageContent?: string;
   systemPrompt?: string;
   skillIds?: string[];
   messageSkillIds?: string[];
@@ -146,6 +169,7 @@ export type CoworkContinueOptions = {
   kitReferences?: KitReference[];
   resolvedKitCapabilities?: ResolvedKitCapabilities;
   imageAttachments?: CoworkImageAttachment[];
+  localMediaAttachments?: CoworkLocalMediaAttachment[];
   mediaSelection?: CoworkMediaSelection;
   workflowKind?: SkinWorkflowKind;
   mediaReferences?: CoworkMediaAttachmentRef[];
@@ -170,6 +194,12 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  forkDshSession?(sessionId: string, atSeq?: number): Promise<{ dshSessionId: string; storedSessionId: string }>;
+  updateQueuedMessage?(
+    sessionId: string,
+    itemId: string,
+    action: { kind: 'edit'; content: Array<{ type: 'text'; text: string }> } | { kind: 'remove' } | { kind: 'steer' },
+  ): Promise<{ accepted: boolean }>;
   editMessage?(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void>;
   recoverMessageEdit?(sessionId: string, operationId: string): Promise<void>;
   hasPendingMessageEdit?(sessionId: string): boolean;

@@ -6,7 +6,6 @@ import { describe, expect, test } from 'vitest';
 const repoFile = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8');
 
 const installerInclude = repoFile('scripts/nsis-installer.nsh');
-const unpackScript = repoFile('scripts/unpack-cfmind.cjs');
 const installSection = repoFile(
   'node_modules/app-builder-lib/templates/nsis/installSection.nsh',
 );
@@ -38,6 +37,9 @@ const builderHooks = repoFile('scripts/electron-builder-hooks.cjs');
 const packageScripts = (JSON.parse(repoFile('package.json')) as { scripts: Record<string, string> })
   .scripts;
 const electronBuilderConfig = JSON.parse(repoFile('electron-builder.json')) as {
+  files?: Array<string | { from?: string; to?: string }>;
+  extraResources?: Array<string | { from?: string; to?: string }>;
+  win?: { extraResources?: Array<string | { from?: string; to?: string }> };
   nsis?: { deleteAppDataOnUninstall?: boolean };
 };
 
@@ -169,25 +171,36 @@ describe('Windows installer hardening contracts', () => {
     expect(installerInclude).toContain('phase=old-uninstaller-complete');
   });
 
-  test('applies and verifies Defender exclusion only after legacy uninstallers', () => {
-    expect(installerInclude).toContain('!macro customAfterUninstallOldVersions');
-    expect(installerInclude).toContain('point=post-old-uninstaller');
-    expect(installerInclude).toContain(
-      String.raw`$$target = $$env:LOBSTERAI_INSTALL_ROOT;`,
-    );
-    expect(installerInclude).toContain('before_count=');
-    expect(installerInclude).toContain('remove=');
-    expect(installerInclude).toContain('after_count=');
-    expect(installerInclude).toContain('Remove-MpPreference -ExclusionPath $$targets');
+  test('runs as asInvoker, checks target writability before mutation, and schedules exact-backup cleanup', () => {
+    expect(installerInclude).not.toContain('RequestExecutionLevel admin');
+    expect(rootInstallerTemplate).toContain('RequestExecutionLevel user');
+    expect(installerInclude).not.toContain('Add-MpPreference');
+    expect(installerInclude).not.toContain('Remove-MpPreference');
+    expect(installerInclude).not.toContain('netsh.exe');
+    expect(installerInclude).not.toContain('!macro customAfterUninstallOldVersions');
+
+    const writeCheckStart = installerInclude.indexOf('!macro LobsterCheckInstallTargetWritable');
+    const writeCheckEnd = installerInclude.indexOf('!macroend', writeCheckStart);
+    expect(writeCheckStart).toBeGreaterThan(-1);
+    const writeCheck = installerInclude.slice(writeCheckStart, writeCheckEnd);
+    expect(writeCheck).toContain('0x04000100');
+    expect(writeCheck).toContain('phase=install-target-unwritable');
+    expect(writeCheck).toContain('SetErrorLevel 5');
+    expect(writeCheck).toContain('/SD IDOK');
+
+    const checkAppStart = installerInclude.indexOf('!macro customCheckAppRunning');
+    const preflightLog = installerInclude.indexOf('phase=install-preflight-complete', checkAppStart);
+    const writeCheckCall = installerInclude.indexOf('!insertmacro LobsterCheckInstallTargetWritable', checkAppStart);
+    const freshJump = installerInclude.indexOf('CustomCheckFreshInstall', checkAppStart);
+    expect(writeCheckCall).toBeGreaterThan(preflightLog);
+    expect(writeCheckCall).toBeLessThan(freshJump);
+
     expect(installerInclude).toContain('phase=old-install-cleanup-scheduled');
     expect(installerInclude).toContain(
       '${If} $lobsterOldInstallRenameStatus == "committed"',
     );
     expect(installerInclude).toContain('target=exact-current-backup');
     expect(installerInclude).not.toContain('target_pattern=$INSTDIR.old');
-    expect(installerInclude.indexOf('phase=old-install-cleanup-scheduled')).toBeGreaterThan(
-      installerInclude.indexOf('phase=defender-exclusion-rebalance-complete'),
-    );
   });
 
   test('splits embedded package extraction, copying, cache, and size phases', () => {
@@ -551,7 +564,7 @@ describe('Windows installer hardening contracts', () => {
     expect(check).toContain('"ambiguous-dual-registration"');
   });
 
-  test('re-kills processes on every stop round and logs survivors on failure', () => {
+  test('re-kills processes on every stop round, elevates on demand for access-denied targets, and logs survivors on failure', () => {
     const start = installerInclude.indexOf('!macro stopLobsterAIProcesses');
     const end = installerInclude.indexOf('!macroend', start);
     const stopMacro = installerInclude.slice(start, end);
@@ -561,7 +574,7 @@ describe('Windows installer hardening contracts', () => {
     const loop = stopMacro.indexOf('for ($$i = 0; $$i -lt 30; $$i++)');
     const emptyCheck = stopMacro.indexOf('if ($$procs.Count -eq 0) { exit 0 }');
     const rekill = stopMacro.indexOf(
-      '$$procs | Stop-Process -Force -ErrorAction SilentlyContinue',
+      'Stop-Process -Id $$p.Id -Force -ErrorAction Stop',
     );
     const sleep = stopMacro.indexOf('Start-Sleep -Milliseconds 500');
     expect(loop).toBeGreaterThan(-1);
@@ -570,9 +583,31 @@ describe('Windows installer hardening contracts', () => {
     expect(sleep).toBeGreaterThan(rekill);
     expect(stopMacro).toContain('exit 3');
 
-    // Survivor dump runs only on the exit-3 verdict, receives its inputs via
-    // the child environment, and always clears them afterwards.
-    expect(stopMacro).toContain('StrCmp $R2 "3" 0 StopLobsterAIProcessesLog');
+    // Access-denied detection must use locale-independent Win32 error 5 or
+    // UnauthorizedAccessException (never English message strings) and elevate
+    // on demand only when interactive and not already admin. The elevated
+    // helper must use the running 64-bit PowerShell's own MainModule.FileName
+    // (Sysnative is only valid in 32-bit WOW64 NSIS, not inside 64-bit PowerShell).
+    expect(stopMacro).toContain('$$code -eq 5');
+    expect(stopMacro).toContain('[System.UnauthorizedAccessException]');
+    expect(stopMacro).toContain('$$env:LOBSTERAI_STOP_SILENT -eq \\"1\\"');
+    expect(stopMacro).toContain('$$psExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName');
+    expect(stopMacro).toContain('$$psi.FileName = $$psExe');
+    expect(stopMacro).toContain('$$psi.Verb = \\"runas\\"');
+    expect(stopMacro).toContain('$$psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden');
+    expect(stopMacro).toContain('-EncodedCommand ');
+    expect(stopMacro).toContain('if ($$elev.ExitCode -eq 0) { exit 6 }');
+    expect(stopMacro).toContain('if ($$n -eq 1223) { exit 1223 }');
+    expect(stopMacro).toContain('StrCmp $R2 "6" 0 +2');
+    expect(stopMacro).toContain('StrCmp $R2 "5" 0 +2');
+    expect(stopMacro).toContain('StrCmp $R2 "1223" 0 +2');
+
+    // Survivor dump runs on timeout (3), access-denied (5), and UAC-declined
+    // (1223), receives its inputs via the child environment, and always clears
+    // them afterwards.
+    expect(stopMacro).toContain('StrCmp $R2 "3" StopLobsterAIProcessesLogSurvivors');
+    expect(stopMacro).toContain('StrCmp $R2 "5" StopLobsterAIProcessesLogSurvivors');
+    expect(stopMacro).toContain('StrCmp $R2 "1223" StopLobsterAIProcessesLogSurvivors');
     expect(stopMacro).toContain(
       String.raw`SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "$APPDATA\LobsterAI\install-timing.log")`,
     );
@@ -586,7 +621,7 @@ describe('Windows installer hardening contracts', () => {
     );
     expect(stopMacro).toContain('name=$$($$p.ProcessName) pid=$$($$p.Id) path=$$fp');
     expect(stopMacro).toContain('phase=process-stop-survivors-logged');
-    expect(stopMacro).toContain('exit $$procs.Count');
+    expect(stopMacro).toContain('exit $$unique.Count');
   });
 
   test('sweeps every process running from the install tree, excluding itself', () => {
@@ -606,19 +641,24 @@ describe('Windows installer hardening contracts', () => {
     expect(stopMacro).toContain(
       'SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "$lobsterCurrentProcessPid")',
     );
+    expect(stopMacro).toContain(
+      'SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "$0")',
+    );
     expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "")');
     expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "")');
+    expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "")');
 
-    // Both the kill loop and the survivor snapshot must use the same sweep so
-    // diagnostics describe the same process set the kill acted on.
+    // The unelevated kill loop, the elevated fallback, and the survivor
+    // snapshot must all use the same sweep so diagnostics describe the same
+    // process set the kill acted on.
     const sweeps = stopMacro.match(
-      /\$\$fp\.StartsWith\(\$\$root, \[System\.StringComparison\]::OrdinalIgnoreCase\)/g,
+      /`?\$\$fp\.StartsWith\(`?\$\$root, \[System\.StringComparison\]::OrdinalIgnoreCase\)/g,
     );
-    expect(sweeps).toHaveLength(2);
-    const selfExclusions = stopMacro.match(/\$\$_\.Id\.ToString\(\) -ne \$\$selfPid/g);
-    expect(selfExclusions).toHaveLength(2);
-    const rootGuards = stopMacro.match(/\$\$root\.Length -gt 3/g);
-    expect(rootGuards).toHaveLength(2);
+    expect(sweeps).toHaveLength(3);
+    const selfExclusions = stopMacro.match(/`?\$\$_\.Id\.ToString\(\) -ne `?\$\$selfPid/g);
+    expect(selfExclusions).toHaveLength(3);
+    const rootGuards = stopMacro.match(/`?\$\$root\.Length -gt 3/g);
+    expect(rootGuards).toHaveLength(3);
     // The env-var clear must sit on the shared exit label so the non-survivor
     // paths clear it too.
     const logLabel = stopMacro.indexOf('StopLobsterAIProcessesLog:');
@@ -626,6 +666,20 @@ describe('Windows installer hardening contracts', () => {
     expect(
       stopMacro.indexOf('SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "")'),
     ).toBeGreaterThan(logLabel);
+    expect(
+      stopMacro.indexOf('SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "")'),
+    ).toBeGreaterThan(logLabel);
+  });
+
+  test('runs CHECK_APP_RUNNING even in elevated inner instances for per-machine upgrades', () => {
+    // With RequestExecutionLevel user (asInvoker), per-machine installs elevate
+    // via UAC_RunElevated before Section "install" runs, so only the inner
+    // elevated instance executes installSection.nsh. Guarding CHECK_APP_RUNNING
+    // behind !UAC_IsInnerInstance skips process stopping, Skills backup, and
+    // the old-install rename fast path on every per-machine upgrade.
+    expect(installSection).toContain('!insertmacro CHECK_APP_RUNNING');
+    expect(installSection).not.toContain('${ifNot} ${UAC_IsInnerInstance}');
+    expect(appBuilderPatch).toContain('-  ${ifNot} ${UAC_IsInnerInstance}');
   });
 
   test('treats only an enumerably empty target as fresh', () => {
@@ -699,18 +753,15 @@ describe('Windows installer hardening contracts', () => {
     expect(detector).not.toContain('IfFileExists "$INSTDIR\\*.*"');
   });
 
-  test('resolves PowerShell and tar only from trusted absolute system paths', () => {
+  test('resolves PowerShell only from trusted absolute system paths and avoids tar helpers', () => {
     expect(installerInclude).toContain(
       String.raw`$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe`,
     );
     expect(installerInclude).toContain(
       String.raw`$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe`,
     );
-    expect(installerInclude).toContain(String.raw`$WINDIR\Sysnative\tar.exe`);
-    expect(installerInclude).toContain(String.raw`$WINDIR\System32\tar.exe`);
-    expect(installerInclude).toContain(
-      String.raw`Push '"$lobsterTrustedTarPath" -xf`,
-    );
+    expect(installerInclude).not.toContain(String.raw`\tar.exe`);
+    expect(installerInclude).not.toContain('$lobsterTrustedTarPath');
     expect(installerInclude).not.toMatch(
       /(?:nsExec::\w+|Exec|Push)\s+['"][^'"\n]*\bpowershell(?:\.exe)?\b/i,
     );
@@ -786,7 +837,7 @@ describe('Windows installer hardening contracts', () => {
     const launcherMacro = /^\s*!insertmacro LobsterExecHidden(?:ToStack|ExitCode|Detached)\s*$/;
     let helperLaunches = 0;
     for (let index = 0; index < lines.length; index += 1) {
-      if (!/^\s*Push\s+'"\$lobsterTrusted(?:PowerShell|Tar)Path"/.test(lines[index])) {
+      if (!/^\s*Push\s+'"\$lobsterTrustedPowerShellPath"/.test(lines[index])) {
         continue;
       }
       helperLaunches += 1;
@@ -796,210 +847,53 @@ describe('Windows installer hardening contracts', () => {
       }
       expect(lines[cursor]).toMatch(launcherMacro);
     }
-    // process-stop kill loop + survivor dump, rollback Defender cleanup +
-    // displaced-tree cleanup, Skills backup, Defender post-uninstaller add +
-    // query-only, tar, extractor watchdog, Skills restore, Defender
-    // rebalance, old-install cleanup, loopback firewall rule, uninstaller
-    // Defender cleanup, uninstaller loopback firewall rule removal.
-    expect(helperLaunches).toBe(15);
+    // process-stop kill loop + survivor dump, rollback displaced-tree cleanup,
+    // Skills backup, Skills restore, old-install cleanup. Fresh installs launch
+    // zero external helpers.
+    expect(helperLaunches).toBe(6);
   });
 
-  test('allows only loopback TCP for the committed executable and removes it on uninstall', () => {
-    // Field case 2026-10: Windows Firewall's "Query user" default dropped
-    // 127.0.0.1 connections to LobsterAI.exe, so the app never reached its
-    // gateway after a reboot.
-    const start = installerInclude.indexOf('!macro LobsterApplyLoopbackFirewallRule');
-    expect(start).toBeGreaterThan(-1);
-    const apply = installerInclude.slice(start, installerInclude.indexOf('!macroend', start));
-    expect(apply).toContain(
-      String.raw`SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")`,
-    );
-    expect(apply).toContain('SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "")');
-    const replaceRule = apply.indexOf(
-      String.raw`firewall delete rule \"name=LobsterAI loopback\" dir=in $$program`,
-    );
-    const addRule = apply.indexOf(
-      String.raw`firewall add rule \"name=LobsterAI loopback\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any`,
-    );
-    expect(replaceRule).toBeGreaterThan(-1);
-    expect(addRule).toBeGreaterThan(replaceRule);
-    expect(apply).toContain('phase=loopback-firewall-rule-complete attempt_id=');
-
-    // Only a committed install gets the rule, after every old uninstaller ran.
-    // Anchored to the line end rather than '\n': Windows checkouts may be CRLF.
+  test('does not require admin Defender or Firewall operations during install or uninstall', () => {
     const customInstallStart = installerInclude.search(/^!macro customInstall\r?$/m);
     const customInstall = installerInclude.slice(
       customInstallStart,
       installerInclude.indexOf('!macroend', customInstallStart),
     );
-    expect(customInstall.indexOf('!insertmacro LobsterApplyLoopbackFirewallRule')).toBeGreaterThan(
-      customInstall.indexOf('InstallFinalizeComplete:'),
-    );
+    expect(customInstall).not.toContain('LoopbackFirewall');
+    expect(customInstall).not.toContain('MpPreference');
 
     const uninstallStart = installerInclude.indexOf('!macro customUnInstall');
     const uninstall = installerInclude.slice(
       uninstallStart,
       installerInclude.indexOf('!macroend', uninstallStart),
     );
-    expect(uninstall).toContain(
-      String.raw`firewall delete rule \"name=LobsterAI loopback\" dir=in (\"program=\" + $$env:LOBSTERAI_FIREWALL_PROGRAM)`,
-    );
-    expect(uninstall).not.toContain('firewall add rule');
+    expect(uninstall).toContain('!insertmacro LobsterUnregisterOpenWith');
+    expect(uninstall).toContain('!insertmacro LobsterReportUninstallAnalytics');
+    expect(uninstall).not.toContain('MpPreference');
+    expect(uninstall).not.toContain('netsh');
+    expect(uninstall).not.toContain('ResolveTrustedPowerShell');
   });
 
-  test('rebalances Defender exclusions in one helper launch', () => {
-    // Trim (install-scope root + legacy SKILLs entry) always runs; the
-    // permanent re-add is gated by /NoDefenderExclusion through the child
-    // environment, so the opt-out keeps removing without ever adding.
-    const start = installerInclude.indexOf(
-      '; -- Rebalance Defender exclusions now that extraction is done --',
-    );
-    expect(start).toBeGreaterThan(-1);
-    const rebalance = installerInclude.slice(
-      start,
-      installerInclude.indexOf('phase=defender-exclusion-rebalance-complete', start),
-    );
-    expect(rebalance).toContain('${GetOptions} $R9 "/NoDefenderExclusion" $R8');
-    expect(rebalance).toContain(
-      'SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_ADD_PERMANENT", t "$R7")',
-    );
-    expect(rebalance).toContain(
-      'SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_ADD_PERMANENT", t "")',
-    );
-    expect(rebalance).toContain(
-      'Remove-MpPreference -ExclusionPath $$trimTargets -ErrorAction SilentlyContinue',
-    );
-    expect(rebalance).toContain(
-      String.raw`if ($$env:LOBSTERAI_DEFENDER_ADD_PERMANENT -ne \"1\") { $$permanent = \"skipped:opt-out\" }`,
-    );
-    expect(rebalance).toContain('Add-MpPreference -ExclusionPath $$addTargets -ErrorAction Stop');
-    for (const entry of [
-      String.raw`resources\cfmind\"`,
-      String.raw`resources\python-win\"`,
-      String.raw`resources\app.asar.unpacked\"`,
-      String.raw`resources\app.asar\"`,
-      String.raw`resources\win-resources.tar\"`,
-      String.raw`resources\SKILLs\"`,
-    ]) {
-      expect(rebalance).toContain(entry);
-    }
-    expect(rebalance.match(/!insertmacro LobsterExecHiddenToStack/g)).toHaveLength(1);
-    expect(installerInclude).toContain('permanent_requested=$R7');
-    expect(installerInclude).not.toContain('phase=defender-exclusion-trim-complete');
-    expect(installerInclude).not.toContain('phase=defender-exclusion-permanent-complete');
-  });
+  test('cleans stale legacy assets and requires complete ASAR runtime, unpacked pnpm, bundles, Skills, and Python before committing', () => {
+    const beforeRegStart = installerInclude.indexOf('!macro customBeforeRegistryAddInstallInfo');
+    const beforeRegEnd = installerInclude.indexOf('!macroend', beforeRegStart);
+    const beforeReg = installerInclude.slice(beforeRegStart, beforeRegEnd);
 
-  test('uses typed helper outcomes and a marker-backed ten-minute watchdog', () => {
-    const watchdogStart = installerInclude.indexOf('LOBSTERAI_WATCHDOG_MARKER_PATH');
-    const watchdogEnd = installerInclude.indexOf('TarExtractVerify:', watchdogStart);
-    const watchdog = installerInclude.slice(watchdogStart, watchdogEnd);
+    expect(beforeReg).toContain(String.raw`RMDir /r "$INSTDIR\resources\cfmind"`);
+    expect(beforeReg).toContain(String.raw`RMDir /r "$INSTDIR\resources\dsh-runtime"`);
+    expect(beforeReg).toContain(String.raw`Delete "$INSTDIR\resources\win-resources.tar"`);
+    expect(beforeReg).toContain(String.raw`Delete "$INSTDIR\resources\unpack-dsh-resources.cjs"`);
+    expect(beforeReg).toContain(String.raw`Delete "$INSTDIR\resources\.unpack-dsh-ok"`);
+    expect(beforeReg).not.toContain('TarExtract');
 
-    expect(installerInclude).toContain('"process-start-blocked"');
-    expect(installerInclude).toContain('"numeric-exit-code"');
-    expect(installerInclude).toContain('"legacy-helper-launch-failed"');
-    expect(watchdog).toContain('WaitForExit(600000)');
-    expect(watchdog).toContain('WaitForExit(30000)');
-    expect(watchdog).toContain('"process-timeout"');
-    expect(watchdog).toContain('"process-termination-failed"');
-    expect(watchdog).toContain('LOBSTERAI_WATCHDOG_TIMEOUT');
-    expect(watchdog).toContain('LOBSTERAI_WATCHDOG_TERMINATION_FAILED');
-    expect(watchdog).toContain('function Write-LobsterWatchdogMarker');
-    expect(watchdog).toContain(
-      'LOBSTERAI_WATCHDOG_MARKER_WRITE_FAILED:',
-    );
-    expect(
-      watchdog.match(/Set-Content -LiteralPath \$\$marker/g),
-    ).toHaveLength(1);
-    expect(watchdog.indexOf('StrCmp $R2 "error"')).toBeLessThan(
-      watchdog.indexOf('IntCmp $R2 0'),
-    );
-    expect(watchdog).toContain(
-      'StrCmp $R2 "126" TarExtractTerminationFailed',
-    );
-    expect(
-      watchdog.indexOf('StrCmp $R2 "126" TarExtractTerminationFailed'),
-    ).toBeLessThan(
-      watchdog.indexOf(
-        'StrCmp $R4 "process-termination-failed" TarExtractTerminationFailed',
-      ),
-    );
-    expect(watchdog).toContain(
-      'StrCmp $R4 "process-timeout" 0 TarExtractNumericResult',
-    );
-    expect(watchdog).toContain('StrCmp $R2 "124" TarExtractTimeout');
-
-    // A null exit code consults the child's success sentinel before being
-    // classified as invalid output (exit-code query is permanently broken by
-    // some security tooling while the child itself succeeds). The marker
-    // values below are PowerShell-escaped because the sentinel verdict is
-    // deliberately absent from the NSIS StrCmp dispatch (exit 0 flows through
-    // the numeric branch into TarExtractVerify).
-    expect(watchdog).toContain(String.raw`\"exit-code-null-sentinel-ok\"`);
-    expect(watchdog).toContain('Test-Path -LiteralPath $$sentinel');
-    expect(
-      watchdog.indexOf(String.raw`\"exit-code-null-sentinel-ok\"`),
-    ).toBeLessThan(watchdog.indexOf(String.raw`\"output-validation-failed\"`));
-  });
-
-  test('rescues a null watchdog exit code with the extractor success sentinel', () => {
-    // The Node extractor publishes the sentinel only after every expected
-    // root directory verified, keeping it strictly stronger than exit 0.
-    expect(unpackScript).toContain("'.unpack-cfmind-ok'");
-    expect(unpackScript).toContain('missingDirs === 0');
-    expect(unpackScript).toContain('required resources missing after extraction');
-    expect(unpackScript).toContain("name: 'cfmind-entry'");
-    expect(unpackScript).toContain("name: 'cfmind-bundle-assets'");
-    expect(unpackScript).toContain("name: 'skills-content'");
-    expect(unpackScript).toContain("name: 'python-entry'");
-    expect(unpackScript).toContain('phase=sentinel-written');
-    expect(unpackScript).toContain('phase=sentinel-write-failed');
-    expect(unpackScript.indexOf('phase=verify-missing')).toBeLessThan(
-      unpackScript.indexOf("'.unpack-cfmind-ok'"),
-    );
-
-    // A stale sentinel must never vouch for a new attempt, and a committed
-    // install leaves no sentinel behind (pre-launch delete + success delete).
-    const sentinelDelete = String.raw`Delete "$INSTDIR\resources\.unpack-cfmind-ok"`;
-    const preLaunchDelete = installerInclude.indexOf(sentinelDelete);
-    expect(preLaunchDelete).toBeGreaterThan(-1);
-    expect(preLaunchDelete).toBeLessThan(
-      installerInclude.indexOf('LOBSTERAI_WATCHDOG_MARKER_PATH'),
-    );
-    expect(
-      installerInclude.match(/Delete "\$INSTDIR\\resources\\\.unpack-cfmind-ok"/g),
-    ).toHaveLength(2);
-
-    // Exit 127 re-enters the on-disk verification when the sentinel exists
-    // instead of aborting outright; the fatal path stays intact.
-    const branchStart = installerInclude.indexOf('TarExtractOutputValidationFailed:');
-    const branchEnd = installerInclude.indexOf('TarExtractNonZero:', branchStart);
-    const branch = installerInclude.slice(branchStart, branchEnd);
-    expect(branch).toContain(
-      String.raw`IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal`,
-    );
-    expect(branch).toContain('phase=tar-extract-sentinel-rescue');
-    expect(branch).toContain('Goto TarExtractVerify');
-    expect(branch).toContain('reason=watchdog-output-validation-failed');
-    expect(branch).toContain('will not commit a partial application');
-  });
-
-  test('requires complete OpenClaw bundle assets, Skills, and Python before committing an installation', () => {
-    const extractVerifyStart = installerInclude.indexOf('TarExtractVerify:');
-    const extractVerifyEnd = installerInclude.indexOf('TarExtractProcessFailed:', extractVerifyStart);
-    const extractVerify = installerInclude.slice(extractVerifyStart, extractVerifyEnd);
-    expect(extractVerify).toContain('TarExtractVerifyBundleAssets:');
-    expect(extractVerify).toContain(String.raw`resources\cfmind\web-tree-sitter.wasm`);
-    expect(extractVerify).toContain('TarExtractVerifySkills:');
-    expect(extractVerify).toContain(String.raw`resources\SKILLs\*.*`);
-    expect(extractVerify).toContain(String.raw`resources\python-win\python.exe`);
-    expect(extractVerify).toContain(String.raw`resources\python-win\python3.exe`);
-    expect(extractVerify).toContain('TarExtractRequiredResourceMissing:');
-
-    const prevalidateStart = installerInclude.indexOf('NewInstallPrevalidateBundleAssets:');
+    const prevalidateStart = installerInclude.indexOf('StrCpy $lobsterNewInstallValidationStatus "failed"');
     const prevalidateEnd = installerInclude.indexOf('NewInstallPrevalidateSucceeded:', prevalidateStart);
     const prevalidate = installerInclude.slice(prevalidateStart, prevalidateEnd);
+    expect(prevalidate).toContain(String.raw`IfFileExists "$INSTDIR\resources\app.asar"`);
+    expect(prevalidate).toContain(String.raw`resources\app.asar.unpacked\dsh-runtime\package-manager\pnpm\package.json`);
     expect(prevalidate).toContain('NewInstallPrevalidateBundleAssets:');
-    expect(prevalidate).toContain(String.raw`resources\cfmind\web-tree-sitter.wasm`);
+    expect(prevalidate).toContain(String.raw`resources\dsh-bundles\lobsterai-host\package.json`);
+    expect(prevalidate).toContain(String.raw`resources\dsh-bundles\lobsterai-channels\package.json`);
     expect(prevalidate).toContain(String.raw`resources\SKILLs\*.*`);
     expect(prevalidate).toContain(String.raw`resources\python-win\python.exe`);
     expect(prevalidate).toContain(String.raw`resources\python-win\python3.exe`);
@@ -1223,7 +1117,8 @@ describe('Windows installer hardening contracts', () => {
     expect(installerInclude).toContain(
       "System::Call 'ole32::CoCreateGuid(g .s)'",
     );
-    expect(installerInclude).toContain('RequestExecutionLevel admin');
+    expect(installerInclude).not.toContain('RequestExecutionLevel admin');
+    expect(rootInstallerTemplate).toContain('RequestExecutionLevel user');
     expect(init).toContain('!insertmacro EnsureInstallerAttemptId');
     expect(init.indexOf('!insertmacro EnsureInstallerAttemptId')).toBeLessThan(
       init.indexOf('FileOpen $9'),
@@ -1284,27 +1179,38 @@ describe('Windows installer hardening contracts', () => {
     expect(installerInclude).toContain('registration=not-written');
   });
 
-  test('aborts failed extraction and never treats recovery artifacts as success', () => {
+  test('ships dsh-runtime inside app.asar without a Windows tar extraction stage and rolls back on prevalidation failure', () => {
     const failure = installerInclude.slice(
-      installerInclude.indexOf('TarExtractFailed:'),
-      installerInclude.indexOf('TarExtractDone:'),
+      installerInclude.indexOf('NewInstallPrevalidateFailed:'),
+      installerInclude.indexOf('NewInstallPrevalidateDone:'),
     );
 
     expect(failure).toContain(
-      '!insertmacro customRollbackOldInstall "resource-extraction-failed"',
+      '!insertmacro customRollbackOldInstall "new-install-validation-failed"',
     );
-    expect(failure).toContain('SetErrorLevel 3');
+    expect(failure).toContain('registration=not-written');
+    expect(failure).toContain('SetErrorLevel 2');
     expect(failure).toContain('Quit');
-    expect(installerInclude).toContain(
-      'IfFileExists "$INSTDIR\\resources\\cfmind\\gateway-bundle.mjs"',
-    );
     expect(installerInclude).not.toContain('runtime-and-recovery-artifacts-missing');
     expect(installerInclude).not.toContain('retry the extraction automatically');
-    expect(installerInclude.indexOf('TarExtractSucceeded:')).toBeLessThan(
-      installerInclude.indexOf('Delete "$INSTDIR\\resources\\win-resources.tar"'),
-    );
-    expect(installerInclude).toContain('Recovery files (if any):');
     expect(installerInclude).not.toContain('Previous files (if staged):');
+
+    const files = electronBuilderConfig.files ?? [];
+    expect(
+      files.some((entry) => typeof entry === 'object' && entry.from === 'vendor/dsh-runtime/current' && entry.to === 'dsh-runtime'),
+    ).toBe(true);
+    const baseResources = electronBuilderConfig.extraResources ?? [];
+    expect(
+      baseResources.some((entry) => typeof entry === 'object' && entry.to === 'dsh-bundles/lobsterai-host'),
+    ).toBe(true);
+    expect(
+      baseResources.some((entry) => typeof entry === 'object' && entry.to === 'dsh-bundles/lobsterai-channels'),
+    ).toBe(true);
+    const winResources = electronBuilderConfig.win?.extraResources ?? [];
+    expect(winResources.some((entry) => typeof entry === 'object' && entry.to === 'SKILLs')).toBe(true);
+    expect(winResources.some((entry) => typeof entry === 'object' && entry.to === 'python-win')).toBe(true);
+    expect(winResources.some((entry) => typeof entry === 'object' && entry.to === 'win-resources.tar')).toBe(false);
+    expect(winResources.some((entry) => typeof entry === 'object' && entry.to === 'unpack-dsh-resources.cjs')).toBe(false);
   });
 
   test('relaunches a verified old app only for interactive update intent', () => {
@@ -1473,7 +1379,8 @@ describe('Windows installer hardening contracts', () => {
     expect(select).toContain('System::Int64Op $0 / 1048576');
     expect(select).toContain('IntOp $1 $0 + ${LOBSTER_PAYLOAD_UNPACKED_MB}');
     expect(select).toContain('IntOp $1 $1 + ${LOBSTER_STAGING_MARGIN_MB}');
-    expect(select).toContain('IntOp $6 $6 + ${LOBSTER_WIN_RESOURCES_TAR_MB}');
+    expect(select).toContain('IntOp $6 $1 + ${LOBSTER_PAYLOAD_UNPACKED_MB}');
+    expect(select).not.toContain('LOBSTER_WIN_RESOURCES_TAR_MB');
 
     // Decision phases: healthy default, relocation, probe failure (fail-open),
     // and the only abort -- when no drive has room.
@@ -1505,7 +1412,7 @@ describe('Windows installer hardening contracts', () => {
     expect(quitMacro).toContain('Call lobsterCleanupRelocatedPayloadStaging');
     const beforeRegistry = installerInclude.slice(
       installerInclude.indexOf('!macro customBeforeRegistryAddInstallInfo'),
-      installerInclude.indexOf('phase=tar-extract-start'),
+      installerInclude.indexOf('SkipSkillRestore:'),
     );
     expect(beforeRegistry).toContain('Call lobsterCleanupRelocatedPayloadStaging');
 
@@ -1542,13 +1449,13 @@ describe('Windows installer hardening contracts', () => {
       installerInclude.indexOf('!macroend', installerInclude.indexOf('!macro LobsterValidateStagedPayload MODE')),
     );
     expect(validate).toContain(String.raw`"$0\${APP_EXECUTABLE_FILENAME}"`);
-    expect(validate).toContain(String.raw`"$0\resources\win-resources.tar"`);
+    expect(validate).toContain(String.raw`"$0\resources\app.asar"`);
     expect(validate).toContain('"app-executable-missing"');
-    expect(validate).toContain('"resources-tar-missing"');
-    expect(validate).toContain('"resources-tar-size-mismatch"');
+    expect(validate).toContain('"app-asar-missing"');
+    expect(validate).toContain('"app-asar-size-mismatch"');
     // The exact byte compare stays 64-bit safe: a decimal string comparison
     // against the build-time size, never 32-bit IntCmp arithmetic.
-    expect(validate).toContain('${ElseIf} $2 != "${LOBSTER_WIN_RESOURCES_TAR_BYTES}"');
+    expect(validate).toContain('${ElseIf} $2 != "${LOBSTER_APP_ASAR_BYTES}"');
     expect(validate).toContain('phase=payload-staging-validation-failed');
     expect(validate).toContain('found_bytes=$2 expected_bytes=$3');
     expect(validate).toContain('action=abort-install');
@@ -1571,59 +1478,21 @@ describe('Windows installer hardening contracts', () => {
     );
   });
 
-  test('generates the payload size fragment during Windows packaging', () => {
+  test('generates the payload size fragment and verifies app.asar during Windows packaging', () => {
     expect(builderHooks).toContain('function writeWindowsPayloadSizeFragment');
-    expect(builderHooks).toContain('LOBSTER_WIN_RESOURCES_TAR_BYTES');
-    expect(builderHooks).toContain('LOBSTER_WIN_RESOURCES_TAR_MB');
+    expect(builderHooks).toContain('function verifyPackagedDshRuntimeAsar');
+    expect(builderHooks).toContain('LOBSTER_APP_ASAR_BYTES');
     expect(builderHooks).toContain('LOBSTER_PAYLOAD_UNPACKED_MB');
     expect(builderHooks).toContain("'win-installer-payload-size.nsh'");
+    expect(builderHooks).not.toContain('LOBSTER_WIN_RESOURCES_TAR_BYTES');
 
-    // afterPack is the generation point: extraResources are in place and the
-    // NSIS targets have not archived appOutDir yet.
+    // afterPack is the generation point: app.asar and extraResources are in
+    // place and the NSIS targets have not archived appOutDir yet.
     const afterPack = builderHooks.slice(builderHooks.indexOf('async function afterPack'));
+    expect(afterPack).toContain('verifyPackagedDshRuntimeAsar(');
     expect(afterPack).toContain('writeWindowsPayloadSizeFragment(context)');
 
-    // A build machine that itself truncated the extraResources copy must
-    // fail the build instead of baking the wrong "expected" size in.
-    expect(builderHooks).toContain('packagedTarBytes !== tarBytes');
-    expect(builderHooks).toContain("path.join(context.appOutDir, 'resources', 'win-resources.tar')");
-  });
-
-  test('captures a bounded tar failure tail without changing exit semantics', () => {
-    expect(installerInclude).not.toContain(
-      String.raw`nsExec::ExecToLog '"$lobsterTrustedTarPath"`,
-    );
-    const tarStart = installerInclude.indexOf(
-      String.raw`Push '"$lobsterTrustedTarPath" -xf`,
-    );
-    const tarEnd = installerInclude.indexOf('TarExtractElectron:', tarStart);
-    const tar = installerInclude.slice(tarStart, tarEnd);
-
-    // Exit code and output are always both popped (stack balance), and the
-    // original exit-code dispatch survives verbatim.
-    expect(tar).toContain('!insertmacro LobsterExecHiddenToStack');
-    expect(tar).toContain('Pop $0');
-    expect(tar).toContain('Pop $R6');
-    expect(tar).toContain('IntCmp $R2 0 TarExtractVerify TarExtractElectron TarExtractElectron');
-
-    // The failure tail is captured before the dispatch can leave for the
-    // electron fallback, from the same non-success condition.
-    const capture = tar.indexOf('phase=tar-extract-output');
-    expect(capture).toBeGreaterThan(-1);
-    expect(tar.slice(0, capture)).toContain('Call lobsterBuildSingleLineTail');
-    expect(capture).toBeLessThan(
-      tar.indexOf('IntCmp $R2 0 TarExtractVerify TarExtractElectron TarExtractElectron'),
-    );
-    expect(tar).toContain('text=$R6');
-
-    // The sanitizer bounds the text and collapses it to one line.
-    const sanitizer = installerInclude.slice(
-      installerInclude.indexOf('Function lobsterBuildSingleLineTail'),
-      installerInclude.indexOf('FunctionEnd', installerInclude.indexOf('Function lobsterBuildSingleLineTail')),
-    );
-    expect(sanitizer).toContain('StrCpy $0 $0 512 $1');
-    expect(sanitizer).toContain('StrCmp $2 "$\\r" LobsterTailBlank');
-    expect(sanitizer).toContain('StrCmp $2 "$\\n" LobsterTailBlank');
+    expect(builderHooks).toContain("path.join(context.appOutDir, 'resources', 'app.asar')");
   });
 
   test('records Win32 error and destination free space for failed cache copies', () => {

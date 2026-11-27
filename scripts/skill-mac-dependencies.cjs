@@ -10,7 +10,12 @@ const MAC_PLATFORM = 'darwin';
 const MAC_ARCHES = ['arm64', 'x64'];
 const CACHE_VERSION = '2';
 const STAMP = '.lobster-skill-dependencies.json';
+const LOCK_STAMP = '.lobster-skill-lock.json';
 const UNIVERSAL_NATIVE_FILES = 'Contents/Resources/SKILLs/**/node_modules/@img/sharp-*darwin-*/**/*';
+
+function skillsCacheRoot(projectDir) {
+  return path.join(projectDir, 'node_modules', '.cache', 'lobsterai-skills');
+}
 
 function targetArchitectures(context) {
   const universal = context.arch === Arch.universal
@@ -104,11 +109,94 @@ function installDependencies(root, arch) {
   }
 }
 
-function prepareDependencyCache(source, cache, arch, install) {
-  const manifest = fs.readFileSync(path.join(source, 'package.json'));
-  const lockBytes = fs.readFileSync(path.join(source, 'package-lock.json'));
+function generateLockfile(root) {
+  const env = {
+    ...process.env,
+    SHARP_IGNORE_GLOBAL_LIBVIPS: '1',
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
+  };
+  // Keep lockfile resolution platform-agnostic so optional prebuilds for all
+  // target Mac architectures are recorded regardless of host environment.
+  delete env.npm_config_os;
+  delete env.npm_config_cpu;
+  delete env.npm_config_platform;
+  delete env.npm_config_arch;
+  delete env.npm_config_omit;
+  delete env.npm_config_package_lock;
+  const result = spawnSync('npm', ['install', '--package-lock-only', '--include=optional', '--ignore-scripts', '--no-audit', '--no-fund'], {
+    cwd: root,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 1024 * 1024,
+    encoding: 'utf8',
+    timeout: 5 * 60 * 1000,
+    env,
+  });
+  if (result.status !== 0) {
+    throw new Error(`[skill-dependencies] npm lockfile generation failed for ${path.basename(root)}: ${result.error?.message || result.stderr?.slice(-2000) || result.stdout?.slice(-2000)}`);
+  }
+}
+
+function parseModernLockfile(lockBytes, source) {
   const lock = JSON.parse(lockBytes.toString());
   if (!lock.packages) throw new Error(`[skill-dependencies] A modern lockfile is required: ${source}`);
+  return lock;
+}
+
+function resolveSkillLock(source, cacheRoot, { allowGenerate = false, generateLock = generateLockfile } = {}) {
+  const name = path.basename(source);
+  const manifest = fs.readFileSync(path.join(source, 'package.json'));
+  const sourceLockPath = path.join(source, 'package-lock.json');
+  if (fs.existsSync(sourceLockPath)) {
+    const lockBytes = fs.readFileSync(sourceLockPath);
+    return { manifest, lockBytes, lock: parseModernLockfile(lockBytes, source) };
+  }
+
+  const manifestFingerprint = createHash('sha256')
+    .update(CACHE_VERSION)
+    .update(manifest)
+    .digest('hex');
+  const lockCache = path.join(cacheRoot, 'locks', name);
+  const stampPath = path.join(lockCache, LOCK_STAMP);
+  try {
+    if (readJson(stampPath).manifestFingerprint === manifestFingerprint) {
+      const lockBytes = fs.readFileSync(path.join(lockCache, 'package-lock.json'));
+      const lock = parseModernLockfile(lockBytes, lockCache);
+      if (allowGenerate) {
+        console.log(`[skill-dependencies] Reusing cached lockfile for ${name}`);
+      }
+      return { manifest, lockBytes, lock };
+    }
+  } catch (error) {
+    if (fs.existsSync(stampPath)) {
+      console.warn(`[skill-dependencies] Invalid lockfile cache for ${name}; regenerating:`, error);
+    }
+  }
+
+  if (!allowGenerate) {
+    throw new Error(`[skill-dependencies] Missing lockfile for ${name}: ${sourceLockPath}`);
+  }
+
+  const started = Date.now();
+  console.log(`[skill-dependencies] Generating lockfile for ${name}`);
+  fs.rmSync(lockCache, { recursive: true, force: true });
+  fs.mkdirSync(lockCache, { recursive: true });
+  fs.writeFileSync(path.join(lockCache, 'package.json'), manifest);
+  let lockBytes;
+  let lock;
+  try {
+    generateLock(lockCache);
+    lockBytes = fs.readFileSync(path.join(lockCache, 'package-lock.json'));
+    lock = parseModernLockfile(lockBytes, source);
+  } catch (error) {
+    throw new Error(`[skill-dependencies] Failed to generate lockfile for ${name}: ${error.message}`, { cause: error });
+  }
+  fs.writeFileSync(stampPath, JSON.stringify({ manifestFingerprint }));
+  console.log(`[skill-dependencies] Generated lockfile for ${name} in ${Date.now() - started}ms`);
+  return { manifest, lockBytes, lock };
+}
+
+function prepareDependencyCache(source, cache, arch, install, resolvedLock) {
+  const { manifest, lockBytes, lock } = resolvedLock;
   const fingerprint = createHash('sha256').update(CACHE_VERSION).update('darwin').update(arch)
     .update(process.versions.node).update(manifest).update(lockBytes).digest('hex');
   try {
@@ -140,12 +228,16 @@ function prepareDependencyCache(source, cache, arch, install) {
 }
 
 /** Keep developer node_modules out of packaging, even for a single x64 build. */
-function prepareMacSkills(context, { projectDir = context.packager?.projectDir ?? path.join(__dirname, '..'), install = installDependencies } = {}) {
+function prepareMacSkills(context, {
+  projectDir = context.packager?.projectDir ?? path.join(__dirname, '..'),
+  install = installDependencies,
+  generateLock = generateLockfile,
+} = {}) {
   if (context.electronPlatformName !== MAC_PLATFORM) return;
   const arches = targetArchitectures(context);
   console.log(`[skill-dependencies] Preparing Mac skills: host=${process.platform}-${process.arch}, target=darwin-${arches.join('+')}`);
   const source = path.join(projectDir, 'SKILLs');
-  const cacheRoot = path.join(projectDir, 'node_modules', '.cache', 'lobsterai-skills');
+  const cacheRoot = skillsCacheRoot(projectDir);
   const payload = path.join(cacheRoot, `darwin-${arches.join('-')}`, 'SKILLs');
   fs.rmSync(payload, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(payload), { recursive: true });
@@ -157,8 +249,15 @@ function prepareMacSkills(context, { projectDir = context.packager?.projectDir ?
   for (const name of skillNames(source)) {
     const skillSource = path.join(source, name);
     const destination = path.join(payload, name);
+    const resolvedLock = resolveSkillLock(skillSource, cacheRoot, { allowGenerate: true, generateLock });
     for (const [index, arch] of arches.entries()) {
-      const cache = prepareDependencyCache(skillSource, path.join(cacheRoot, 'dependencies', `darwin-${arch}`, name), arch, install);
+      const cache = prepareDependencyCache(
+        skillSource,
+        path.join(cacheRoot, 'dependencies', `darwin-${arch}`, name),
+        arch,
+        install,
+        resolvedLock,
+      );
       if (index === 0) {
         fs.cpSync(path.join(cache, 'node_modules'), path.join(destination, 'node_modules'), { recursive: true, verbatimSymlinks: true });
       } else if (fs.existsSync(path.join(cache, 'node_modules', '@img'))) {
@@ -169,7 +268,7 @@ function prepareMacSkills(context, { projectDir = context.packager?.projectDir ?
     }
     // npm's hidden lockfile describes one architecture and is not a runtime resource.
     fs.rmSync(path.join(destination, 'node_modules', '.package-lock.json'), { force: true });
-    verifySkill(destination, readJson(path.join(skillSource, 'package-lock.json')), arches);
+    verifySkill(destination, resolvedLock.lock, arches);
   }
   const options = context.packager.platformSpecificBuildOptions;
   let replaced = false;
@@ -192,11 +291,13 @@ function prepareMacSkills(context, { projectDir = context.packager?.projectDir ?
 function verifyPackagedMacSkills(context, projectDir = context.packager?.projectDir ?? path.join(__dirname, '..')) {
   if (context.electronPlatformName !== MAC_PLATFORM) return;
   const source = path.join(projectDir, 'SKILLs');
+  const cacheRoot = skillsCacheRoot(projectDir);
   const resources = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'SKILLs');
   const arches = targetArchitectures(context);
   for (const name of skillNames(source)) {
     try {
-      verifySkill(path.join(resources, name), readJson(path.join(source, name, 'package-lock.json')), arches);
+      const { lock } = resolveSkillLock(path.join(source, name), cacheRoot, { allowGenerate: false });
+      verifySkill(path.join(resources, name), lock, arches);
     } catch (error) {
       throw new Error(`[skill-dependencies] Packaged ${name} failed validation for darwin-${arches.join('+')}: ${error.message}`, { cause: error });
     }

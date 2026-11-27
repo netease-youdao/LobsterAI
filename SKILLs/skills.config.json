@@ -1,25 +1,15 @@
 {
-  "version": 1,
+  "version": 2,
   "description": "Default skill configuration for LobsterAI",
   "defaults": {
-    "docx": { "order": 10, "enabled": true },
-    "web-search": { "order": 15, "enabled": true },
-    "xlsx": { "order": 20, "enabled": true },
-    "pptx": { "order": 30, "enabled": true },
-    "pdf": { "order": 40, "enabled": true },
-    "remotion": { "order": 50, "enabled": true },
-    "frontend-design": { "order": 100, "enabled": true },
-    "stock-analyzer": { "order": 110, "enabled": true },
-    "stock-announcements": { "order": 111, "enabled": true },
-    "stock-explorer": { "order": 112, "enabled": true },
-    "content-planner": { "order": 120, "enabled": true },
-    "article-writer": { "order": 121, "enabled": true },
-    "daily-trending": { "order": 122, "enabled": true },
-    "local-tools": { "order": 200, "enabled": true },
-    "weather": { "order": 210, "enabled": true },
-    "imap-smtp-email": { "order": 211, "enabled": true },
-    "skin-creator": { "order": 214, "enabled": false },
-    "youdaonote": { "order": 298, "enabled": true },
-    "skill-creator": { "order": 300, "enabled": true }
+    "docx": { "order": 10, "enabled": true, "alwaysEnabled": true },
+    "web-search": { "order": 15, "enabled": true, "alwaysEnabled": true },
+    "xlsx": { "order": 20, "enabled": true, "alwaysEnabled": true },
+    "pptx": { "order": 30, "enabled": true, "alwaysEnabled": true },
+    "pdf": { "order": 40, "enabled": true, "alwaysEnabled": true },
+    "lobsterai-image-processing": { "order": 45, "enabled": true, "alwaysEnabled": true },
+    "frontend-design": { "order": 100, "enabled": true, "alwaysEnabled": true },
+    "imap-smtp-email": { "order": 211, "enabled": true, "alwaysEnabled": true },
+    "skill-creator": { "order": 300, "enabled": true, "alwaysEnabled": true }
   }
 }

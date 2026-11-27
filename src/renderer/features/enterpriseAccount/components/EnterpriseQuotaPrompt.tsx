@@ -255,7 +255,7 @@ export const EnterpriseQuotaPrompt = ({
             type="button"
             onClick={() => void handleAction()}
             disabled={requestState !== 'idle'}
-            className="inline-flex max-w-full shrink-0 items-center justify-center gap-1.5 whitespace-normal rounded-full bg-neutral-950 px-3.5 py-2 text-center text-xs font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-60 dark:bg-white dark:text-neutral-950"
+            className="inline-flex max-w-full shrink-0 items-center justify-center gap-1.5 whitespace-normal rounded-full bg-action px-3.5 py-2 text-center text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-default disabled:opacity-60"
           >
             {requestState === 'submitted' ? (
               <CheckCircleIcon className="h-3.5 w-3.5" aria-hidden="true" />

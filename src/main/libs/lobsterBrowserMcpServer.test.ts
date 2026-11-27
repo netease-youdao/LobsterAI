@@ -178,11 +178,20 @@ describe('resolveLobsterBrowserMcpCommand', () => {
     const baseDir = createTempDirectory();
     const bridgeSecret = 'runtime-only-secret';
     const receivedSecrets: string[] = [];
+    const screenshot = Buffer.from('fixture image');
     const bridgeServer = http.createServer((request, response) => {
       receivedSecrets.push(String(request.headers['x-mcp-bridge-secret'] || ''));
-      request.resume();
+      let body = '';
+      request.on('data', chunk => { body += chunk; });
       request.on('end', () => {
         response.writeHead(200, { 'content-type': 'application/json' });
+        if (JSON.parse(body).tool === 'take_screenshot') {
+          response.end(JSON.stringify({
+            content: [{ type: 'text', text: 'Screenshot captured.' }],
+            structuredContent: { imageBase64: screenshot.toString('base64'), format: 'png' },
+          }));
+          return;
+        }
         response.end(JSON.stringify({
           content: [{ type: 'text', text: 'No pages are open.' }],
           structuredContent: { pages: [] },
@@ -227,12 +236,18 @@ describe('resolveLobsterBrowserMcpCommand', () => {
       const result = await client.callTool({ name: 'list_pages', arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toEqual({ pages: [] });
+      const captured = await client.callTool({ name: 'take_screenshot', arguments: {} });
+      expect(captured.content).toEqual([{ type: 'image', data: screenshot.toString('base64'), mimeType: 'image/png' }]);
+      const filePath = path.join(baseDir, 'right panel.png');
+      const saved = await client.callTool({ name: 'take_screenshot', arguments: { filePath } });
+      expect(saved.structuredContent).toMatchObject({ filePath });
+      expect(fs.readFileSync(filePath)).toEqual(screenshot);
     } finally {
       await client.close().catch(() => {});
       await new Promise<void>(resolve => bridgeServer.close(() => resolve()));
     }
 
-    expect(receivedSecrets).toEqual([bridgeSecret]);
+    expect(receivedSecrets).toEqual([bridgeSecret, bridgeSecret, bridgeSecret]);
     const stderrText = stderr.join('');
     expect(stderrText).toContain('[LobsterBrowserMcp] startup');
     expect(stderrText).toContain('runtimeConfig=loaded');

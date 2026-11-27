@@ -11,13 +11,11 @@ const calm: CompanionMoodInput = {
   snoozed: false,
   dropHover: false,
   dropStage: false,
-  hintShowing: false,
 };
 
 describe('companion mood', () => {
-  test('stays idle when nothing is going on and raises a hand for a hint', () => {
+  test('stays idle when nothing is going on', () => {
     expect(companionMood(calm)).toBe(CompanionMood.Idle);
-    expect(companionMood({ ...calm, hintShowing: true })).toBe(CompanionMood.Idea);
   });
 
   test('task news follows needs-input > failed > ready > running', () => {

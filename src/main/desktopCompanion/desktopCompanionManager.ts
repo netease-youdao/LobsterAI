@@ -16,7 +16,7 @@ import {
   CompanionAnalyticsOutcome as AnalyticsOutcome, CompanionAnalyticsSource as AnalyticsSource,
   CompanionAnalyticsTool, normalizeCompanionAnalyticsEvent,
 } from '../../shared/desktopCompanion/analytics';
-import { categorizeCompanionApp, CompanionAppCategory, isCompanionQuietCategory } from '../../shared/desktopCompanion/appCategories';
+import { categorizeCompanionApp, CompanionAppCategory } from '../../shared/desktopCompanion/appCategories';
 import {
   CompanionCapability,
   CompanionPermission as CompanionPermissionValue,
@@ -49,6 +49,17 @@ import {
   EMPTY_DESKTOP_COMPANION_DRAFT,
 } from '../../shared/desktopCompanion/constants';
 import {
+  activeFileActionCopyKeys,
+  CompanionContextActionFileFilter,
+  CompanionContextActionKind,
+  CompanionContextClipboardKind,
+  type DesktopCompanionContextActionRequest,
+  type DesktopCompanionContextActionResult,
+  type DesktopCompanionContextSnapshot,
+  findCompanionContextAction,
+  isCompanionContextActionId,
+} from '../../shared/desktopCompanion/contextActions';
+import {
   type CompanionFileKind,
   CompanionFileKind as FileKind,
   companionFileKindFromName,
@@ -69,7 +80,6 @@ import {
   resolveCompanionLoginLayout,
   snapCompanionOrbToEdge,
 } from '../../shared/desktopCompanion/geometry';
-import { companionHintCopyKeys, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
 import { isSpeechActive, LanguageTool } from '../../shared/desktopCompanion/languageTools';
 import { canOpenCompanionLauncher, CompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import type { CompanionTaskInfo } from '../../shared/desktopCompanion/results';
@@ -80,8 +90,8 @@ import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { t } from '../i18n';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
 import { copyCompanionText } from './companionClipboard';
+import { CompanionContextInspector } from './companionContextInspector';
 import { CompanionContextMenuController, type CompanionMenuEntry } from './companionContextMenu';
-import { CompanionHintsController } from './companionHints';
 import { CompanionLauncherHover } from './companionLauncher';
 import { CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
 import { CompanionPermissionGuideController, type CompanionPermissionGuideServices } from './companionPermissionGuide';
@@ -124,6 +134,7 @@ export interface DesktopCompanionServices {
   foreground?: ForegroundAppMonitor;
   fileDrag?: FileDragMonitor;
   quickAnswer?: CompanionQuickAnswerService;
+  contextInspector?: CompanionContextInspector;
   loadSelectionHook?: () => SelectionHookModule | null;
   permissionGuide?: CompanionPermissionGuideServices;
   /** Lists LobsterAI in System Settings' Screen Recording list; macOS prompts the first time. */
@@ -132,6 +143,7 @@ export interface DesktopCompanionServices {
 
 interface DesktopCompanionOptions {
   enginePhase: OpenClawEnginePhase;
+  authGateBlocked?: boolean;
   store: CompanionStore;
   preloadPath: string;
   rendererDirectory: string;
@@ -155,7 +167,6 @@ export function normalizeCompanionPreferences(value: unknown): DesktopCompanionP
     shortcut: typeof stored.shortcut === 'string' ? stored.shortcut : DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut,
     skin: normalizeCompanionSkin(stored.skin),
     selectionToolbar: stored.selectionToolbar !== false,
-    dragAssist: stored.dragAssist !== false,
     contextHints: stored.contextHints !== false,
     selectionToolbarOrder: normalizeCompanionToolbarOrder(stored.selectionToolbarOrder),
     selectionExcludedApps: Array.isArray(stored.selectionExcludedApps)
@@ -207,6 +218,7 @@ function describeDraggedPaths(paths: string[]): DesktopCompanionDropFile[] {
 
 export class DesktopCompanionManager {
   private enginePhase: OpenClawEnginePhase;
+  private authGateBlocked: boolean;
   private pendingPanelSource: AnalyticsSource | null = null;
   private pendingMainPage: DesktopCompanionMainPage | null = null;
   private orb: BrowserWindow | null = null;
@@ -239,6 +251,9 @@ export class DesktopCompanionManager {
   private fileDragActive = false;
   private draggedFiles: DesktopCompanionDropFile[] = [];
   private foregroundAppId: string | null = null;
+  private foregroundPid: number | null = null;
+  private contextSnapshot: DesktopCompanionContextSnapshot | null = null;
+  private contextInspectSeq = 0;
   /** Where the pointer holds the orb during a drag, and where the drag last placed it. */
   private drag: { grab: CompanionPoint; placed: CompanionRect | null } | null = null;
   private draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -250,7 +265,7 @@ export class DesktopCompanionManager {
   private readonly quickAnswer: CompanionQuickAnswerService;
   private readonly stage: CompanionStageController;
   private readonly launcher: CompanionLauncherHover;
-  private readonly hints: CompanionHintsController;
+  private readonly contextInspector: CompanionContextInspector;
   private readonly selection: CompanionSelectionController;
   private readonly languageTools: CompanionLanguageToolsController;
   private readonly screenshot: CompanionScreenshotController;
@@ -262,6 +277,7 @@ export class DesktopCompanionManager {
 
   constructor(private readonly options: DesktopCompanionOptions) {
     this.enginePhase = options.enginePhase;
+    this.authGateBlocked = options.authGateBlocked === true;
     this.analytics = new CompanionAnalytics(options.reportAnalytics, options.getAnalyticsOwner);
     this.login = new CompanionLoginTracker(this.analytics);
     const { store } = options;
@@ -308,8 +324,6 @@ export class DesktopCompanionManager {
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       publish: () => this.publish(),
     }, {
-      onHintOutcome: (topic, outcome) => this.hints.recordOutcome(topic, outcome),
-      onHintAccept: topic => this.acceptHint(topic),
       onDropAsk: attachments => this.openPanelWithAttachments(attachments),
       onDropStarted: id => this.followTask(id),
       onTaskOpen: id => this.openTask(id),
@@ -321,8 +335,14 @@ export class DesktopCompanionManager {
       getCardBounds: () => (this.isLauncherOpen() ? this.stage.browserWindow?.getBounds() ?? null : null),
       canOpen: () => this.canOpenLauncher(),
       isOpen: () => this.isLauncherOpen(),
-      open: () => this.stage.showLauncher(),
-      close: () => this.stage.closeLauncher(),
+      open: () => {
+        this.refreshContextSnapshot(false);
+        return this.stage.showLauncher();
+      },
+      close: () => {
+        this.stage.closeLauncher();
+        if (!this.panelVisible) this.clearContextSnapshot();
+      },
     });
     this.dragProximity = new CompanionFileDragProximity({
       getCursor: () => screen.getCursorScreenPoint(),
@@ -330,18 +350,14 @@ export class DesktopCompanionManager {
       onEnter: () => this.stage.showDrop(DesktopCompanionDropSource.Orb, this.draggedFiles),
       onLeave: () => this.stage.releaseDrop(DesktopCompanionDropSource.Orb),
     });
-    this.hints = new CompanionHintsController({
-      store,
-      isEnabled: () => this.isPresent() && this.preferences.contextHints && !this.capturing,
-      isQuiet: category => this.isBusy(category),
-      showHint: (topic, variant) => this.showHint(topic, variant),
-    });
+    this.contextInspector = services.contextInspector ?? new CompanionContextInspector();
+    this.contextInspector.captureBaselineClipboard();
     this.selection = new CompanionSelectionController({
       analytics: this.analytics,
       preferences: () => this.preferences,
       // Selection tools use direct HTTP, not the agent gateway. A gateway restart
       // must not hide their answer card and cancel an otherwise healthy request.
-      isAvailable: () => this.preferences.enabled && !this.snooze && !this.capturing,
+      isAvailable: () => !this.authGateBlocked && this.preferences.enabled && !this.snooze && !this.capturing,
       isCapturing: () => this.capturing,
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
@@ -382,9 +398,30 @@ export class DesktopCompanionManager {
     screen.on('display-added', this.reposition);
     screen.on('display-removed', this.reposition);
     screen.on('display-metrics-changed', this.reposition);
-    this.shortcutUnavailable = !this.registerShortcut(this.preferences.shortcut);
+    this.shortcutUnavailable = this.authGateBlocked ? false : !this.registerShortcut(this.preferences.shortcut);
     this.scheduleSnoozeWake();
     this.applyActivity();
+  }
+
+  setAuthGateBlocked(blocked: boolean): void {
+    if (this.disposing || this.authGateBlocked === blocked) return;
+    this.authGateBlocked = blocked;
+    if (blocked) {
+      this.pendingPanelSource = null;
+      this.unregisterShortcut();
+      this.hidePanel();
+      this.languageTools.reset();
+      this.clearTaskAnalytics();
+      this.contextMenu.hide();
+      this.permissionGuide.close();
+      this.stage.clear();
+      this.results.hide();
+      this.applyActivity();
+    } else {
+      this.shortcutUnavailable = !this.registerShortcut(this.preferences.shortcut);
+      this.applyActivity();
+    }
+    this.publish();
   }
 
   isComposerWebContents(webContents: WebContents): boolean {
@@ -431,6 +468,7 @@ export class DesktopCompanionManager {
       contextMenu: this.contextMenu.state,
       fileDragActive: this.fileDragActive,
       foreground: this.foregroundAppId && category ? { appId: this.foregroundAppId, category } : null,
+      context: this.preferences.contextHints ? this.contextSnapshot : null,
       capabilities: {
         selection: this.selection.capability,
         foregroundApp: this.foreground.capability,
@@ -445,7 +483,6 @@ export class DesktopCompanionManager {
     if (typeof patch?.shortcut === 'string') next.shortcut = patch.shortcut.trim().slice(0, 100);
     if (typeof patch?.skin === 'string') next.skin = normalizeCompanionSkin(patch.skin);
     if (typeof patch?.selectionToolbar === 'boolean') next.selectionToolbar = patch.selectionToolbar;
-    if (typeof patch?.dragAssist === 'boolean') next.dragAssist = patch.dragAssist;
     if (typeof patch?.contextHints === 'boolean') next.contextHints = patch.contextHints;
     if (Array.isArray(patch?.selectionToolbarOrder)) {
       next.selectionToolbarOrder = normalizeCompanionToolbarOrder(patch.selectionToolbarOrder);
@@ -454,7 +491,7 @@ export class DesktopCompanionManager {
       next.selectionExcludedApps = normalizeCompanionPreferences({ selectionExcludedApps: patch.selectionExcludedApps }).selectionExcludedApps;
     }
     const updatingShortcut = typeof patch?.shortcut === 'string';
-    if (updatingShortcut && !this.registerShortcut(next.shortcut)) {
+    if (updatingShortcut && !this.authGateBlocked && !this.registerShortcut(next.shortcut)) {
       return { success: false, state: this.getState(), error: t('desktopCompanionShortcutConflict') };
     }
     if (updatingShortcut) this.shortcutUnavailable = false;
@@ -467,7 +504,7 @@ export class DesktopCompanionManager {
     if (!next.enabled) this.languageTools.reset();
     this.options.store.set(DesktopCompanionStoreKey.Preferences, next);
     if (turningOn && this.snooze) this.wake(false);
-    if (!next.contextHints && this.stage.stage.kind === DesktopCompanionStageKind.Hint) this.stage.clear();
+    if (!next.contextHints) this.clearContextSnapshot();
     this.applyActivity();
     if (exclusionsChanged) this.selection.updateExclusions();
     this.publish();
@@ -494,6 +531,10 @@ export class DesktopCompanionManager {
 
   togglePanel(source: AnalyticsSource = AnalyticsSource.Tray): void {
     if (this.capturing) return;
+    if (this.authGateBlocked) {
+      this.options.openMain(null);
+      return;
+    }
     if (this.pendingPanelSource) { this.pendingPanelSource = null; return; }
     if (this.panelVisible) this.hidePanel();
     else this.showPanel(source);
@@ -526,6 +567,7 @@ export class DesktopCompanionManager {
     this.panelVisible = false;
     this.panelShowRevision = null;
     this.panel?.hide();
+    if (!this.isLauncherOpen()) this.clearContextSnapshot();
     this.flushDraft();
     this.publish();
   }
@@ -574,7 +616,7 @@ export class DesktopCompanionManager {
     this.foreground.stop();
     this.fileDrag.stop();
     this.launcher.reset();
-    this.hints.dispose();
+    this.clearContextSnapshot();
     this.selection.dispose();
     this.stage.dispose();
     this.quickAnswer.dispose();
@@ -602,16 +644,7 @@ export class DesktopCompanionManager {
 
   /** Present only when the gateway can accept tasks and the user enables it. */
   private isPresent(): boolean {
-    return this.isTaskReady() && this.preferences.enabled && !this.snooze;
-  }
-
-  private isBusy(category: CompanionAppCategory): boolean {
-    return this.panelVisible
-      || this.results.state.visible
-      || this.stage.stage.kind !== DesktopCompanionStageKind.None
-      || this.fileDragActive
-      || isCompanionQuietCategory(category)
-      || this.foreground.isUserBusy();
+    return !this.authGateBlocked && this.isTaskReady() && this.preferences.enabled && !this.snooze;
   }
 
   /** Reconciles windows and system monitors with preferences and snooze. */
@@ -623,7 +656,7 @@ export class DesktopCompanionManager {
     this.selection.sync();
     if (present || this.selection.capability === CompanionCapability.Ready) this.foreground.start();
     else this.foreground.stop();
-    if (present && this.preferences.dragAssist && !this.snooze) this.fileDrag.start();
+    if (present && !this.snooze) this.fileDrag.start();
     else {
       this.fileDrag.stop();
       this.dragProximity.stop();
@@ -740,7 +773,6 @@ export class DesktopCompanionManager {
         win.showInactive();
         if (!wasVisible) this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.System,
           interactionType: Interaction.Open, surface: DesktopCompanionSurface.Mascot, skin: this.preferences.skin });
-        this.hints.scheduleWelcome();
       });
       this.orb = win;
     } else if (!this.orb.webContents.isLoadingMainFrame() && !this.orb.isVisible()) {
@@ -826,6 +858,7 @@ export class DesktopCompanionManager {
   // ── Panel ─────────────────────────────────────────────────
 
   private showPanel(source: AnalyticsSource = AnalyticsSource.System): void {
+    if (this.authGateBlocked) return;
     if (!this.isTaskReady()) {
       this.pendingPanelSource = source;
       return;
@@ -834,8 +867,7 @@ export class DesktopCompanionManager {
     if (opening) this.panelJourneyId = randomUUID();
     this.results.hide();
     const stageKind = this.stage.stage.kind;
-    if (stageKind === DesktopCompanionStageKind.Hint || stageKind === DesktopCompanionStageKind.Task
-      || stageKind === DesktopCompanionStageKind.Launcher) this.stage.clear();
+    if (stageKind === DesktopCompanionStageKind.Task || stageKind === DesktopCompanionStageKind.Launcher) this.stage.clear();
     if (!this.panelVisible) {
       this.analytics.report({ action: AnalyticsAction.Action, source, interactionType: Interaction.Open,
         surface: DesktopCompanionSurface.Panel, enabled: this.preferences.enabled, journeyId: this.panelJourneyId });
@@ -867,6 +899,7 @@ export class DesktopCompanionManager {
       this.panelShowRevision = this.panelOpenRevision;
     }
     this.panelVisible = true;
+    this.refreshContextSnapshot(true);
     // Clicks go through the empty room above the card only while the pointer is there.
     this.panel.setIgnoreMouseEvents(false);
     this.positionPanel();
@@ -930,18 +963,133 @@ export class DesktopCompanionManager {
     this.publish();
   }
 
-  private acceptHint(topic: CompanionHintTopic): void {
-    const prompt = companionHintCopyKeys(topic, 0).prompt;
-    if (prompt && !this.draft.prompt.trim()) {
-      this.setDraft({ ...this.draft, prompt: t(prompt) });
-    }
-    this.showPanel(AnalyticsSource.Hint);
+  private openPanelWithAttachments(
+    attachments: DesktopCompanionAttachment[],
+    source: AnalyticsSource = AnalyticsSource.FileDrop,
+    prompt?: string,
+  ): void {
+    const files = [...new Map([...this.draft.attachments, ...attachments].map(file => [file.path, file])).values()].slice(0, MAX_DRAFT_ATTACHMENTS);
+    const nextPrompt = prompt && !this.draft.prompt.trim() ? prompt : this.draft.prompt;
+    this.setDraft({ ...this.draft, attachments: files, prompt: nextPrompt });
+    this.showPanel(source);
   }
 
-  private openPanelWithAttachments(attachments: DesktopCompanionAttachment[], source: AnalyticsSource = AnalyticsSource.FileDrop): void {
-    const files = [...new Map([...this.draft.attachments, ...attachments].map(file => [file.path, file])).values()].slice(0, MAX_DRAFT_ATTACHMENTS);
-    this.setDraft({ ...this.draft, attachments: files });
-    this.showPanel(source);
+  // ── On-demand foreground context ──────────────────────────
+
+  private clearContextSnapshot(): void {
+    this.contextInspectSeq += 1;
+    this.contextSnapshot = null;
+  }
+
+  private refreshContextSnapshot(includeClipboard: boolean): void {
+    const seq = ++this.contextInspectSeq;
+    if (!this.preferences.contextHints) {
+      this.contextSnapshot = null;
+      return;
+    }
+    const category = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
+    const foreground = this.foregroundAppId && category
+      ? { appId: this.foregroundAppId, category, pid: this.foregroundPid }
+      : null;
+    this.contextSnapshot = this.contextInspector.inspectSync(foreground, includeClipboard);
+    if (!foreground) return;
+    void this.contextInspector.resolveActiveFile(foreground).then(activeFile => {
+      if (this.disposing || seq !== this.contextInspectSeq || !this.preferences.contextHints) return;
+      if (!this.panelVisible && !this.isLauncherOpen()) return;
+      if (!activeFile) return;
+      this.contextSnapshot = {
+        ...(this.contextSnapshot ?? { capturedAt: Date.now(), appId: foreground.appId, category: foreground.category }),
+        activeFile,
+      };
+      this.publish();
+    });
+  }
+
+  private async runContextAction(raw: unknown): Promise<DesktopCompanionContextActionResult> {
+    const request = raw as Partial<DesktopCompanionContextActionRequest> | null;
+    if (!request || !isCompanionContextActionId(request.actionId)) {
+      return { success: false, error: t('desktopCompanionContextUnavailable') };
+    }
+    const category = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
+    const action = findCompanionContextAction(request.actionId, this.contextSnapshot, category);
+    if (!action) return { success: false, error: t('desktopCompanionContextUnavailable') };
+    this.analytics.report({
+      action: AnalyticsAction.Action,
+      source: AnalyticsSource.Panel,
+      interactionType: Interaction.ContextAction,
+      ...(category ? { topic: category } : {}),
+    });
+    const prompt = action.promptKey ? t(action.promptKey) : '';
+    switch (action.kind) {
+      case CompanionContextActionKind.Template:
+        return { success: true, prompt };
+      case CompanionContextActionKind.ActiveFile: {
+        const active = this.contextSnapshot?.activeFile;
+        const verified = active ? this.contextInspector.validateLocalFile(active.path) : null;
+        if (!verified) {
+          if (this.contextSnapshot) {
+            this.contextSnapshot = { ...this.contextSnapshot, activeFile: undefined };
+            this.publish();
+          }
+          return { success: false, error: t('desktopCompanionContextUnavailable') };
+        }
+        return {
+          success: true,
+          prompt,
+          attachments: [{
+            path: verified.path,
+            name: verified.name,
+            isImage: verified.isImage,
+            isDirectory: verified.isDirectory,
+          }],
+        };
+      }
+      case CompanionContextActionKind.Clipboard: {
+        if (action.clipboardKind === CompanionContextClipboardKind.Image) {
+          const result = await this.contextInspector.materializeClipboardImage(action.clipboardFingerprint);
+          this.clearSnapshotClipboard(action.clipboardFingerprint);
+          if (!result) return { success: false, error: t('desktopCompanionContextUnavailable') };
+          return { success: true, attachments: [result.attachment] };
+        }
+        const result = this.contextInspector.materializeClipboardText(action.clipboardFingerprint);
+        this.clearSnapshotClipboard(action.clipboardFingerprint);
+        if (!result) return { success: false, error: t('desktopCompanionContextUnavailable') };
+        return { success: true, prompt, pastedText: result.text };
+      }
+      case CompanionContextActionKind.Screenshot:
+        void this.askScreenshot(AnalyticsSource.Panel, prompt || undefined);
+        return { success: true };
+      case CompanionContextActionKind.PickFiles:
+        void this.chooseFiles(AnalyticsSource.Panel, {
+          prompt: prompt || undefined,
+          fileFilter: action.fileFilter,
+          allowDirectory: action.allowDirectory,
+          restorePanelOnCancel: true,
+        });
+        return { success: true };
+      default:
+        return { success: false, error: t('desktopCompanionContextUnavailable') };
+    }
+  }
+
+  private clearSnapshotClipboard(fingerprint?: string): void {
+    if (!this.contextSnapshot?.clipboard) return;
+    if (fingerprint && this.contextSnapshot.clipboard.fingerprint !== fingerprint) return;
+    this.contextSnapshot = { ...this.contextSnapshot, clipboard: undefined };
+    this.publish();
+  }
+
+  private dismissContextClipboard(fingerprint: unknown): void {
+    if (typeof fingerprint !== 'string' || !fingerprint) return;
+    this.contextInspector.dismissClipboard(fingerprint);
+    this.clearSnapshotClipboard(fingerprint);
+    const category = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
+    this.analytics.report({
+      action: AnalyticsAction.Action,
+      source: AnalyticsSource.Panel,
+      interactionType: Interaction.ContextDismiss,
+      ...(category ? { topic: category } : {}),
+    });
   }
 
   // ── Hover launcher ────────────────────────────────────────
@@ -966,6 +1114,29 @@ export class DesktopCompanionManager {
   /** The stage has already closed the launcher; each entry opens what it names. */
   private runLauncherAction(action: CompanionLauncherAction): void {
     switch (action) {
+      case CompanionLauncherAction.ContextFile: {
+        const category = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
+        this.analytics.report({
+          action: AnalyticsAction.Action,
+          source: AnalyticsSource.Launcher,
+          interactionType: Interaction.ContextAction,
+          ...(category ? { topic: category } : {}),
+        });
+        const active = this.contextSnapshot?.activeFile;
+        const verified = active ? this.contextInspector.validateLocalFile(active.path) : null;
+        if (verified) {
+          const prompt = t(activeFileActionCopyKeys(verified).promptKey);
+          this.openPanelWithAttachments([{
+            path: verified.path,
+            name: verified.name,
+            isImage: verified.isImage,
+            isDirectory: verified.isDirectory,
+          }], AnalyticsSource.Launcher, prompt);
+        } else {
+          this.showPanel(AnalyticsSource.Launcher);
+        }
+        return;
+      }
       case CompanionLauncherAction.Ask:
         this.showPanel(AnalyticsSource.Launcher);
         return;
@@ -973,7 +1144,7 @@ export class DesktopCompanionManager {
         void this.askScreenshot(AnalyticsSource.Launcher);
         return;
       case CompanionLauncherAction.Files:
-        void this.chooseFiles();
+        void this.chooseFiles(AnalyticsSource.Launcher);
         return;
       case CompanionLauncherAction.OpenApp:
         this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.OpenMain, hasSession: !!this.sessionId });
@@ -985,7 +1156,15 @@ export class DesktopCompanionManager {
   }
 
   /** Picks files to hand to the quick panel, where the user says what to do with them. */
-  private async chooseFiles(): Promise<void> {
+  private async chooseFiles(
+    source: AnalyticsSource = AnalyticsSource.Launcher,
+    options?: {
+      prompt?: string;
+      fileFilter?: CompanionContextActionFileFilter;
+      allowDirectory?: boolean;
+      restorePanelOnCancel?: boolean;
+    },
+  ): Promise<void> {
     if (this.choosingFiles || this.capturing || this.disposing) return;
     if (this.draft.attachments.length >= MAX_DRAFT_ATTACHMENTS) {
       await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionLauncherFilesFull') });
@@ -995,10 +1174,16 @@ export class DesktopCompanionManager {
     let paths: string[] = [];
     let failed = false;
     try {
-      const result = await dialog.showOpenDialog({
-        title: t('desktopCompanionLauncherFilesTitle'),
-        properties: ['openFile', 'multiSelections'],
-      });
+      const filters = this.fileDialogFilters(options?.fileFilter);
+      const properties: Array<'openFile' | 'openDirectory' | 'multiSelections'> = options?.allowDirectory
+        ? (process.platform === 'darwin' ? ['openFile', 'openDirectory', 'multiSelections'] : ['openDirectory'])
+        : ['openFile', 'multiSelections'];
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: t(options?.allowDirectory ? 'desktopCompanionContextPickFolderTitle' : 'desktopCompanionLauncherFilesTitle'),
+        properties,
+        ...(filters ? { filters } : {}),
+      };
+      const result = await dialog.showOpenDialog(dialogOptions);
       if (!result.canceled) paths = result.filePaths;
     } catch (error) {
       failed = true;
@@ -1006,16 +1191,39 @@ export class DesktopCompanionManager {
     } finally {
       this.choosingFiles = false;
     }
-    const attachments = paths.slice(0, MAX_DRAFT_ATTACHMENTS).map(filePath => ({
-      path: filePath, name: path.basename(filePath), isImage: IMAGE_FILE_PATTERN.test(filePath), isDirectory: false,
-    }));
-    this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.AttachFiles,
+    const attachments = paths.slice(0, MAX_DRAFT_ATTACHMENTS).map(filePath => {
+      let isDirectory = false;
+      try { isDirectory = fs.statSync(filePath).isDirectory(); } catch { /* treat as regular file */ }
+      return {
+        path: filePath,
+        name: path.basename(filePath),
+        isImage: !isDirectory && IMAGE_FILE_PATTERN.test(filePath),
+        isDirectory,
+      };
+    });
+    this.analytics.report({ action: AnalyticsAction.Action, source, interactionType: Interaction.AttachFiles,
       outcome: failed ? AnalyticsOutcome.Failed : attachments.length ? AnalyticsOutcome.Success : AnalyticsOutcome.Cancelled,
       attachmentCount: attachments.length });
-    if (attachments.length && !this.disposing) this.openPanelWithAttachments(attachments, AnalyticsSource.Launcher);
+    if (attachments.length && !this.disposing) this.openPanelWithAttachments(attachments, source, options?.prompt);
+    else if (options?.restorePanelOnCancel && !this.disposing) this.showPanel(source);
   }
 
-  private async askScreenshot(source: AnalyticsSource = AnalyticsSource.ContextMenu): Promise<void> {
+  private fileDialogFilters(filter?: CompanionContextActionFileFilter): Electron.FileFilter[] | undefined {
+    switch (filter) {
+      case CompanionContextActionFileFilter.Spreadsheet:
+        return [{ name: 'Spreadsheets', extensions: ['xlsx', 'xls', 'xlsm', 'csv', 'tsv', 'numbers', 'et', 'ods'] }];
+      case CompanionContextActionFileFilter.Document:
+        return [{ name: 'Documents', extensions: ['doc', 'docx', 'wps', 'pages', 'rtf', 'odt', 'txt', 'md', 'pdf'] }];
+      case CompanionContextActionFileFilter.Pdf:
+        return [{ name: 'PDF', extensions: ['pdf'] }];
+      case CompanionContextActionFileFilter.Presentation:
+        return [{ name: 'Presentations', extensions: ['ppt', 'pptx', 'key', 'dps', 'odp'] }];
+      default:
+        return undefined;
+    }
+  }
+
+  private async askScreenshot(source: AnalyticsSource = AnalyticsSource.ContextMenu, prompt?: string): Promise<void> {
     if (this.capturing || this.disposing) return;
     if (this.draft.attachments.length >= MAX_DRAFT_ATTACHMENTS) {
       await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionScreenshotFull') });
@@ -1049,7 +1257,7 @@ export class DesktopCompanionManager {
       this.capturing = false;
       if (!this.disposing) {
         this.applyActivity();
-        if (attachment) this.openPanelWithAttachments([attachment], source);
+        if (attachment) this.openPanelWithAttachments([attachment], source, prompt);
         else if (restorePanel) this.showPanel();
       }
     }
@@ -1080,26 +1288,24 @@ export class DesktopCompanionManager {
 
   // ── Stage & monitors ──────────────────────────────────────
 
-  private showHint(topic: CompanionHintTopic, variant: number): boolean {
-    if (!this.orb || this.orb.isDestroyed() || !this.orb.isVisible()) return false;
-    return this.stage.showHint(topic, variant);
-  }
-
   private onForegroundChange = (appId: string): void => {
-    this.hints.onForegroundChange(appId);
     this.permissionGuide.onForegroundChange(appId);
     // Clicking a companion surface can activate LobsterAI itself. That must not
     // dismiss the toolbar mid-click or forget which app the user came from.
     const category = categorizeCompanionApp(appId);
     if (category === CompanionAppCategory.Self) return;
     const previous = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
+    if (previous === CompanionAppCategory.Password && category !== CompanionAppCategory.Password) {
+      this.contextInspector.suppressCurrentClipboard();
+    }
     this.foregroundAppId = appId;
+    this.foregroundPid = this.foreground.currentPid ?? null;
     this.selection.onForegroundChange(appId);
     if (previous !== category) this.publish();
   };
 
   private onGlobalDragStart = (event: FileDragStart): void => {
-    if (!this.isPresent() || !this.preferences.dragAssist || this.snooze || this.capturing) return;
+    if (!this.isPresent() || this.snooze || this.capturing) return;
     const files = describeDraggedPaths(event.paths);
     // macOS tells us what is being dragged; ignore apps, archives and other non-documents.
     if (files.length && !files.some(file => isCompanionDocumentKind(file.kind) || file.kind === FileKind.Folder)) return;
@@ -1120,7 +1326,7 @@ export class DesktopCompanionManager {
   };
 
   private onOrbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void {
-    if (!this.isPresent() || !this.preferences.dragAssist || this.snooze || this.capturing) return;
+    if (!this.isPresent() || this.snooze || this.capturing) return;
     if (phase === DesktopCompanionFileDragPhase.Enter) {
       const known = Array.isArray(kinds) ? kinds.filter(kind => Object.values(FileKind).includes(kind)).slice(0, 8) : [];
       this.stage.showDrop(DesktopCompanionDropSource.Orb, this.draggedFiles, known);
@@ -1134,6 +1340,7 @@ export class DesktopCompanionManager {
   // ── Shortcut, menu, IPC ───────────────────────────────────
 
   private registerShortcut(shortcut: string): boolean {
+    if (this.authGateBlocked) return true;
     if (shortcut === this.registeredShortcut) return true;
     if (shortcut && !/(?:^|\+)(?:CommandOrControl|Command|Cmd|Control|Ctrl|Alt|Option)\+/i.test(shortcut)) return false;
     try {
@@ -1144,6 +1351,16 @@ export class DesktopCompanionManager {
     if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
     this.registeredShortcut = shortcut;
     return true;
+  }
+
+  private unregisterShortcut(): void {
+    if (!this.registeredShortcut) return;
+    try {
+      globalShortcut.unregister(this.registeredShortcut);
+    } catch {
+      // Ignore unregister errors when shortcut was already released.
+    }
+    this.registeredShortcut = '';
   }
 
   private companionWindows(): Array<BrowserWindow | null> {
@@ -1296,6 +1513,8 @@ export class DesktopCompanionManager {
         outcome: result.success ? AnalyticsOutcome.Success : AnalyticsOutcome.Failed });
       return result;
     });
+    handle(DesktopCompanionIpc.RunContextAction, value => this.runContextAction(value));
+    handle(DesktopCompanionIpc.DismissContextClipboard, value => this.dismissContextClipboard(value));
 
     const on = (channel: string, callback: (value: unknown, senderId: number) => void) => {
       ipcMain.on(channel, (event, value: unknown) => {

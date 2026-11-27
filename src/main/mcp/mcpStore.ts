@@ -2,30 +2,10 @@ import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
 import { type McpAuthMode, normalizeMcpAuthMode } from '../../shared/mcp/auth';
+import { type McpToolFilter, normalizeMcpToolFilter } from '../../shared/mcp/toolFilter';
 import type { McpLaunchResolution } from './mcpLaunchResolution';
 
-// Per-server MCP tool selection, passed through to OpenClaw's mcp.servers.*.toolFilter.
-// Filtering happens at tool materialization (before the model payload is built), so
-// excluded tools cost zero prompt tokens — measured ~350 tokens per tool schema.
-export interface McpToolFilter {
-  include?: string[];
-  exclude?: string[];
-}
-
-// Keep only non-empty trimmed names; drop the filter entirely when both lists end up empty,
-// so stored config and openclaw.json never carry a meaningless `toolFilter: {}`.
-export function normalizeMcpToolFilter(filter: McpToolFilter | undefined): McpToolFilter | undefined {
-  if (!filter) return undefined;
-  const clean = (list?: string[]): string[] | undefined => {
-    if (!Array.isArray(list)) return undefined;
-    const items = list.map(item => String(item).trim()).filter(Boolean);
-    return items.length > 0 ? items : undefined;
-  };
-  const include = clean(filter.include);
-  const exclude = clean(filter.exclude);
-  if (!include && !exclude) return undefined;
-  return { ...(include ? { include } : {}), ...(exclude ? { exclude } : {}) };
-}
+export { type McpToolFilter, normalizeMcpToolFilter };
 
 const normalizeTimeoutMs = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;

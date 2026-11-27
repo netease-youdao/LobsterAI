@@ -1,8 +1,13 @@
-import { AuthSessionStatus } from '@shared/auth/constants';
+import {
+  AuthAccessPolicy,
+  AuthGateReason,
+  AuthSessionStatus,
+} from '@shared/auth/constants';
 import { describe, expect, test } from 'vitest';
 
 import authReducer, {
   invalidateAuthAccountContext,
+  setAuthAccessState,
   setAuthExpired,
   setAuthTemporarilyUnavailable,
   setLoggedIn,
@@ -155,5 +160,19 @@ describe('auth account scope', () => {
     expect(invalidated.accountGeneration).toBe(2);
     expect(invalidated.quota).toBeNull();
     expect(invalidated.profileSummary).toBeNull();
+  });
+
+  test('stores the resolved auth access state independently of account sign-out', () => {
+    const accessState = {
+      policy: AuthAccessPolicy.LoginRequired,
+      loginRequired: true,
+      blocked: true,
+      reason: AuthGateReason.FirstRun,
+    };
+    const withPolicy = authReducer(undefined, setAuthAccessState(accessState));
+    expect(withPolicy.accessState).toEqual(accessState);
+
+    const loggedOut = authReducer(withPolicy, setLoggedOut());
+    expect(loggedOut.accessState).toEqual(accessState);
   });
 });

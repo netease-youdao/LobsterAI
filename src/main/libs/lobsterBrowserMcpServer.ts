@@ -5,6 +5,7 @@ import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
+import { AgentBrowserNavigation } from '../../shared/browserWebAccess/constants';
 
 const SERVER_FILE_NAME = 'lobster-browser-mcp-server.mjs';
 const RUNTIME_CONFIG_FILE_NAME = 'lobster-browser-mcp-runtime.json';
@@ -98,9 +99,9 @@ const toolDefinitions = [
   ['new_page', { url: { type: 'string' }, timeout: { type: 'number' } }],
   ['select_page', { pageId: { type: 'number' }, bringToFront: { type: 'boolean' } }],
   ['close_page', { pageId: { type: 'number' } }],
-  ['navigate_page', { pageId: { type: 'number' }, type: { type: 'string' }, url: { type: 'string' }, timeout: { type: 'number' } }],
-  ['take_snapshot', { pageId: { type: 'number' }, verbose: { type: 'boolean' } }],
-  ['take_screenshot', { pageId: { type: 'number' }, filePath: { type: 'string' }, format: { type: 'string' }, uid: { type: 'string' }, fullPage: { type: 'boolean' } }],
+  ['navigate_page', { pageId: { type: 'number' }, type: { type: 'string', enum: ${JSON.stringify(Object.values(AgentBrowserNavigation))} }, url: { type: 'string' }, timeout: { type: 'number' } }, 'Open a URL, go back, go forward, or reload. Defaults to the selected page.'],
+  ['take_snapshot', { pageId: { type: 'number' }, verbose: { type: 'boolean' } }, 'Read the current page accessibility tree. Use its element id as the uid for click or fill.'],
+  ['take_screenshot', { pageId: { type: 'number' }, filePath: { type: 'string' }, format: { type: 'string' }, uid: { type: 'string' }, fullPage: { type: 'boolean' } }, 'Capture the page as an image, or save it to the requested filePath.'],
   ['click', { pageId: { type: 'number' }, uid: { type: 'string' }, dblClick: { type: 'boolean' } }],
   ['fill', { pageId: { type: 'number' }, uid: { type: 'string' }, value: { type: 'string' } }],
   ['fill_form', { pageId: { type: 'number' }, elements: { type: 'array', items: { type: 'object' } } }],
@@ -122,7 +123,7 @@ const tools = toolDefinitions
   .filter(([name]) => !credentialOnly || name === '${BrowserCredentialLoginTool.Name}')
   .map(([name, properties, description]) => ({
   name,
-  description: description || 'Operate the LobsterAI in-app browser.',
+  description: description || 'Operate the LobsterAI managed browser.',
   inputSchema: { type: 'object', properties, additionalProperties: true },
   }));
 
@@ -137,7 +138,7 @@ function errorResult(message) {
   };
 }
 
-async function callBridge(name, args) {
+async function callBridge(name, args, signal) {
   if (!bridgeUrl || !bridgeSecret) {
     writeDiagnostic(
       'bridge-unavailable tool=' + JSON.stringify(name)
@@ -150,6 +151,7 @@ async function callBridge(name, args) {
   try {
     response = await fetch(bridgeUrl, {
       method: 'POST',
+      signal,
       headers: {
         'content-type': 'application/json',
         'x-mcp-bridge-secret': bridgeSecret,
@@ -157,6 +159,7 @@ async function callBridge(name, args) {
       body: JSON.stringify({ tool: name, args: args || {} }),
     });
   } catch (error) {
+    if (signal?.aborted) throw error;
     writeDiagnostic(
       'bridge-request-failed tool=' + JSON.stringify(name)
       + ' bridge=' + formatBridgeEndpoint(bridgeUrl)
@@ -187,8 +190,8 @@ async function callBridge(name, args) {
   return payload;
 }
 
-async function callTool(name, args) {
-  const result = await callBridge(name, args);
+async function callTool(name, args, signal) {
+  const result = await callBridge(name, args, signal);
   if (name !== 'take_screenshot' || result?.isError) {
     return result;
   }
@@ -196,18 +199,29 @@ async function callTool(name, args) {
   const imageBase64 = result?.structuredContent?.imageBase64;
   const format = result?.structuredContent?.format === 'jpeg' ? 'jpeg' : 'png';
   const filePath = typeof args?.filePath === 'string' ? args.filePath : '';
-  if (!imageBase64 || !filePath) {
-    return errorResult('LobsterAI browser screenshot data or destination path is missing.');
+  if (!imageBase64) {
+    return errorResult('LobsterAI browser screenshot data is missing.');
   }
-  await fs.writeFile(filePath + '.' + format, Buffer.from(imageBase64, 'base64'));
+  if (!filePath) {
+    return { content: [{ type: 'image', data: imageBase64, mimeType: 'image/' + format }] };
+  }
+  const hasExtension = format === 'jpeg' ? /\.jpe?g$/i.test(filePath) : /\.png$/i.test(filePath);
+  const destination = hasExtension ? filePath : filePath + '.' + format;
+  await fs.writeFile(destination, Buffer.from(imageBase64, 'base64'));
   return {
-    content: [{ type: 'text', text: 'Screenshot saved.' }],
-    structuredContent: { message: 'Screenshot saved.' },
+    content: [{ type: 'text', text: 'Screenshot saved to ' + destination }],
+    structuredContent: { message: 'Screenshot saved.', filePath: destination },
   };
 }
 
+const pendingCalls = new Map();
+
 async function handleRequest(message) {
   if (!message || message.jsonrpc !== '2.0' || !message.method) return;
+  if (message.method === 'notifications/cancelled') {
+    pendingCalls.get(message.params?.requestId)?.abort();
+    return;
+  }
   if (message.method.startsWith('notifications/')) return;
 
   let result;
@@ -224,7 +238,16 @@ async function handleRequest(message) {
     if (typeof name !== 'string' || !tools.some((tool) => tool.name === name)) {
       result = errorResult('Unknown LobsterAI browser tool.');
     } else {
-      result = await callTool(name, message.params?.arguments || {});
+      const controller = new AbortController();
+      pendingCalls.set(message.id, controller);
+      try {
+        result = await callTool(name, message.params?.arguments || {}, controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        throw error;
+      } finally {
+        pendingCalls.delete(message.id);
+      }
     }
   } else if (message.method === 'ping') {
     result = {};

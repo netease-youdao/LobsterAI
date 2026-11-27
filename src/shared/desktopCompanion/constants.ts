@@ -1,8 +1,12 @@
 import type { CompanionAnalyticsEvent } from './analytics';
 import type { CompanionAppCategory } from './appCategories';
+import type {
+  DesktopCompanionContextActionRequest,
+  DesktopCompanionContextActionResult,
+  DesktopCompanionContextSnapshot,
+} from './contextActions';
 import type { CompanionContextMenuBridge, CompanionContextMenuState } from './contextMenu';
 import type { CompanionFileKind } from './fileKinds';
-import type { CompanionHintTopic } from './hintPolicy';
 import type { LanguageToolResume, LanguageToolsBridge, SpeechStatus } from './languageTools';
 import type { CompanionLauncherAction } from './launcher';
 import type { CompanionPermissionGuideBridge } from './permissionGuide';
@@ -56,6 +60,10 @@ export const DesktopCompanionIpc = {
   PanelReady: 'desktop-companion:panel-ready',
   /** A selection or language tools card is about to open sign-in in the browser. */
   LoginStart: 'desktop-companion:login-start',
+  /** Runs a contextual action chip from the quick panel. */
+  RunContextAction: 'desktop-companion:run-context-action',
+  /** Dismisses the currently surfaced clipboard item so it is not offered again. */
+  DismissContextClipboard: 'desktop-companion:dismiss-context-clipboard',
 } as const;
 
 export const DesktopCompanionMainPage = {
@@ -102,8 +110,6 @@ export const DesktopCompanionStoreKey = {
   Draft: 'desktop-companion.draft.v1',
   Session: 'desktop-companion.session.v1',
   Snooze: 'desktop-companion.snooze.v1',
-  HintLedger: 'desktop-companion.hints.v1',
-  Greeted: 'desktop-companion.greeted.v1',
 } as const;
 
 export const CompanionOrbEdge = { Left: 'left', Right: 'right' } as const;
@@ -127,7 +133,6 @@ export interface DesktopCompanionPreferences {
   shortcut: string;
   skin: string;
   selectionToolbar: boolean;
-  dragAssist: boolean;
   contextHints: boolean;
   selectionExcludedApps: string[];
   selectionToolbarOrder: CompanionToolbarItem[];
@@ -147,7 +152,7 @@ export interface DesktopCompanionDraft {
   selectionContext?: CompanionSelectionTaskContext;
 }
 
-export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop', Task: 'task', Launcher: 'launcher' } as const;
+export const DesktopCompanionStageKind = { None: 'none', Drop: 'drop', Task: 'task', Launcher: 'launcher' } as const;
 export type DesktopCompanionStageKind = typeof DesktopCompanionStageKind[keyof typeof DesktopCompanionStageKind];
 
 export const DesktopCompanionStageSide = { Left: 'left', Right: 'right' } as const;
@@ -167,7 +172,6 @@ export interface DesktopCompanionDropFile {
 
 export type DesktopCompanionStage =
   | { kind: typeof DesktopCompanionStageKind.None }
-  | { kind: typeof DesktopCompanionStageKind.Hint; id: string; topic: CompanionHintTopic; variant: number }
   | {
     kind: typeof DesktopCompanionStageKind.Drop;
     id: string;
@@ -210,6 +214,8 @@ export interface DesktopCompanionState {
   contextMenu: CompanionContextMenuState | null;
   fileDragActive: boolean;
   foreground: DesktopCompanionForeground | null;
+  /** On-demand foreground context snapshot captured when opening the quick panel or hover launcher. */
+  context: DesktopCompanionContextSnapshot | null;
   capabilities: DesktopCompanionCapabilities;
 }
 
@@ -220,10 +226,6 @@ export interface DesktopCompanionResult {
 }
 
 export const DesktopCompanionStageCommandType = {
-  HintAccept: 'hint-accept',
-  HintDismiss: 'hint-dismiss',
-  HintMute: 'hint-mute',
-  HintTimeout: 'hint-timeout',
   StageHover: 'stage-hover',
   DropAsk: 'drop-ask',
   DropStarted: 'drop-started',
@@ -234,10 +236,6 @@ export const DesktopCompanionStageCommandType = {
 } as const;
 
 export type DesktopCompanionStageCommand =
-  | { type: typeof DesktopCompanionStageCommandType.HintAccept }
-  | { type: typeof DesktopCompanionStageCommandType.HintDismiss }
-  | { type: typeof DesktopCompanionStageCommandType.HintMute }
-  | { type: typeof DesktopCompanionStageCommandType.HintTimeout }
   | { type: typeof DesktopCompanionStageCommandType.StageHover; hovering: boolean }
   | { type: typeof DesktopCompanionStageCommandType.DropAsk; attachments: DesktopCompanionAttachment[] }
   | { type: typeof DesktopCompanionStageCommandType.DropStarted; sessionId: string }
@@ -377,6 +375,8 @@ export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionSc
   abortQuickAnswer(requestId: string): Promise<void>;
   requestPermission(permission: CompanionPermission): Promise<DesktopCompanionState>;
   copyText(text: string): Promise<CompanionCopyResult>;
+  runContextAction(request: DesktopCompanionContextActionRequest): Promise<DesktopCompanionContextActionResult>;
+  dismissContextClipboard(fingerprint: string): Promise<void>;
   onChanged(callback: (state: DesktopCompanionState) => void): () => void;
   onSelection(callback: (selection: DesktopCompanionSelection | null) => void): () => void;
   onQuickAnswer(callback: (event: CompanionQuickAnswerEvent) => void): () => void;
@@ -388,7 +388,6 @@ export const DEFAULT_DESKTOP_COMPANION_PREFERENCES: DesktopCompanionPreferences 
   shortcut: 'Alt+Space',
   skin: DEFAULT_COMPANION_SKIN,
   selectionToolbar: true,
-  dragAssist: true,
   contextHints: true,
   selectionExcludedApps: [],
   selectionToolbarOrder: [...DEFAULT_COMPANION_TOOLBAR_ORDER],
@@ -423,12 +422,11 @@ export const DesktopCompanionSize = {
   ComposerLogin: { width: 824, height: 412 },
   PanelCompactHeight: 280,
   Task: { width: 420, height: 112 },
-  Hint: { width: 320, height: 168 },
-  // The hover launcher: a 232px action card over an input-shaped button, plus the shadow margin.
-  Launcher: { width: 276, height: 260 },
+  // The hover launcher: a 232px action card (plus optional 1-row active file shortcut) over an input-shaped button, plus the shadow margin.
+  Launcher: { width: 276, height: 304 },
   // A 420px card with generous drop targets, plus its transparent shadow margin.
   Drop: { width: 464, height: 188 },
-  // A 48px toolbar plus the margin; the window always reserves ToolbarMenu space below or above it.
+  // A 34px toolbar (or multi-line copy notice) plus the shadow margin; the window always reserves ToolbarMenu space below or above it.
   Toolbar: { width: 680, height: 92 },
   ToolbarMenu: 200,
   // A card up to 400 × 600 plus the margin.
@@ -441,10 +439,12 @@ export const DesktopCompanionSize = {
   SurfacePad: 22,
   Margin: 12,
   Gap: 6,
+  /** Breathing room between the floating selection toolbar and the selected line. */
+  ToolbarGap: 8,
 } as const;
 
 export const DesktopCompanionTiming = {
-  HintAutoDismissMs: 12_000,
+  TaskAutoDismissMs: 12_000,
   DropExpandDelayMs: 180,
   DropProximityPollMs: 60,
   DropLingerMs: 450,

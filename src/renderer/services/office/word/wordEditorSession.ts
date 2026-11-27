@@ -10,6 +10,7 @@ import { WORD_PACKAGE_LIMITS, type WordPackageInfo } from '../../../../shared/of
 import { i18nService } from '../../i18n';
 import { createOfficeEditorRegistry } from '../core/officeEditorRegistry';
 import { OfficeEditorSession, type OfficeSessionContext } from '../core/officeEditorSession';
+import { consumeOfficeAutoFocus } from '../officeFormats';
 import { WordCompositionTracker } from './wordComposition';
 import { createWordFontResolver, prepareWordLayout, type WordFontReportEntry } from './wordFonts';
 import { prepareWordImage, WordImageError } from './wordImages';
@@ -19,6 +20,16 @@ const EDITOR_MODE = { Edit: 'edit', View: 'view' } as const;
 /** How `getEditingMode()` names the viewing mode set through `EDITOR_MODE.View`. */
 const ENGINE_VIEWING_MODE = 'viewing';
 const ZOOM_MODE = { Fit: 'fit', Fixed: 'fixed' } as const;
+/**
+ * Fit the full page width on open and resize, capping at 100% on wide panels and allowing
+ * narrow side panels to scale down to 50% so the entire page remains visible without clipping.
+ */
+export const WORD_DEFAULT_ZOOM_MODE = {
+  type: ZOOM_MODE.Fit,
+  fit: 'pageWidth',
+  minZoom: 0.5,
+  maxZoom: 1,
+} as const;
 const SHAPED_MEASURER = 'shaped';
 const CARET_SELECTOR = '.docx-editor-one-surface__caret';
 const SCROLL_CONTAINER_SELECTOR = '.docx-editor__scroll-container';
@@ -32,9 +43,99 @@ const TYPING_WINDOW_MS = 1_000;
 /** Room kept below the caret while typing: a fifth of the viewport, within these bounds. */
 const CARET_ROOM = { ratio: 0.2, min: 48, max: 160 } as const;
 const AUTOSAVE_DELAY_MS = 700;
+const LOAD_TIMEOUT_MS = 30_000;
+const LOAD_FALLBACK_POLL_MS = 50;
 /** The Word bridge, with the installed-font calls next to the shared file channels. */
 const wordBridge = () => window.electron.artifact.office.word;
 const HistorySlot = { Undo: 'history.undo', Redo: 'history.redo' } as const;
+
+let cachedZhLocaleStrings: LocaleStrings | undefined;
+const zhLocaleStrings = (): LocaleStrings => {
+  cachedZhLocaleStrings ??= deepMerge(en, zhCN) as LocaleStrings;
+  return cachedZhLocaleStrings;
+};
+
+/** Subset of DocxEditorInstance needed to wait until opening and shaped font resolution finish. */
+export interface WordEditorReadyTarget {
+  snapshot: () => Pick<EditorSnapshot, 'parseError' | 'isLoading' | 'isOpening' | 'editable'>;
+  fontMeasurement: () => { resolving: boolean; measurer: string };
+  setMode: (mode: typeof EDITOR_MODE[keyof typeof EDITOR_MODE]) => void;
+  on: (event: 'change' | 'selectionChange' | 'error', listener: () => void) => () => void;
+}
+
+/**
+ * Wait until `editor.load(bytes)` finishes opening and shaped-font resolution.
+ *
+ * Engine events (`change`, `selectionChange`) can fire synchronously inside `load()` before
+ * font resolution is marked `resolving = true`, and `setMode()` itself emits `selectionChange`.
+ * Checks therefore run in a coalesced microtask with a re-entrancy guard.
+ */
+export function waitForWordEditorReady(
+  editor: WordEditorReadyTarget,
+  options: { locked: boolean; timeoutMs?: number; fallbackPollMs?: number },
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? LOAD_TIMEOUT_MS;
+  const fallbackPollMs = options.fallbackPollMs ?? LOAD_FALLBACK_POLL_MS;
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let scheduled = false;
+    let checking = false;
+    const cleanup = () => {
+      stopChange();
+      stopSelection();
+      stopError();
+      clearInterval(fallbackTimer);
+      clearTimeout(timeoutTimer);
+    };
+    const done = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+    const check = () => {
+      scheduled = false;
+      if (settled || checking) return;
+      const state = editor.snapshot();
+      if (state.parseError) {
+        done(new Error(state.parseError));
+        return;
+      }
+      if (!state.isLoading && !state.isOpening && !editor.fontMeasurement().resolving) {
+        // Review or protected content is shown as it is, without an editing check.
+        if (options.locked) {
+          done();
+          return;
+        }
+        checking = true;
+        try {
+          // snapshot.editable includes the current viewing mode, not just file capability.
+          editor.setMode(EDITOR_MODE.Edit);
+          if (!editor.snapshot().editable || editor.fontMeasurement().measurer !== SHAPED_MEASURER) {
+            editor.setMode(EDITOR_MODE.View);
+            done(new Error('Document cannot be edited with shaped fonts'));
+            return;
+          }
+          done();
+        } finally {
+          checking = false;
+        }
+      }
+    };
+    const scheduleCheck = () => {
+      if (settled || scheduled || checking) return;
+      scheduled = true;
+      queueMicrotask(check);
+    };
+    const stopChange = editor.on('change', scheduleCheck);
+    const stopSelection = editor.on('selectionChange', scheduleCheck);
+    const stopError = editor.on('error', scheduleCheck);
+    const fallbackTimer = setInterval(scheduleCheck, fallbackPollMs);
+    const timeoutTimer = setTimeout(() => done(new Error('Word editor opening timed out')), timeoutMs);
+    scheduleCheck();
+  });
+}
 
 /** One edit made of several engine undo steps (an agent call, a table at the caret), undone and redone together. */
 interface EditStepGroup {
@@ -117,14 +218,17 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
   private notify = (): void => { this.listeners.forEach(listener => listener()); };
 
   async load(bytes: Uint8Array): Promise<void> {
+    const startedAt = performance.now();
     await prepareWordLayout();
+    const layoutReadyAt = performance.now();
     if (!this.editor) {
       this.editor = createDocxEditor({
-        container: this.host, mode: EDITOR_MODE.View, zoomMode: 'auto',
+        container: this.host, mode: EDITOR_MODE.View, zoomMode: WORD_DEFAULT_ZOOM_MODE,
         // Resolved per load from the families the parsed document names; see wordFonts.ts.
         fonts: createWordFontResolver({
           api: wordBridge(),
           declarations: () => this.document.packageInfo.fonts,
+          activeFonts: () => this.document.packageInfo.activeFonts,
           onReport: report => { this.fontReport = report; this.notify(); },
         }),
         onFontError: error => { console.warn('[WordEditor] Font rejected:', error.code, error.request?.family); },
@@ -132,7 +236,7 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
       const syncLocale = () => {
         const locale = i18nService.getLanguage() === 'zh' ? 'zh-CN' : 'en';
         this.editor?.setLocale(locale);
-        const translate = createT(locale === 'zh-CN' ? deepMerge(en, zhCN) as LocaleStrings : en, locale);
+        const translate = createT(locale === 'zh-CN' ? zhLocaleStrings() : en, locale);
         this.editor?.setTranslate((key, params) => translate(key as TranslationKey, params));
       };
       syncLocale();
@@ -147,30 +251,19 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
       });
       this.stopError = this.editor.on('error', error => { console.warn('[WordEditor] Editor rejected an operation:', error); });
     }
-    this.editor.setMode(EDITOR_MODE.View);
-    this.editor.load(bytes);
+    const editor = this.editor;
+    editor.setMode(EDITOR_MODE.View);
+    editor.load(bytes);
     this.packageBytes = bytes.byteLength;
-    // Opening and font admission both run asynchronously, including for embedded fonts.
-    const deadline = Date.now() + 30000;
-    while (true) {
-      const state = this.editor.snapshot();
-      if (state.parseError) throw new Error(state.parseError);
-      if (!state.isLoading && !state.isOpening && !this.editor.fontMeasurement().resolving) {
-        // Review or protected content is shown as it is, without an editing check.
-        if (this.document.locked) break;
-        // snapshot.editable includes the current viewing mode, not just file capability.
-        this.editor.setMode(EDITOR_MODE.Edit);
-        if (!this.editor.snapshot().editable || this.editor.fontMeasurement().measurer !== SHAPED_MEASURER) {
-          this.editor.setMode(EDITOR_MODE.View);
-          throw new Error('Document cannot be edited with shaped fonts');
-        }
-        break;
-      }
-      if (Date.now() > deadline) throw new Error('Word editor opening timed out');
-      await new Promise(resolve => setTimeout(resolve, 30));
-    }
-    this.editor.setMode(this.readOnly || this.document.locked ? EDITOR_MODE.View : EDITOR_MODE.Edit);
+    await waitForWordEditorReady(editor, { locked: this.document.locked });
+    editor.setMode(this.readOnly || this.document.locked ? EDITOR_MODE.View : EDITOR_MODE.Edit);
     this.notify();
+    console.debug(
+      `[WordTiming] session.load (${(bytes.byteLength / 1024).toFixed(1)} KB): `
+      + `harfBuzz=${Math.round(layoutReadyAt - startedAt)}ms, `
+      + `engineAndFonts=${Math.round(performance.now() - layoutReadyAt)}ms, `
+      + `total=${Math.round(performance.now() - startedAt)}ms`,
+    );
   }
 
   async save(): Promise<Uint8Array> {
@@ -309,11 +402,24 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
       // Moving the live plane changes its scroll viewport. Rebind core's fit
       // observer without reopening bytes or replacing the undo history.
       if (mode?.type === ZOOM_MODE.Fit) {
+        const zoomBefore = this.editor?.getZoom();
         this.editor?.setZoomMode({ type: ZOOM_MODE.Fixed });
         this.editor?.setZoomMode(mode);
+        if (this.editor?.getZoom() === zoomBefore) {
+          this.editor?.relayout();
+        }
+      } else {
+        this.editor?.relayout();
       }
-      this.editor?.relayout();
       this.composition.caretMoved();
+      if (
+        !this.readOnly
+        && !this.document.locked
+        && this.editor?.snapshot().editable
+        && consumeOfficeAutoFocus(this.document.file.filePath, this.aliases)
+      ) {
+        this.editor.focus();
+      }
     });
     return () => { cancelAnimationFrame(frame); };
   }
@@ -337,6 +443,14 @@ const registry = createOfficeEditorRegistry<WordPackageInfo, WordEditorSession>(
   hotKey: 'wordEditorRegistry',
 });
 
-export const acquireWordEditor = registry.acquire;
+export const acquireWordEditor = (filePath: string) => {
+  const startedAt = performance.now();
+  // Overlap HarfBuzz WASM loading with main-process file opening if prewarm has not finished yet.
+  void prepareWordLayout().catch(() => undefined);
+  return registry.acquire(filePath).finally(() => {
+    console.debug(`[WordTiming] acquireWordEditor finished in ${Math.round(performance.now() - startedAt)}ms`);
+  });
+};
 /** Route refreshes through the live session instead of replacing its Redux artifact bytes. */
 export const refreshOpenWordEditor = registry.refresh;
+export const closeOpenWordEditor = registry.close;

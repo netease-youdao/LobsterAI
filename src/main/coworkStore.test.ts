@@ -22,7 +22,12 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
-import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
+import {
+  AgentId,
+  AgentModelSelectionMode,
+  AgentSource,
+  SubagentCollaborationMode,
+} from '../shared/agent/constants';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
@@ -31,10 +36,11 @@ import {
 } from '../shared/cowork/constants';
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
+import { DshPermissionPreset } from '../shared/dshEngine/hostConstants';
 import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
-import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { buildCoworkContinuityCapsule, ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
@@ -143,7 +149,9 @@ function setupDb(): void {
       icon TEXT NOT NULL DEFAULT '',
       icon_customized INTEGER,
       skill_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}',
       subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_allow_agent_ids_snapshot TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
       pinned INTEGER NOT NULL DEFAULT 0,
       pin_order INTEGER,
@@ -493,13 +501,32 @@ test('getSessionMessageRailIndex numbers visible messages by full message order'
   insertMessage('corrupt-4', sid, 'assistant', 'answer with corrupt metadata', '{broken', 5);
   insertMessage('blank-5', sid, 'assistant', '   ', null, 6);
   insertMessage('user-6', sid, 'user', 'follow up', null, 7);
+  insertMessage(
+    'user-image-only-7',
+    sid,
+    'user',
+    '',
+    JSON.stringify({ localMediaAttachments: [{ localPath: '/tmp/weixin.png', mimeType: 'image/png' }] }),
+    8,
+  );
 
   expect(store.getSessionMessageRailIndex(sid).map(item => [item.messageId, item.messageOffset, item.sequence]))
-    .toEqual([['user-0', 0, 1], ['assistant-3', 3, 4], ['corrupt-4', 4, 5], ['user-6', 6, 7]]);
+    .toEqual([
+      ['user-0', 0, 1],
+      ['assistant-3', 3, 4],
+      ['corrupt-4', 4, 5],
+      ['user-6', 6, 7],
+      ['user-image-only-7', 7, 8],
+    ]);
   expect(store.getSessionMessageRailIndex(sid)[1]).toMatchObject({
     type: 'assistant',
     preview: 'visible answer',
     contentLen: 'visible answer'.length,
+  });
+  expect(store.getSessionMessageRailIndex(sid)[4]).toMatchObject({
+    type: 'user',
+    preview: 'Turn 5',
+    contentLen: 0,
   });
 });
 
@@ -673,6 +700,61 @@ test('listFilteredSessions combines status, session ids and time across all agen
   expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
 });
 
+test('listFilteredSessions pinnedOnly returns pinned tasks across agents newest-pinned first with cwd', () => {
+  insertSession('legacy-null-pin', 'main', 'Legacy pin', 4000, 1, null);
+  insertSession('first-pin', 'main', 'First pin', 1000);
+  insertSession('second-pin', 'writer', 'Second pin', 2000);
+  insertSession('unpinned', 'main', 'Unpinned', 5000);
+  db.prepare('UPDATE cowork_sessions SET cwd = ?, fork_git_branch = ? WHERE id = ?')
+    .run('/Users/demo/Dev/lobsterai', 'feat/pinned-sidebar', 'second-pin');
+
+  const firstOrder = store.setSessionPinned('first-pin', true);
+  const secondOrder = store.setSessionPinned('second-pin', true);
+
+  expect(firstOrder).not.toBeNull();
+  expect(secondOrder).not.toBeNull();
+  expect(secondOrder!).toBeGreaterThan(firstOrder!);
+
+  const pinned = store.listFilteredSessions({ pinnedOnly: true });
+  expect(pinned.map((session) => session.id)).toEqual([
+    'second-pin',
+    'first-pin',
+    'legacy-null-pin',
+  ]);
+  expect(pinned[0]?.cwd).toBe('/Users/demo/Dev/lobsterai');
+  expect(pinned[0]?.forkGitBranch).toBe('feat/pinned-sidebar');
+
+  // Chronological preview mode keeps per-agent list ordered purely by recency.
+  const chronological = store.listSessions(10, 0, 'main', { pinnedFirst: false });
+  expect(chronological.map((session) => session.id)).toEqual([
+    'unpinned',
+    'legacy-null-pin',
+    'first-pin',
+  ]);
+});
+
+test('reorderPinnedSessions persists manual order without mutating updated_at and keeps new pins on top', () => {
+  insertSession('pin-a', 'main', 'Pin A', 1000);
+  insertSession('pin-b', 'writer', 'Pin B', 2000);
+  insertSession('pin-c', 'main', 'Pin C', 3000);
+  insertSession('pin-d', 'main', 'Pin D', 4000);
+
+  store.setSessionPinned('pin-a', true);
+  store.setSessionPinned('pin-b', true);
+  store.setSessionPinned('pin-c', true);
+
+  // Move pin-a first, pin-c second, omit pin-b (should remain appended at end).
+  const reordered = store.reorderPinnedSessions(['pin-a', 'pin-c']);
+  expect(reordered.map((session) => session.id)).toEqual(['pin-a', 'pin-c', 'pin-b']);
+  expect(reordered.find((session) => session.id === 'pin-a')?.updatedAt).toBe(1000);
+  expect(reordered.find((session) => session.id === 'pin-c')?.updatedAt).toBe(3000);
+
+  // Pinning a new session still places it above the saved manual order.
+  store.setSessionPinned('pin-d', true);
+  const afterNewPin = store.listFilteredSessions({ pinnedOnly: true });
+  expect(afterNewPin.map((session) => session.id)).toEqual(['pin-d', 'pin-a', 'pin-c', 'pin-b']);
+});
+
 test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
   insertSession('older', 'main', 'Ski poster', 1000);
   insertSession('newer', 'main', 'Jacket edit', 2000);
@@ -749,6 +831,7 @@ test('scheduled task sessions preserve their task id in session details and list
 
   expect(session.scheduledTaskId).toBe('job-daily-summary');
   expect(store.getSession(session.id)?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.getSession(session.id)?.userQuestionsDisabled).toBe(true);
   expect(store.listSessions(10, 0, 'main')[0]?.scheduledTaskId).toBe('job-daily-summary');
   expect(store.searchSessions({ query: 'Daily summary' })[0]?.scheduledTaskId).toBe(
     'job-daily-summary',
@@ -767,8 +850,9 @@ test('scheduled task sessions preserve their task id in session details and list
 
 test('list and search session summaries include IM platform from mappings', () => {
   insertSession('weixin-session', 'main', '[微信] group:o9cq', 2_000);
+  insertSession('popo-group', 'main', '[POPO] group:8054099', 3_000);
   insertSession('regular-session', 'main', '[微信] user-written title', 1_000);
-  db.prepare(
+  const mapSession = db.prepare(
     `INSERT INTO im_session_mappings (
       im_conversation_id,
       platform,
@@ -778,7 +862,8 @@ test('list and search session summaries include IM platform from mappings', () =
       created_at,
       last_active_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  );
+  mapSession.run(
     'group:o9cq',
     'weixin',
     'weixin-session',
@@ -787,9 +872,12 @@ test('list and search session summaries include IM platform from mappings', () =
     1_000,
     2_000,
   );
+  mapSession.run('8054099', 'popo:instance-a', 'popo-group', 'main', null, 3_000, 3_000);
 
   const listed = store.listSessions(10, 0);
   expect(listed.find((session) => session.id === 'weixin-session')?.imPlatform).toBe('weixin');
+  expect(listed.find((session) => session.id === 'popo-group')?.imPlatform).toBe('popo');
+  expect(store.getSession('popo-group')?.imPlatform).toBe('popo');
   expect(listed.find((session) => session.id === 'regular-session')?.imPlatform).toBeNull();
 
   const searched = store.searchSessions({ query: 'group:o9cq', limit: 10, offset: 0 });
@@ -812,6 +900,57 @@ test('scheduled task session lookup uses a stable newest-created top-level sessi
 
   expect(store.getSessionIdByScheduledTaskId('job-daily-summary', 'main'))
     .toBe('newer-session');
+});
+
+test('folds prior runs once by task and agent, retaining original transcripts and pinning', () => {
+  const traceId = 'c'.repeat(32);
+  for (const [id, agent, time] of [
+    ['old', null, 100], ['middle', '', 200], ['latest', 'main', 300],
+    ['other-agent', 'ops', 400], ['other-task', 'main', 500], ['fork', 'main', 600],
+  ] as const) {
+    insertSession(id, agent, 'Same name', time, id === 'old' ? 1 : 0);
+    db.prepare('UPDATE cowork_sessions SET scheduled_task_id = ?, parent_session_id = ? WHERE id = ?')
+      .run(id === 'other-task' ? 'job-2' : 'job', id === 'fork' ? 'old' : null, id);
+    insertMessage(id + '-user', id, 'user', id, id === 'old' ? JSON.stringify({ llmTrace: { traceId } }) : null, 1);
+    insertMessage(id + '-reply', id, 'assistant', 'same reply', id === 'middle' ? '{broken' : null, 2);
+  }
+  const migrated = new CoworkStore(db);
+  expect(migrated.countSessions()).toBe(4);
+  expect(migrated.listSessions(10).map(s => s.id).sort()).toEqual(['fork', 'latest', 'other-agent', 'other-task']);
+  expect(migrated.listFilteredSessions({ pinnedOnly: true }).map(s => s.id)).toEqual(['latest']);
+  const expected = ['old', 'same reply', 'middle', 'same reply', 'latest', 'same reply'];
+  expect(migrated.getSession('latest')?.messages.map(m => m.content)).toEqual(expected);
+  expect(migrated.getSession('old')?.messages.map(m => m.id)).toEqual(['old-user', 'old-reply']);
+  expect(migrated.findUserMessageByTrace(traceId)?.message.id).toBe('old-user');
+  expect(new CoworkStore(db).getSession('latest')?.messages.map(m => m.content)).toEqual(expected);
+  migrated.deleteSession('latest');
+  expect(migrated.getSessionIdByScheduledTaskId('job', 'main')).toBeNull();
+  expect(migrated.getSession('old')?.messages).toHaveLength(2);
+});
+
+test('reuses the conversation after task edits and reads the selected run beyond the chat page', () => {
+  const options = { taskId: 'job', agentId: 'main', title: 'Daily', cwd: '/one', modelOverride: 'a/one' };
+  const id = store.prepareScheduledTaskSession(options);
+  store.updateSession(id, { title: 'My report' });
+  const sameId = store.prepareScheduledTaskSession({ ...options, cwd: '/two', modelOverride: undefined });
+  expect(sameId).toBe(id);
+  expect(store.getSession(id, 0)).toMatchObject({ title: 'My report', cwd: '/two', modelOverride: '' });
+  const message = (seq: number, type: string, content: string, requestId?: string) =>
+    insertMessage('msg-' + seq, id, type, content, requestId ? JSON.stringify({ requestId }) : null, seq, seq);
+  message(1, 'user', 'prompt one', 'run-1');
+  for (let i = 2; i <= 120; i++) message(i, 'assistant', 'first result');
+  message(121, 'user', 'prompt two', 'run-2');
+  message(122, 'assistant', 'second result');
+  message(123, 'user', 'manual follow-up', 'manual');
+  expect(store.getScheduledRunSession(id, 'run-1')?.messages).toHaveLength(120);
+  expect(store.getScheduledRunSession(id, 'run-2')?.messages.map(m => m.id)).toEqual(['msg-121', 'msg-122']);
+  expect(store.getScheduledRunSummary(id, 'run-2')).toBe('second result');
+  message(124, 'user', 'no answer', 'run-3');
+  insertMessage('thinking', id, 'assistant', 'reasoning', '{"isThinking":true}', 125);
+  expect(store.getScheduledRunSummary(id, 'run-3')).toBe('');
+  store.updateSession(id, { status: 'running' });
+  expect(() => store.prepareScheduledTaskSession(options)).toThrow();
+  expect(store.getSession(id, 0)?.cwd).toBe('/two');
 });
 
 test('searchSessions preserves pinned ordering and pagination', () => {
@@ -1000,6 +1139,24 @@ test('forkSession copies the source continuity capsule to the forked session', (
   expect(capsule?.revision).toBe(1);
   expect(capsule?.lastSource).toBe(ContinuityCapsuleSource.Fork);
   expect(capsule?.currentObjective).toBe('Keep context after compaction.');
+});
+
+test('a message fork builds its continuity capsule from the copied prefix', () => {
+  const parent = store.createSession('Source', '/tmp');
+  store.addMessage(parent.id, { type: 'user', content: 'Prepare a summary of the blue folder.' });
+  const cut = store.addMessage(parent.id, { type: 'assistant', content: 'The blue-folder summary is ready.' });
+  store.addMessage(parent.id, { type: 'user', content: 'Now use the later red folder.' });
+  store.upsertContinuityCapsule(parent.id, buildCoworkContinuityCapsule({
+    sessionId: parent.id,
+    source: ContinuityCapsuleSource.PostRun,
+    messages: store.getSession(parent.id)!.messages,
+  }));
+  const child = store.forkSession({ sourceSessionId: parent.id, forkedFromMessageId: cut.id });
+  const capsule = store.getContinuityCapsule(child.id);
+  expect(capsule?.currentObjective).toContain('blue folder');
+  expect(capsule?.lastSourceMessageId).toBe(child.messages[child.messages.length - 1].id);
+  expect(JSON.stringify(capsule)).not.toContain('red folder');
+  expect(store.getContinuityCapsule(parent.id)?.currentObjective).toContain('red folder');
 });
 
 test('main agent lists legacy sessions with null agent id', () => {
@@ -2115,4 +2272,79 @@ test('sidebar hides historical self-spawns while preserving expert work, forks a
   expect(store.countSearchSessions({ query: 'child' })).toBe(2);
   expect(store.countSearchSessions({ query: 'child', agentId: 'main' })).toBe(1);
   expect(store.getSession(self.id)?.id).toBe(self.id);
+});
+
+test('agent CRUD persists subagentCollaborationMode and defaults new agents to all', () => {
+  const defaultAgent = store.createAgent({ id: 'translator', name: '翻译专家' });
+  expect(defaultAgent.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(defaultAgent.subagentAllowAgentIds).toEqual([]);
+
+  const restricted = store.createAgent({
+    id: 'blog-publisher',
+    name: '博客自动发布',
+    subagentCollaborationMode: SubagentCollaborationMode.Allowlist,
+    subagentAllowAgentIds: ['translator'],
+  });
+  expect(restricted.subagentCollaborationMode).toBe(SubagentCollaborationMode.Allowlist);
+  expect(restricted.subagentAllowAgentIds).toEqual(['translator']);
+
+  const updated = store.updateAgent('blog-publisher', {
+    subagentCollaborationMode: SubagentCollaborationMode.Disabled,
+  });
+  expect(updated?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Disabled);
+  expect(updated?.subagentAllowAgentIds).toEqual(['translator']);
+});
+
+test('persists per-session permissionPreset independently, copies on fork, and survives reload', () => {
+  const sessionA = store.createSession('Session A', '/tmp/a', '', 'local', [], 'main', '', {
+    permissionPreset: DshPermissionPreset.FullAccess,
+  });
+  const sessionB = store.createSession('Session B', '/tmp/b', '', 'local', [], 'main');
+
+  expect(sessionA.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+  expect(sessionB.permissionPreset).toBeNull();
+
+  store.updateSession(sessionB.id, { permissionPreset: DshPermissionPreset.ReadOnly });
+
+  // Reload store on same DB and confirm both sessions keep isolated persisted presets.
+  const reloaded = new CoworkStore(db);
+  expect(reloaded.getSession(sessionA.id)?.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+  expect(reloaded.getSession(sessionB.id)?.permissionPreset).toBe(DshPermissionPreset.ReadOnly);
+
+  // Forking a session preserves its explicit permission preset.
+  const forked = reloaded.forkSession({ sourceSessionId: sessionA.id, title: 'Forked A' });
+  expect(forked.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+
+  // Clearing back to null falls back to default preset inheritance.
+  reloaded.updateSession(sessionA.id, { permissionPreset: null });
+  expect(reloaded.getSession(sessionA.id)?.permissionPreset).toBeNull();
+  expect(reloaded.getSession(sessionB.id)?.permissionPreset).toBe(DshPermissionPreset.ReadOnly);
+});
+
+test('getSession populates imPlatform from im_session_mappings and returns null for desktop chats', () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS im_session_mappings (
+      im_conversation_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      cowork_session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL DEFAULT 'main',
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      PRIMARY KEY (im_conversation_id, platform, agent_id)
+    )
+  `);
+  const desktop = store.createSession('Desktop chat', '/tmp/desktop', '', 'local', [], 'main');
+  const imSession = store.createSession('[飞书] Alice', '/tmp/im', '', 'local', [], 'main');
+  db.prepare(
+    'INSERT INTO im_session_mappings (im_conversation_id, platform, cowork_session_id, agent_id, created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run('feishu:dm:ou_1', 'feishu', imSession.id, 'main', 1000, 2000);
+
+  expect(desktop.imPlatform).toBeNull();
+  expect(store.getSession(desktop.id)?.imPlatform).toBeNull();
+  expect(store.getSession(imSession.id)?.imPlatform).toBe('feishu');
+  expect(store.getSession(desktop.id)?.userQuestionsDisabled).toBe(false);
+  expect(store.getSession(imSession.id)?.userQuestionsDisabled).toBe(true);
+
+  db.prepare('UPDATE im_session_mappings SET platform = ? WHERE cowork_session_id = ?').run('feishu:bot-2', imSession.id);
+  expect(store.getSession(imSession.id)?.userQuestionsDisabled).toBe(true);
 });

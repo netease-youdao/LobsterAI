@@ -76,6 +76,12 @@ export const getSkillStoreUrl = (): string => (
     : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store'
 );
 
+export const getMcpMarketplaceUrl = (): string => (
+  isTestModeEnabled()
+    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace'
+    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
+);
+
 // Portal 页面
 const PORTAL_BASE_TEST = 'https://lobsterai.inner.youdao.com/portal#';
 const PORTAL_BASE_PROD = 'https://lobsterai.youdao.com/portal#';

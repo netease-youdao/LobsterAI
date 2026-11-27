@@ -1,3 +1,5 @@
+import { AgentId } from '@shared/agent/constants';
+
 import type { Skill } from '../types/skill';
 
 /**
@@ -62,6 +64,29 @@ export function recordSkillPickerUse(skillId: string): void {
   }
 }
 
+export interface SkillPickerAgentScope {
+  id?: string;
+  skillIds?: readonly string[];
+}
+
+/**
+ * Restrict skills shown in the composer picker to the active expert's bound
+ * `skillIds` when the active agent is a restricted non-main expert.
+ */
+export function filterSkillsForAgent(
+  skills: readonly Skill[],
+  agent: SkillPickerAgentScope | null | undefined,
+): Skill[] {
+  if (!agent || agent.id === AgentId.Main || !Array.isArray(agent.skillIds) || agent.skillIds.length === 0) {
+    return [...skills];
+  }
+  const allowedIds = new Set(agent.skillIds.map(id => id.trim()).filter(Boolean));
+  if (allowedIds.size === 0) {
+    return [...skills];
+  }
+  return skills.filter(skill => allowedIds.has(skill.id));
+}
+
 export interface SkillPickerGroups {
   recent: Skill[];
   mine: Skill[];
@@ -84,7 +109,9 @@ export function groupSkillsForPicker(
   skills: readonly Skill[],
   { query, matchesQuery, recentSkillIds, getDisplayName }: GroupSkillsOptions,
 ): SkillPickerGroups {
-  const visible = skills.filter(skill => skill.enabled && matchesQuery(skill));
+  const visible = skills.filter(
+    skill => skill.enabled && skill.userInvocable !== false && matchesQuery(skill),
+  );
 
   const recent: Skill[] = [];
   if (!query.trim()) {

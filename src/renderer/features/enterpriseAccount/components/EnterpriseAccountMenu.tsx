@@ -73,6 +73,7 @@ export const EnterpriseAccountMenu = ({
   onClose,
 }: EnterpriseAccountMenuProps) => {
   const user = useSelector((state: RootState) => state.auth.user);
+  const accessState = useSelector((state: RootState) => state.auth.accessState);
   const connectionState = useSelector((state: RootState) => getAccountConnectionState(state.auth));
   const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
   const accountName = getAccountMenuDisplayName({
@@ -463,6 +464,7 @@ export const EnterpriseAccountMenu = ({
       {logoutConfirmOpen && (
         <LogoutConfirmDialog
           isLoggingOut={loggingOut}
+          loginRequired={Boolean(accessState?.loginRequired)}
           onCancel={() => setLogoutConfirmOpen(false)}
           onConfirm={() => void handleLogout()}
         />

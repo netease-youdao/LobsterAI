@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { DSH_QUESTION_REQUEST_ID_PREFIX } from '../../../../shared/dshEngine/hostConstants';
 import type { CoworkPermissionRequest } from '../../../types/cowork';
 import {
   emptyQuestionDraft,
@@ -88,6 +89,25 @@ describe('questionResolved', () => {
 });
 
 describe('permissionDockAnswer', () => {
+  test('dsh echoes IDs even for identical prompts and preserves selections, custom text and skips', () => {
+    const permission = pluginPermission([
+      { id: 'day', question: 'Which?', options },
+      { id: 'evening', question: 'Which?', options, multiSelect: true },
+      { id: 'optional', question: 'Other?', options },
+    ]);
+    permission.requestId = `${DSH_QUESTION_REQUEST_ID_PREFIX}1`;
+    const request = permissionDockRequest(permission)!;
+    expect(request.source).toBe(QuestionSource.Dsh);
+    expect(permissionDockAnswer(request, {
+      step: 2, answers: { day: ['B'], evening: ['B'], optional: ['B'] },
+      freeText: { day: 'new choice', evening: 'A|||B' }, skipped: ['optional'],
+    })).toEqual({ behavior: 'allow', updatedInput: { answers: [
+      { id: 'day', selected: [], custom: 'new choice' },
+      { id: 'evening', selected: ['B'], custom: 'A|||B' },
+      { id: 'optional', selected: [] },
+    ] } });
+  });
+
   const draft: QuestionDraft = {
     step: 1,
     answers: { 'question-1': ['A (Recommended)', 'B'], timing: [] },

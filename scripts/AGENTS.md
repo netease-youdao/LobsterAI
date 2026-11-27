@@ -1,77 +1,80 @@
 # Scripts
 
 Guidance for `scripts/`: runtime builds, patches, and packaging. Repository-wide
-rules, including the OpenClaw patch policy, are in the root `AGENTS.md`.
+rules, including the DSH patch policy, are in the root `AGENTS.md`.
 
 Most files here are CommonJS Node scripts (`.cjs`). ESLint ignores this
 directory. Tests for these scripts live in `tests/*.test.ts` and run under
 `npm test`.
 
-## OpenClaw Runtime Build
+## DSH Runtime Build
 
-`npm run openclaw:runtime:<target>` (for example `mac-arm64`, `win-x64`,
-`linux-x64`) runs these steps in order. `npm run openclaw:runtime:host` picks
-the current platform.
+`npm run dsh:runtime:host` builds and selects the runtime for the current
+platform (`mac-arm64`, `mac-x64`, `win-x64`, or `linux-x64`).
+`build-dsh-runtime.cjs` fetches the published npm package pinned in
+`package.json` under `dsh` (no sibling source checkout needed), installs
+target-scoped production dependencies and bundled `pnpm`
+(`package-manager/pnpm`), applies versioned patches, and prunes redundant
+heavy native packages (`libreoffice-kit-*`, `sherpa-onnx-*`) that LobsterAI
+replaces natively. `sync-dsh-runtime-current.cjs` makes the build available at
+`vendor/dsh-runtime/current`.
 
-1. `ensure-openclaw-version.cjs`: clone/fetch/checkout the pinned OpenClaw tag.
-2. `apply-openclaw-patches.cjs`: apply the pinned version's patches.
-3. `run-build-openclaw-runtime.cjs`: build the platform runtime.
-4. `sync-openclaw-runtime-current.cjs`: point `current` at the built runtime.
-5. `bundle-openclaw-startup-migration.cjs` and `bundle-openclaw-gateway.cjs`:
-   create the startup-migration and gateway bundles.
-6. `ensure-openclaw-plugins.cjs`: install third-party OpenClaw plugins.
-7. `sync-local-openclaw-extensions.cjs`: sync `openclaw-extensions/`.
-8. `precompile-openclaw-extensions.cjs`: precompile extensions.
-9. `install-openclaw-channel-deps.cjs`: install channel dependencies.
-10. `prune-openclaw-runtime.cjs`: remove unused runtime/plugin content.
-
-Output goes to `vendor/openclaw-runtime/`, which is gitignored.
+Outputs live under `vendor/dsh-runtime/<target>/` and are reused automatically
+when target, pinned versions, and patch hashes match. Set `DSH_NPM_REGISTRY`
+to use a different npm registry or `DSH_FORCE_BUILD=1` to rebuild.
 
 ## Patch Mechanisms
 
-There are four, and they do not overlap:
+- `scripts/dsh-patches/<dsh.version>/`: patches to the published DSH runtime.
+  The build treats a missing version directory as an empty patch set.
+  Review the patch set and the `PATCH_SENTINELS` in `build-dsh-runtime.cjs`
+  when bumping `dsh.version`.
+- `patches/*.patch` at the repository root: `patch-package` patches to app
+  npm dependencies, applied by `postinstall`.
 
-- `scripts/patches/<openclaw.version>/*.patch`: patches to the OpenClaw source
-  checkout, applied by `npm run openclaw:patch`. Only the directory matching
-  `openclaw.version` in `package.json` is applied, and re-running is safe.
-  Document each patch in that directory's `README.md`.
-- `scripts/openclaw-plugin-patches/*.cjs`: scripted patches to third-party
-  OpenClaw plugins. They have tests under `tests/openclaw-plugin-patches-*`.
-- `scripts/dsh-patches/<dsh.version>/`: patches to the DSH runtime. A missing
-  directory for the pinned version applies no patches and does not fail, so
-  copy the directory forward when bumping `dsh.version`.
-- `patches/*.patch` at the repository root: patch-package patches to npm
-  dependencies, applied by `postinstall`.
-
-## DSH Runtime
-
-The pinned DSH version and one archive descriptor per platform live in
-`package.json` under `dsh`. Development reads `vendor/dsh-runtime/current`;
-shipped apps download the archive on first use and verify its digest.
+## Runtime Checks
 
 ```bash
-npm run dsh:runtime:host     # build and activate the current-platform runtime
-npm run dsh:runtime:verify   # boot it once and assert the web UI answers
-npm run dsh:e2e              # full gate: build, pack, install, boot, assert over RPC
+npm run dsh:runtime:verify   # boot DSH via Electron-as-Node and check web/RPC interfaces
+npm run dsh:upgrade-check    # verify pruned packages, disabled telemetry guards, bundles, and RPC
+npm run dsh:e2e              # check embedded Electron hosts, auth RPC, and profile isolation
 ```
 
-Publishing an archive and updating the DSH version are multi-step procedures
-with silent failure modes. Follow "DeepSeek Harness runtime" in
-`CONTRIBUTING.md` step by step.
+See [DeepSeek Harness runtime](../CONTRIBUTING.md#deepseek-harness-runtime)
+for DSH version updates and standalone runtime archives (`dsh:runtime:pack`,
+`dsh:runtime:url`, `dsh:runtime:verify-urls`).
 
 ## Packaging
 
 ```bash
-npm run dist:mac
-npm run dist:win
-npm run dist:linux
+npm run dist:mac:arm64       # Apple Silicon (.dmg; also runs dsh:upgrade-check)
+npm run dist:mac:x64         # Intel Mac (.dmg)
+npm run dist:win             # Windows x64 full offline NSIS installer (.exe)
+npm run dist:win:channel -- --keyfrom <channel> [--silent]
+npm run dist:win:web -- --keyfrom <channel> [--silent] [--pkg-base-url <cdn-dir> | --pkg-url <package-url>]
 ```
 
-- Windows builds may need a portable Git: `npm run setup:mingit`. Windows
-  packaging also sets up the Python runtime with `npm run setup:python-runtime`.
+- `dist:win` runs `predist:win` (`dsh:runtime:win-x64`),
+  `verify:installer-patches`, `build:selection-hook`, and
+  `setup:python-runtime`. Windows builds may also prepare portable Git via
+  `npm run setup:mingit` (pass `-- --required` before `dsh:e2e` on Windows to
+  test Git-sourced DSH plugin installs without system Git).
 - `npm run verify:installer-patches` is the Windows installer gate. It runs
   automatically at the start of `dist:win` and of the `dist:win:web` stub pass:
   it re-applies `patches/app-builder-lib+*.patch` and runs the installer
   contract tests against `node_modules`. If it fails, run `npm ci`. Never ship
   an installer from a tree where it fails.
-- Packaged apps bundle the OpenClaw runtime under `Resources/cfmind`.
+- Both macOS and Windows pack `dsh-runtime` inside `app.asar/dsh-runtime`
+  (with native addons, helper binaries, and bundled `pnpm` in
+  `app.asar.unpacked/dsh-runtime`), while shipping `dsh-bundles/`, `SKILLs/`,
+  and platform-specific resources (`computer-use/*.zip` on macOS,
+  `python-win/` on Windows) directly under `extraResources`. `afterPack`
+  verifies `app.asar/dsh-runtime` and removes `node_modules/.bin` directories
+  from unpacked macOS trees for codesign compatibility. Windows installers run
+  as `asInvoker` (`RequestExecutionLevel user`) with on-demand elevation only
+  for legacy per-machine (`HKLM`) installations, and do not use a second-stage
+  `win-resources.tar` unpack step.
+- Offline/private-mirror packaging env vars (`LOBSTERAI_PORTABLE_PYTHON_*`,
+  `LOBSTERAI_WINDOWS_EMBED_PYTHON_*`, `LOBSTERAI_WINDOWS_GET_PIP_URL`,
+  `LOBSTERAI_WINDOWS_PIP_PYZ_URL`, `LOBSTERAI_PORTABLE_GIT_*`) are listed in
+  [Packaging](../CONTRIBUTING.md#packaging).

@@ -1,5 +1,6 @@
 import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
+  type AuthAccessState,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   AuthLoginFailureReason,
@@ -31,6 +32,7 @@ import {
   invalidateAuthAccountContext,
   type LowCreditPurchaseOffer,
   type ProfileSummary,
+  setAuthAccessState,
   setAuthExpired,
   setAuthLoading,
   setAuthTemporarilyUnavailable,
@@ -53,6 +55,10 @@ import {
 } from '../store/slices/modelSlice';
 import { AuthRecovery } from './authRecovery';
 import { browserLoginSession, BrowserLoginStatus } from './browserLoginSession';
+import {
+  CreditsRefreshReason,
+  CreditsRefreshScheduler,
+} from './creditsRefreshScheduler';
 import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 import { getCreditQuotaSnapshot } from './lowCreditPurchaseOffer';
@@ -64,6 +70,13 @@ import {
   consumePublishingSubscriptionRecoveryFocusRefresh,
   observePublishingSubscriptionRecoveryAuthSnapshot,
 } from './publishingSubscriptionRecovery';
+
+const CachedAuthHydrationResult = {
+  Unauthenticated: 'unauthenticated',
+  AuthenticatedPendingRefresh: 'authenticated-pending-refresh',
+  FallbackBlocking: 'fallback-blocking',
+} as const;
+type CachedAuthHydrationResult = typeof CachedAuthHydrationResult[keyof typeof CachedAuthHydrationResult];
 
 interface AuthStateRefreshResult {
   isLoggedIn: boolean;
@@ -379,11 +392,24 @@ class AuthService {
     onError: error => writeAuthRendererLog('warn', 'account recovery failed', error),
   });
   private unsubCallback: (() => void) | null = null;
+  private unsubAccessStateChanged: (() => void) | null = null;
   private unsubLifecycleEvent: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
+  private unsubCreditsActivity: (() => void) | null = null;
   private unsubSessionChanged: (() => void) | null = null;
   private unsubEnterpriseContextInvalidated: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
+  private readonly handleDocumentVisibilityChange = () => {
+    this.creditsRefreshScheduler.handleVisibilityChange();
+  };
+  private readonly creditsRefreshScheduler = new CreditsRefreshScheduler({
+    canRefresh: () => {
+      const auth = store.getState().auth;
+      return auth.isLoggedIn && Boolean(auth.ownerAccountKey);
+    },
+    refresh: () => this.refreshCreditsBalance(),
+    onError: error => writeAuthRendererLog('warn', 'lightweight credits refresh failed', error),
+  });
   private pendingQuotaCheck: {
     requestSnapshot: AuthAccountRequestSnapshot;
     promise: Promise<AuthQuotaCheckResult>;
@@ -431,6 +457,7 @@ class AuthService {
       throw new Error('Authenticated account context is missing or inconsistent');
     }
     if (store.getState().auth.ownerAccountKey !== ownerAccountKey) {
+      this.creditsRefreshScheduler.reset();
       store.dispatch(clearMediaAccountState());
       // Only drop the current list when the account actually changed. Clearing
       // on every refresh turns a failed reload into an empty plan model group,
@@ -464,6 +491,7 @@ class AuthService {
 
   private clearAuthenticatedAccountState(): void {
     this.cancelAuthRecovery();
+    this.creditsRefreshScheduler.reset();
     this.clearEnterpriseQuotaBoundaryTimer();
     clearPendingPublishingConversionAttribution();
     observePublishingSubscriptionRecoveryAuthSnapshot({
@@ -480,6 +508,15 @@ class AuthService {
     void this.loadPublicPricingCatalogModels();
   }
 
+  async loadAccessState(): Promise<AuthAccessState | null> {
+    if (typeof window.electron?.auth?.getAccessState !== 'function') {
+      return null;
+    }
+    const state = await window.electron.auth.getAccessState();
+    store.dispatch(setAuthAccessState(state));
+    return state;
+  }
+
   /**
    * Initialize: try to restore login state from persisted token.
    */
@@ -493,6 +530,9 @@ class AuthService {
     this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
       await this.handleCallback(code);
     });
+    this.unsubAccessStateChanged = window.electron.auth.onAccessStateChanged?.(nextState => {
+      store.dispatch(setAuthAccessState(nextState));
+    }) ?? null;
     this.unsubSessionChanged = window.electron.auth.onSessionChanged(event => {
       void this.handleSessionChanged(event);
     });
@@ -512,10 +552,18 @@ class AuthService {
         handledPendingCode = await this.handleCallback(pendingCode);
       }
       if (!handledPendingCode) {
-        await this.refreshAuthState({
-          clearOnFailure: true,
-          reportLifecycle: true,
-        });
+        const hydratedViaSnapshot = await this.tryHydrateFromCachedSnapshot();
+        if (hydratedViaSnapshot === CachedAuthHydrationResult.AuthenticatedPendingRefresh) {
+          void this.refreshAuthState({
+            clearOnFailure: true,
+            reportLifecycle: true,
+          });
+        } else if (hydratedViaSnapshot === CachedAuthHydrationResult.FallbackBlocking) {
+          await this.refreshAuthState({
+            clearOnFailure: true,
+            reportLifecycle: true,
+          });
+        }
       }
     } catch {
       store.dispatch(setAuthTemporarilyUnavailable({ hasCredentials: false }));
@@ -529,8 +577,15 @@ class AuthService {
 
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
+      this.creditsRefreshScheduler.cancelPending();
       void this.recoverAccount();
     });
+    this.unsubCreditsActivity = window.electron.auth.onCreditsActivity?.(() => {
+      this.creditsRefreshScheduler.notifyActivity();
+    }) ?? null;
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleDocumentVisibilityChange);
+    }
 
     // Refresh quota and models when Electron window gains focus — user may have purchased on portal
     this.unsubWindowState = window.electron.window.onStateChanged((state) => {
@@ -941,6 +996,9 @@ class AuthService {
           const context = applyEnterpriseAccountContext(result.enterpriseContext);
           this.scheduleEnterpriseQuotaBoundary(context);
         }
+        if (profileSummary || result.enterpriseContext) {
+          this.creditsRefreshScheduler.markSynced();
+        }
         return true;
       }
       return false;
@@ -1024,17 +1082,24 @@ class AuthService {
   /**
    * Fetch profile summary (credits breakdown).
    */
-  async fetchProfileSummary() {
+  async fetchProfileSummary(): Promise<void> {
+    const succeeded = await this.performProfileSummaryFetch();
+    if (succeeded) {
+      this.creditsRefreshScheduler.markSynced();
+    }
+  }
+
+  private async performProfileSummaryFetch(): Promise<boolean> {
     if (store.getState().enterpriseAccount.context) {
       store.dispatch(clearProfileSummary());
-      return;
+      return false;
     }
     const authStateAtStart = store.getState().auth;
     if (
       !authStateAtStart.isLoggedIn
       || !authStateAtStart.ownerAccountKey
     ) {
-      return;
+      return false;
     }
     try {
       const result = await window.electron.auth.getProfileSummary();
@@ -1044,14 +1109,68 @@ class AuthService {
         || store.getState().enterpriseAccount.context
       ) {
         writeAuthRendererLog('debug', 'discarded stale profile summary response after auth state changed');
-        return;
+        return false;
       }
       if (result.success && result.data) {
         store.dispatch(setProfileSummary(result.data));
+        return true;
       }
+      return false;
     } catch {
-      // ignore
+      return false;
     }
+  }
+
+  /**
+   * Lightweight balance-only refresh used during active tasks and header hover,
+   * avoiding the heavier quota + purchase-offer + server-models reload chain.
+   */
+  async refreshCreditsBalance(): Promise<boolean> {
+    const authStateAtStart = store.getState().auth;
+    if (
+      !authStateAtStart.isLoggedIn
+      || !authStateAtStart.ownerAccountKey
+    ) {
+      return false;
+    }
+    const isEnterpriseAccount = (
+      store.getState().enterpriseAccount.context !== null
+      || authStateAtStart.user?.accountMode === EnterpriseAccountMode.Enterprise
+      || authStateAtStart.quota?.accountMode === EnterpriseAccountMode.Enterprise
+      || authStateAtStart.quota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+    );
+    if (isEnterpriseAccount) {
+      const context = await refreshEnterpriseAccountContext({
+        shouldApply: () => isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth),
+      });
+      if (!isAuthAccountRequestCurrent(authStateAtStart, store.getState().auth)) {
+        return false;
+      }
+      if (context) {
+        this.scheduleEnterpriseQuotaBoundary(context);
+        return true;
+      }
+      return false;
+    }
+    return this.performProfileSummaryFetch();
+  }
+
+  acquireCreditsDisplaySurface(options?: { needsInitialLoad?: boolean }): () => void {
+    return this.creditsRefreshScheduler.acquireSurface(options);
+  }
+
+  requestCreditsRefresh(
+    reason: CreditsRefreshReason = CreditsRefreshReason.Manual,
+  ): Promise<boolean> {
+    return this.creditsRefreshScheduler.requestRefresh(reason);
+  }
+
+  isCreditsRefreshing(): boolean {
+    return this.creditsRefreshScheduler.isRefreshing();
+  }
+
+  subscribeCreditsRefreshing(listener: (refreshing: boolean) => void): () => void {
+    return this.creditsRefreshScheduler.subscribeRefreshing(listener);
   }
 
   async claimCreditsFinalReward(campaignCode: string) {
@@ -1076,16 +1195,24 @@ class AuthService {
 
   destroy() {
     this.cancelAuthRecovery();
+    this.creditsRefreshScheduler.reset();
     this.pendingQuotaCheck = null;
     this.pendingServerModelLoad = null;
     this.serverModelLoadSequence += 1;
     this.clearEnterpriseQuotaBoundaryTimer();
     this.unsubCallback?.();
     this.unsubCallback = null;
+    this.unsubAccessStateChanged?.();
+    this.unsubAccessStateChanged = null;
     this.unsubLifecycleEvent?.();
     this.unsubLifecycleEvent = null;
     this.unsubQuotaChanged?.();
     this.unsubQuotaChanged = null;
+    this.unsubCreditsActivity?.();
+    this.unsubCreditsActivity = null;
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleDocumentVisibilityChange);
+    }
     this.unsubSessionChanged?.();
     this.unsubSessionChanged = null;
     this.unsubEnterpriseContextInvalidated?.();
@@ -1124,6 +1251,7 @@ class AuthService {
 
   private async applyLoggedOutState(expired: boolean): Promise<void> {
     this.cancelAuthRecovery();
+    this.creditsRefreshScheduler.reset();
     clearPendingPublishingConversionAttribution();
     observePublishingSubscriptionRecoveryAuthSnapshot({
       ownerAccountKey: null,
@@ -1351,6 +1479,91 @@ class AuthService {
     );
   }
 
+  private applyLoadedServerModels(
+    rawModels: Parameters<typeof mapAvailableServerModelsToModels>[0],
+    preferences: { success?: boolean; data?: Record<string, unknown> } | null | undefined,
+  ): number {
+    const serverModels = mapAvailableServerModelsToModels(rawModels);
+    const presetModels = serverModels.filter(model => model.presetId);
+    store.dispatch(setServerModels(serverModels));
+    if (preferences?.success) {
+      for (const [agentId, rawPreference] of Object.entries(preferences.data ?? {})) {
+        const preference = parseModelPresetPreference(rawPreference);
+        if (!preference) continue;
+        const model = presetModels.find(item => item.presetId === preference.presetId && item.accessible !== false);
+        if (model) {
+          store.dispatch(setSelectedModel({
+            agentId,
+            model: { ...model, presetThinkingLevel: preference.thinkingLevel },
+          }));
+        }
+      }
+    }
+    return serverModels.length;
+  }
+
+  /**
+   * Stale-While-Revalidate startup hydration: reads locally persisted user,
+   * quota, and server models in a few milliseconds so App can render the main
+   * shell immediately without waiting on remote HTTPS round trips.
+   */
+  private async tryHydrateFromCachedSnapshot(): Promise<CachedAuthHydrationResult> {
+    if (typeof window.electron?.auth?.getCachedSnapshot !== 'function') {
+      return CachedAuthHydrationResult.FallbackBlocking;
+    }
+    try {
+      const snapshot = await window.electron.auth.getCachedSnapshot();
+      if (!snapshot?.success) {
+        return CachedAuthHydrationResult.FallbackBlocking;
+      }
+      if (!snapshot.hasCredentials) {
+        await this.applyLoggedOutState(false);
+        reportAuthLifecycleEvent({
+          eventType: AuthLifecycleEventType.Restore,
+          outcome: AuthSessionStatus.Unauthenticated,
+        });
+        return CachedAuthHydrationResult.Unauthenticated;
+      }
+      const cachedUser = snapshot.cachedUser ?? null;
+      const cachedQuota = snapshot.cachedQuota ?? null;
+      const cachedEnterpriseContext = snapshot.cachedEnterpriseContext ?? null;
+      if (cachedUser) {
+        const isEnterpriseAccount = (
+          cachedUser.accountMode === EnterpriseAccountMode.Enterprise
+          || cachedQuota?.accountMode === EnterpriseAccountMode.Enterprise
+          || cachedQuota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+        );
+        const canHydrate = !isEnterpriseAccount || Boolean(cachedEnterpriseContext);
+        if (canHydrate) {
+          try {
+            this.applyAuthenticatedState(
+              cachedUser,
+              cachedQuota,
+              null,
+              cachedEnterpriseContext,
+            );
+            if (Array.isArray(snapshot.cachedModels) && snapshot.cachedModels.length > 0) {
+              const preferences = await window.electron.modelPresets
+                ?.getPreferences()
+                .catch(() => ({ success: false, data: {} }));
+              const count = this.applyLoadedServerModels(snapshot.cachedModels, preferences);
+              writeAuthRendererLog(
+                'debug',
+                `hydrated ${count} cached server model(s) into renderer state`,
+              );
+            }
+          } catch (error) {
+            writeAuthRendererLog('debug', 'skipped cached auth hydration due to incomplete context', error);
+          }
+        }
+      }
+      return CachedAuthHydrationResult.AuthenticatedPendingRefresh;
+    } catch (error) {
+      writeAuthRendererLog('debug', 'failed to read cached auth snapshot, falling back to live refresh', error);
+      return CachedAuthHydrationResult.FallbackBlocking;
+    }
+  }
+
   private async requestServerModels(
     requestSnapshot: AuthAccountRequestSnapshot,
   ): Promise<ServerModelLoadOutcome> {
@@ -1364,20 +1577,10 @@ class AuthService {
         return ServerModelLoadOutcome.Abandoned;
       }
       if (modelsResult.success && Array.isArray(modelsResult.models)) {
-        const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
-        const presetModels = serverModels.filter(model => model.presetId);
-        store.dispatch(setServerModels(serverModels));
-        if (preferences?.success) {
-          for (const [agentId, rawPreference] of Object.entries(preferences.data ?? {})) {
-            const preference = parseModelPresetPreference(rawPreference);
-            if (!preference) continue;
-            const model = presetModels.find(item => item.presetId === preference.presetId && item.accessible !== false);
-            if (model) store.dispatch(setSelectedModel({ agentId, model: { ...model, presetThinkingLevel: preference.thinkingLevel } }));
-          }
-        }
+        const count = this.applyLoadedServerModels(modelsResult.models, preferences);
         writeAuthRendererLog(
           'debug',
-          `loaded ${serverModels.length} server model(s) into renderer state`,
+          `loaded ${count} server model(s) into renderer state`,
         );
         return ServerModelLoadOutcome.Loaded;
       }

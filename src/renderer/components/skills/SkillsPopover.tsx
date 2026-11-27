@@ -5,6 +5,7 @@ import { useSelector } from 'react-redux';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import {
+  filterSkillsForAgent,
   groupSkillsForPicker,
   readRecentSkillIds,
   recordSkillPickerUse,
@@ -49,6 +50,12 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const currentSessionAgentId = useSelector((state: RootState) => state.cowork.currentSession?.agentId);
+  const effectiveAgentId = currentSessionAgentId || currentAgentId;
+  const activeAgent = agents.find(agent => agent.id === effectiveAgentId);
+  const agentScopedSkills = filterSkillsForAgent(skills, activeAgent);
   const shouldUseFallbackDescription = i18nReady || i18nService.getLanguage() !== 'zh';
 
   // Snapshot taken when the menu opens, so picking a skill does not reorder
@@ -68,7 +75,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
     recent: recentFilteredSkills,
     mine: myFilteredSkills,
     builtIn: builtInFilteredSkills,
-  } = groupSkillsForPicker(skills, {
+  } = groupSkillsForPicker(agentScopedSkills, {
     query: searchQuery,
     matchesQuery,
     recentSkillIds,

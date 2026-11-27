@@ -28,6 +28,37 @@
         "!shared/**"
       ]
     },
+    {
+      "from": "vendor/dsh-runtime/current",
+      "to": "dsh-runtime",
+      "filter": [
+        "**/*",
+        "!**/.bin",
+        "!**/.bin/**",
+        "!**/*.map",
+        "!**/*.d.ts",
+        "!**/*.d.cts",
+        "!**/*.d.mts",
+        "!**/README.md",
+        "!**/README",
+        "!**/readme.md",
+        "!**/CHANGELOG.md",
+        "!**/CHANGELOG",
+        "!**/HISTORY.md",
+        "!**/LICENSE",
+        "!**/LICENSE.md",
+        "!**/LICENSE.txt",
+        "!**/.eslintrc*",
+        "!**/.prettierrc*",
+        "!**/tsconfig.json",
+        "!**/tsconfig.*.json",
+        "!**/*.test.*",
+        "!**/*.spec.*",
+        "!**/tests/**",
+        "!**/test/**",
+        "!**/__tests__/**"
+      ]
+    },
     "!**/*.map",
     "!**/*.d.ts",
     "!**/*.d.cts",
@@ -79,6 +110,24 @@
     {
       "from": "build/icons/png/512x512.png",
       "to": "app-icon/512x512.png"
+    },
+    {
+      "from": "dsh-bundles/lobsterai-host",
+      "to": "dsh-bundles/lobsterai-host",
+      "filter": [
+        "**/*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ]
+    },
+    {
+      "from": "dsh-bundles/lobsterai-channels",
+      "to": "dsh-bundles/lobsterai-channels",
+      "filter": [
+        "**/*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ]
     }
   ],
   "protocols": [
@@ -160,39 +209,17 @@
         ]
       },
       {
-        "from": "vendor/openclaw-runtime/current",
-        "to": "cfmind",
-        "filter": [
-          "**/*",
-          "!**/*.map",
-          "!**/*.d.ts",
-          "!**/*.d.cts",
-          "!**/*.d.mts",
-          "!**/README.md",
-          "!**/README",
-          "!**/readme.md",
-          "!**/CHANGELOG.md",
-          "!**/CHANGELOG",
-          "!**/HISTORY.md",
-          "!**/LICENSE",
-          "!**/LICENSE.md",
-          "!**/LICENSE.txt",
-          "!**/.eslintrc*",
-          "!**/.prettierrc*",
-          "!**/tsconfig.json",
-          "!**/tsconfig.*.json",
-          "!**/*.test.*",
-          "!**/*.spec.*",
-          "!**/tests/**",
-          "!**/test/**",
-          "!**/__tests__/**"
-        ]
-      },
-      {
         "from": "resources/computer-use",
         "to": "computer-use",
         "filter": [
           "*.zip"
+        ]
+      },
+      {
+        "from": "resources/skin-pack",
+        "to": "skin-pack",
+        "filter": [
+          "**/*"
         ]
       }
     ]
@@ -210,28 +237,12 @@
     "electronLanguages": ["en-US", "zh-CN", "zh-TW"],
     "extraResources": [
       {
-        "from": "build-tar/win-resources.tar",
-        "to": "win-resources.tar"
-      },
-      {
-        "from": "scripts/unpack-cfmind.cjs",
-        "to": "unpack-cfmind.cjs"
-      }
-    ]
-  },
-  "linux": {
-    "target": [
-      "AppImage",
-      "deb"
-    ],
-    "icon": "build/icons/png",
-    "category": "Utility",
-    "extraResources": [
-      {
         "from": "SKILLs",
         "to": "SKILLs",
         "filter": [
           "**/*",
+          "!**/.bin",
+          "!**/.bin/**",
           "!**/.env",
           "!**/.env.*",
           "!**/.venv",
@@ -261,40 +272,20 @@
         ]
       },
       {
-        "from": "vendor/openclaw-runtime/current",
-        "to": "cfmind",
+        "from": "resources/python-win",
+        "to": "python-win",
         "filter": [
-          "**/*",
-          "!**/*.map",
-          "!**/*.d.ts",
-          "!**/*.d.cts",
-          "!**/*.d.mts",
-          "!**/README.md",
-          "!**/README",
-          "!**/readme.md",
-          "!**/CHANGELOG.md",
-          "!**/CHANGELOG",
-          "!**/HISTORY.md",
-          "!**/LICENSE",
-          "!**/LICENSE.md",
-          "!**/LICENSE.txt",
-          "!**/.eslintrc*",
-          "!**/.prettierrc*",
-          "!**/tsconfig.json",
-          "!**/tsconfig.*.json",
-          "!**/*.test.*",
-          "!**/*.spec.*",
-          "!**/tests/**",
-          "!**/test/**",
-          "!**/__tests__/**"
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/skin-pack",
+        "to": "skin-pack",
+        "filter": [
+          "**/*"
         ]
       }
-    ],
-    "desktop": {
-      "Name": "LobsterAI",
-      "Comment": "AI-assisted coding and productivity tool",
-      "Terminal": "false"
-    }
+    ]
   },
   "nsis": {
     "oneClick": false,
@@ -305,13 +296,31 @@
   },
   "electronVersion": "43.5.0",
   "npmRebuild": false,
+  "includeSubNodeModules": true,
   "asarUnpack": [
     "node_modules/@img/**",
     "node_modules/@koromix/**",
     "node_modules/better-sqlite3/**",
     "node_modules/koffi/**",
     "node_modules/npm/**",
-    "node_modules/selection-hook/**"
+    "node_modules/selection-hook/**",
+    "vendor/dsh-runtime/current/package-manager/**",
+    "vendor/dsh-runtime/current/node_modules/node-pty/**",
+    "vendor/dsh-runtime/current/node_modules/@img/**",
+    "vendor/dsh-runtime/current/node_modules/@koromix/**",
+    "vendor/dsh-runtime/current/node_modules/koffi/**",
+    "vendor/dsh-runtime/current/node_modules/@vscode/ripgrep*/**",
+    "vendor/dsh-runtime/current/node_modules/@deepseek-ai/node-addon-system*/**",
+    "vendor/dsh-runtime/current/node_modules/@deepseek-ai/dsh-sandbox-windows-acl/**",
+    "vendor/dsh-runtime/current/node_modules/node-addon-require-builtin*/**",
+    "vendor/dsh-runtime/current/**/*.node",
+    "vendor/dsh-runtime/current/**/*.dll",
+    "vendor/dsh-runtime/current/**/*.dylib",
+    "vendor/dsh-runtime/current/**/*.so",
+    "vendor/dsh-runtime/current/**/*.exe",
+    "vendor/dsh-runtime/current/**/*.cmd",
+    "vendor/dsh-runtime/current/**/*.bat",
+    "vendor/dsh-runtime/current/**/*.ps1"
   ],
   "asar": true
 }

@@ -1,4 +1,5 @@
 import { DataValidationErrorStyle, DataValidationRenderMode, type IStyleData, type IWorkbookData } from '@univerjs/core';
+import { DOMParser } from '@xmldom/xmldom';
 import { strFromU8, unzipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
 
@@ -22,8 +23,21 @@ const OPTIONS = { name: 'fixture.xlsx', univerLocale: 'zhCN', formatLocale: 'zh'
 const DATA = 'sheet-0';
 const SUMMARY = 'sheet-1';
 
-function unpack(bytes: Uint8Array): Record<string, string> {
-  return Object.fromEntries(Object.entries(unzipSync(bytes)).map(([name, value]) => [name, strFromU8(value)]));
+function assertValidXmlParts(parts: Record<string, string>): void {
+  for (const [name, content] of Object.entries(parts)) {
+    if (!name.endsWith('.xml') && !name.endsWith('.rels')) continue;
+    const issues: string[] = [];
+    new DOMParser({
+      onError(level, message) { issues.push(`${level}: ${message}`); },
+    }).parseFromString(content, 'application/xml');
+    expect(issues, `${name} had XML issues`).toEqual([]);
+  }
+}
+
+function unpack(bytes: Uint8Array, validateXml = true): Record<string, string> {
+  const parts = Object.fromEntries(Object.entries(unzipSync(bytes)).map(([name, value]) => [name, strFromU8(value)]));
+  if (validateXml) assertValidXmlParts(parts);
+  return parts;
 }
 
 async function fixture(overrides?: Partial<Record<string, string>>): Promise<{ bytes: Uint8Array; imported: ImportedWorkbook }> {
@@ -324,6 +338,78 @@ describe('xlsx export', () => {
     expect(parts['xl/_rels/workbook.xml.rels']).not.toContain('sheet2.xml');
     expect(parts['[Content_Types].xml']).not.toContain('sheet2.xml');
     expect(parts[PARTS.table]).toBeDefined();
+  });
+
+  test('declares the relationships namespace on workbook when adding sheets to an openpyxl-style file', async () => {
+    const relNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const openpyxlWorkbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><bookViews><workbookView activeTab="0"/></bookViews><sheets><sheet xmlns:r="${relNs}" name="数据" sheetId="1" state="visible" r:id="rId1"/><sheet xmlns:r="${relNs}" name="Summary" sheetId="2" state="visible" r:id="rId2"/></sheets><definedNames/><calcPr calcId="124519" fullCalcOnLoad="1"/></workbook>`;
+    const { bytes, imported } = await fixture({ [PARTS.workbook]: openpyxlWorkbook });
+
+    // Cell-only edits keep workbook.xml byte-identical when existing sheets already declare xmlns:r locally.
+    const cellEdited = edited(imported, data => {
+      data.sheets[DATA].cellData![1][1] = { v: 99, t: 2 };
+    });
+    const cellParts = unpack(exportXlsx({ baseline: imported.baseline, current: cellEdited, resolveFormula: noFormula }, bytes).bytes);
+    expect(cellParts[PARTS.workbook]).toBe(openpyxlWorkbook);
+
+    // Adding a sheet binds xmlns:r on <workbook> so the new <sheet r:id="…"/> is valid XML.
+    const added = edited(imported, data => {
+      data.sheets['sheet-new'] = { id: 'sheet-new', name: '分类汇总', cellData: { 0: { 0: { v: '品类', t: 1 } } } } as IWorkbookData['sheets'][string];
+      data.sheetOrder = ['sheet-new', DATA, SUMMARY];
+    });
+    const addedBytes = exportXlsx({ baseline: imported.baseline, current: added, resolveFormula: noFormula }, bytes).bytes;
+    const addedParts = unpack(addedBytes);
+    expect(addedParts[PARTS.workbook]).toContain(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${relNs}">`);
+    expect(addedParts[PARTS.workbook]).toContain('<sheet name="分类汇总" sheetId="3" r:id="rId7"/>');
+    expect(importXlsx(addedBytes, OPTIONS).data.sheetOrder).toHaveLength(3);
+  });
+
+  test('preserves custom and conflicting relationship prefixes when adding sheets', async () => {
+    const relNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const customPrefixWorkbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ns0:workbook xmlns:ns0="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><ns0:sheets><ns0:sheet xmlns:ns1="${relNs}" name="数据" sheetId="1" ns1:id="rId1"/><ns0:sheet xmlns:ns1="${relNs}" name="Summary" sheetId="2" ns1:id="rId2"/></ns0:sheets></ns0:workbook>`;
+    const custom = await fixture({ [PARTS.workbook]: customPrefixWorkbook });
+    const customAdded = edited(custom.imported, data => {
+      data.sheets['sheet-new'] = { id: 'sheet-new', name: 'Added', cellData: {} } as IWorkbookData['sheets'][string];
+      data.sheetOrder = [DATA, SUMMARY, 'sheet-new'];
+    });
+    const customParts = unpack(exportXlsx({ baseline: custom.imported.baseline, current: customAdded, resolveFormula: noFormula }, custom.bytes).bytes);
+    expect(customParts[PARTS.workbook]).toContain(`xmlns:ns1="${relNs}"`);
+    expect(customParts[PARTS.workbook]).toContain('<ns0:sheet name="Added" sheetId="3" ns1:id="rId7"/>');
+
+    const conflictWorkbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="urn:custom:r"><sheets><sheet xmlns:r="${relNs}" name="数据" sheetId="1" r:id="rId1"/><sheet xmlns:r="${relNs}" name="Summary" sheetId="2" r:id="rId2"/></sheets></workbook>`;
+    const conflict = await fixture({ [PARTS.workbook]: conflictWorkbook });
+    const conflictAdded = edited(conflict.imported, data => {
+      data.sheets['sheet-new'] = { id: 'sheet-new', name: 'Added', cellData: {} } as IWorkbookData['sheets'][string];
+      data.sheetOrder = [DATA, SUMMARY, 'sheet-new'];
+    });
+    const conflictParts = unpack(exportXlsx({ baseline: conflict.imported.baseline, current: conflictAdded, resolveFormula: noFormula }, conflict.bytes).bytes);
+    expect(conflictParts[PARTS.workbook]).toContain('xmlns:r="urn:custom:r"');
+    expect(conflictParts[PARTS.workbook]).toContain(`<sheet xmlns:r="${relNs}" name="Added" sheetId="3" r:id="rId7"/>`);
+  });
+
+  test('repairs missing workbook xmlns:r on an already-damaged file when saving edits', async () => {
+    const relNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const damagedWorkbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="数据" sheetId="1" r:id="rId1"/><sheet xmlns:r="${relNs}" name="Summary" sheetId="2" r:id="rId2"/></sheets></workbook>`;
+    const { bytes, imported } = await fixture({ [PARTS.workbook]: damagedWorkbook });
+    const cellEdited = edited(imported, data => {
+      data.sheets[DATA].cellData![1][1] = { v: 42, t: 2 };
+    });
+    const parts = unpack(exportXlsx({ baseline: imported.baseline, current: cellEdited, resolveFormula: noFormula }, bytes).bytes);
+    expect(parts[PARTS.workbook]).toContain(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${relNs}">`);
+  });
+
+  test('does not duplicate xmlns:r when worksheet already declares it with spacing or single quotes', async () => {
+    const relNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const spacedSheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r = '${relNs}'><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>`;
+    const { bytes, imported } = await fixture({ [PARTS.summary]: spacedSheet });
+    const withLink = edited(imported, data => {
+      const cell = { v: 'Docs', t: 1 };
+      linkCell(cell, 'https://example.com/docs', 'link-1', {});
+      data.sheets[SUMMARY].cellData![0][1] = cell;
+    });
+    const parts = unpack(exportXlsx({ baseline: imported.baseline, current: withLink, resolveFormula: noFormula }, bytes).bytes);
+    expect(parts[PARTS.summary].match(/xmlns:r/g)).toHaveLength(1);
+    expect(parts[PARTS.summary]).toContain('<hyperlink ref="B1" r:id="rId1"/>');
   });
 
   test('imports conditional formats and writes them back from the rule model', async () => {
@@ -659,7 +745,7 @@ describe('xlsx export', () => {
     }, bytes).bytes);
     const dataRels = parts['xl/worksheets/_rels/sheet1.xml.rels'];
     expect(dataRels).toContain(`Type="${rel}/comments" Target="../comments2.xml"`);
-    expect(dataRels).toMatch(new RegExp(`Id="(rId\\d+)" Type="${rel}/vmlDrawing" Target="../drawings/vmlDrawing2.vml"`));
+    expect(dataRels).toMatch(/Id="(rId\d+)" Type="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships\/vmlDrawing" Target="\.\.\/drawings\/vmlDrawing2\.vml"/);
     expect(parts['xl/comments2.xml']).toContain('<comment ref="A2" authorId="0"><text><t xml:space="preserve">首条批注</t></text></comment>');
     expect(parts['xl/drawings/vmlDrawing2.vml']).toContain('<x:Row>1</x:Row><x:Column>0</x:Column>');
     expect(parts[PARTS.data]).toMatch(/<legacyDrawing r:id="rId\d+"\/><tableParts/);

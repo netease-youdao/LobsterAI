@@ -85,6 +85,7 @@ export const TaskStatus = {
   Success: 'success',
   Error: 'error',
   Skipped: 'skipped',
+  Stopped: 'stopped',
   Running: 'running',
 } as const;
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];

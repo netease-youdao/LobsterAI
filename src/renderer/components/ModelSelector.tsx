@@ -35,7 +35,7 @@ import { getModelIdentityKey, isSameModelIdentity, ServerModelLoadStatus, setSel
 import { AccountConnectionNotice } from './AccountConnectionNotice';
 import { getAccountConnectionState, getModelConnectionState } from './accountConnectionState';
 import Modal from './common/Modal';
-import { resolvePopoverPlacement } from './cowork/popoverPlacement';
+import { POPOVER_BOUNDARY_SELECTOR, resolvePopoverPlacement } from './cowork/popoverPlacement';
 import BalancedModelIcon from './icons/BalancedModelIcon';
 import BusyModelIcon from './icons/BusyModelIcon';
 import { CustomProviderIcon } from './icons/providers';
@@ -293,7 +293,7 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
         type="button"
         onClick={() => { void handlePrimary(); }}
         disabled={purchaseOffer.isRefreshing}
-        className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
+        className="mt-5 w-full rounded-lg bg-action px-3 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-wait disabled:opacity-50"
       >
         {i18nService.t(resolvedPrimaryButtonKey)}
       </button>
@@ -319,6 +319,52 @@ export function resolveDropdownListMaxHeight(
     + (hasGroupTabs ? DROPDOWN_TABS_BLOCK_HEIGHT : 0)
     + (hasCurrentModelFooter ? DROPDOWN_FOOTER_HEIGHT : 0);
   return Math.min(Math.max(availableSpace - chromeHeight, LIST_MIN_HEIGHT), LIST_MAX_HEIGHT);
+}
+
+export function resolvePortalDropdownPlacement(options: {
+  anchorLeft: number;
+  anchorRight: number;
+  alignToTriggerEnd: boolean;
+  viewportWidth: number;
+  preferredWidth?: number;
+  boundaryLeft?: number;
+  boundaryRight?: number;
+  margin?: number;
+}): { left: number; width: number } {
+  const {
+    anchorLeft,
+    anchorRight,
+    alignToTriggerEnd,
+    viewportWidth,
+    preferredWidth = DROPDOWN_WIDTH,
+    boundaryLeft = 0,
+    boundaryRight = viewportWidth,
+    margin = DROPDOWN_VIEWPORT_MARGIN,
+  } = options;
+  // Never cross `boundaryRight` (which separates the chat pane from native
+  // WebContentsView sidebars such as Agent Browser / Word), while allowing the
+  // portal to extend leftward past `boundaryLeft` over HTML chrome if needed.
+  const effectiveRight = Math.min(viewportWidth, boundaryRight);
+  const maxAvailableWidth = Math.max(0, effectiveRight - margin * 2);
+  const width = maxAvailableWidth > 0 ? Math.min(preferredWidth, maxAvailableWidth) : preferredWidth;
+  const maxLeft = Math.max(margin, effectiveRight - width - margin);
+  const preferredMinLeft = boundaryLeft + margin;
+  const minLeft = preferredMinLeft <= maxLeft ? preferredMinLeft : margin;
+
+  const primaryLeft = alignToTriggerEnd ? anchorRight - width : anchorLeft;
+  const fallbackLeft = alignToTriggerEnd ? anchorLeft : anchorRight - width;
+  const fitsBounds = (candidate: number): boolean => (
+    candidate >= minLeft && candidate <= maxLeft
+  );
+  const chosenLeft = fitsBounds(primaryLeft)
+    ? primaryLeft
+    : fitsBounds(fallbackLeft)
+      ? fallbackLeft
+      : primaryLeft;
+  return {
+    left: Math.min(Math.max(chosenLeft, minLeft), maxLeft),
+    width,
+  };
 }
 
 export function resolveHoverCardTop(
@@ -662,8 +708,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const triggerClassName = iconOnly
     ? 'relative h-8 w-8 shrink-0 justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30'
     : compact
-      ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
-      : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
+      ? 'max-w-full space-x-1.5 px-2 py-1 rounded-lg'
+      : 'max-w-full space-x-2 px-3 py-1.5 rounded-xl';
   const triggerLabel = selectedModel?.presetId
     ? modelPresetName(selectedModel.presetId)
     : selectedModel?.name ?? defaultLabel ?? i18nService.t('selectModel');
@@ -769,20 +815,37 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     return resolveDropdownListMaxHeight(availableSpace, shouldShowGroupTabs, showCurrentModelFooter);
   }, [portal, shouldShowGroupTabs, showCurrentModelFooter]);
 
+  const resolvePortalHorizontalBounds = React.useCallback(() => {
+    const boundaryEl = containerRef.current?.closest<HTMLElement>(POPOVER_BOUNDARY_SELECTOR);
+    if (!boundaryEl) {
+      return { boundaryLeft: 0, boundaryRight: window.innerWidth, boundaryEl: null };
+    }
+    const boundaryRect = boundaryEl.getBoundingClientRect();
+    return {
+      boundaryLeft: Math.max(0, boundaryRect.left),
+      boundaryRight: Math.min(window.innerWidth, boundaryRect.right),
+      boundaryEl,
+    };
+  }, []);
+
   const updatePortalPosition = React.useCallback((direction: 'up' | 'down') => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const desiredLeft = alignDropdownToTriggerEnd
-      ? rect.right - DROPDOWN_WIDTH
-      : rect.left;
-    const left = Math.min(
-      Math.max(desiredLeft, DROPDOWN_VIEWPORT_MARGIN),
-      window.innerWidth - DROPDOWN_WIDTH - DROPDOWN_VIEWPORT_MARGIN
-    );
+    const { boundaryLeft, boundaryRight } = resolvePortalHorizontalBounds();
+    const { left, width } = resolvePortalDropdownPlacement({
+      anchorLeft: rect.left,
+      anchorRight: rect.right,
+      alignToTriggerEnd: alignDropdownToTriggerEnd,
+      viewportWidth: window.innerWidth,
+      preferredWidth: DROPDOWN_WIDTH,
+      boundaryLeft,
+      boundaryRight,
+      margin: DROPDOWN_VIEWPORT_MARGIN,
+    });
     const nextStyle: React.CSSProperties = {
       left,
       position: 'fixed',
-      width: DROPDOWN_WIDTH,
+      width,
       zIndex: 10000,
     };
 
@@ -793,7 +856,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
 
     setPortalStyle(nextStyle);
-  }, [alignDropdownToTriggerEnd]);
+  }, [alignDropdownToTriggerEnd, resolvePortalHorizontalBounds]);
 
   const updateInPlacePlacement = React.useCallback(() => {
     const container = containerRef.current;
@@ -831,12 +894,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
     window.addEventListener('resize', handlePositionUpdate);
     window.addEventListener('scroll', handlePositionUpdate, true);
+    const { boundaryEl } = resolvePortalHorizontalBounds();
+    const resizeObserver = boundaryEl && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => handlePositionUpdate())
+      : null;
+    if (boundaryEl && resizeObserver) {
+      resizeObserver.observe(boundaryEl);
+    }
 
     return () => {
       window.removeEventListener('resize', handlePositionUpdate);
       window.removeEventListener('scroll', handlePositionUpdate, true);
+      resizeObserver?.disconnect();
     };
-  }, [isOpen, portal, resolvedDirection, updatePortalPosition, updateInPlacePlacement, resolveListMaxHeight]);
+  }, [isOpen, portal, resolvedDirection, updatePortalPosition, updateInPlacePlacement, resolveListMaxHeight, resolvePortalHorizontalBounds]);
 
   React.useLayoutEffect(() => {
     if (!isOpen || !selectedModelKey) return;
@@ -1208,14 +1279,15 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       );
       // Prefer the side that fits both panels before the pointer enters the
       // detail card, avoiding a jump when a setting is hovered later.
+      const { boundaryRight } = resolvePortalHorizontalBounds();
       const cascadeWidth = HOVER_CARD_WIDTH + nestedMenuWidth + HOVER_CARD_VIEWPORT_MARGIN;
-      const preferredSide = window.innerWidth - dropdownRect.right < cascadeWidth
+      const preferredSide = boundaryRight - dropdownRect.right < cascadeWidth
         && dropdownRect.left >= cascadeWidth ? CascadeSide.Left : CascadeSide.Right;
       const placement = resolveCascadePlacement({
         anchorLeft: dropdownRect.left,
         anchorRight: dropdownRect.right,
         width: HOVER_CARD_WIDTH,
-        viewportWidth: window.innerWidth,
+        viewportWidth: boundaryRight,
         preferredSide,
       });
       setHoverCardSide(placement.side);
@@ -1258,11 +1330,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const card = hoverCardRef.current;
     if (!card) return;
     const cardRect = card.getBoundingClientRect();
+    const { boundaryRight } = resolvePortalHorizontalBounds();
     const { left } = resolveNestedCascadePlacement({
       anchorLeft: cardRect.left,
       anchorRight: cardRect.right,
       width: THINKING_MENU_WIDTH,
-      viewportWidth: window.innerWidth,
+      viewportWidth: boundaryRight,
       preferredSide: hoverCardSide,
     });
     setThinkingMenuStyle({
@@ -1282,11 +1355,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setIsThinkingMenuOpen(false);
     if (isContextWindowMenuOpen || !hoverCardRef.current) return;
     const cardRect = hoverCardRef.current.getBoundingClientRect();
+    const { boundaryRight } = resolvePortalHorizontalBounds();
     const { left } = resolveNestedCascadePlacement({
       anchorLeft: cardRect.left,
       anchorRight: cardRect.right,
       width: CONTEXT_WINDOW_MENU_WIDTH,
-      viewportWidth: window.innerWidth,
+      viewportWidth: boundaryRight,
       preferredSide: hoverCardSide,
     });
     setContextWindowMenuStyle({
@@ -1442,14 +1516,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(hoveredModel);
     const thinkingConfigurable = thinkingSelectionEnabled && canConfigureModelThinking(hoveredModel);
     const showThinkingBadge = !!hoveredModel.presetId || hoveredModel.supportsThinking;
-    const cardLeft = typeof hoverCardStyle.left === 'number' ? hoverCardStyle.left : 0;
-    const opensLeft = (width: number) => resolveNestedCascadePlacement({
-      anchorLeft: cardLeft,
-      anchorRight: cardLeft + HOVER_CARD_WIDTH,
-      width,
-      viewportWidth: window.innerWidth,
-      preferredSide: hoverCardSide,
-    }).side === CascadeSide.Left;
     const card = (
       <div
         ref={hoverCardRef}
@@ -1532,7 +1598,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="flex items-center gap-1 font-medium">
               {thinkingLabelForModel(hoveredModel)}
               {thinkingConfigurable
-                ? <ChevronRightIcon className={`h-3.5 w-3.5 text-secondary ${opensLeft(THINKING_MENU_WIDTH) ? 'rotate-180' : ''}`} />
+                ? <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
                 : <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />}
             </span>
           </button>
@@ -1542,7 +1608,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             sessionId={contextWindowSessionId} isSelected={isSelected(hoveredModel)}
             disabled={disabled || contextWindowDisabled || hoveredModel.accessible === false || hoveredModel.busy === true}
             isOpen={isContextWindowMenuOpen} menuStyle={contextWindowMenuStyle} menuRef={contextWindowMenuRef}
-            opensLeft={opensLeft(CONTEXT_WINDOW_MENU_WIDTH)}
             onOpen={openContextWindowMenu} onInteract={cancelHoverClose} onSelectModel={() => handleModelSelect(hoveredModel)} />
         )}
         {!thinkingSelectionEnabled && hasThinkingProtocol && hoveredModel.thinkingConfig && (
@@ -1686,8 +1751,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   ) : null;
 
   return (
-    <div ref={containerRef} className={`relative ${disabled ? 'cursor-wait' : 'cursor-pointer'}`}>
-      <Tooltip content={triggerLabel} position={TooltipPosition.Top} delay={300} multiline disabled={!iconOnly || isOpen || Boolean(restrictedPrompt)}>
+    <div
+      ref={containerRef}
+      className={`relative ${iconOnly ? 'shrink-0' : 'w-fit min-w-0 max-w-full'} ${disabled ? 'cursor-wait' : 'cursor-pointer'}`}
+    >
+      <Tooltip
+        className={iconOnly ? undefined : triggerMaxWidthClass}
+        content={triggerLabel}
+        position={TooltipPosition.Top}
+        delay={300}
+        multiline
+        disabled={!iconOnly || isOpen || Boolean(restrictedPrompt)}
+      >
         <button
           type="button"
           disabled={disabled}

@@ -42,13 +42,13 @@ function createRuntimeMock(): CoworkRuntime {
 
 describe('CoworkEngineRouter', () => {
   test('companion correlation captures the dispatched turn before the runtime promise or renderer reply completes', async () => {
-    const openclawRuntime = createRuntimeMock();
+    const dshRuntime = createRuntimeMock();
     let finishRuntime!: () => void;
-    vi.mocked(openclawRuntime.startSession).mockReturnValue(new Promise<void>(resolve => { finishRuntime = resolve; }));
+    vi.mocked(dshRuntime.startSession).mockReturnValue(new Promise<void>(resolve => { finishRuntime = resolve; }));
     const usage = new TaskUsageAnalytics({ getOwner: () => 'owner', report: vi.fn(),
       getSession: () => ({ agentId: AgentId.Main, messages: [] }),
       getAgent: () => ({ source: AgentSource.Custom }), updateMessage: vi.fn() });
-    const router = new CoworkEngineRouter({ getCurrentEngine: () => 'openclaw', openclawRuntime, analytics: usage });
+    const router = new CoworkEngineRouter({ getCurrentEngine: () => 'dsh', dshRuntime, analytics: usage });
     const report = vi.fn();
     const companion = new CompanionAnalytics(report, () => 'owner');
     const submit = { action: CompanionAnalyticsAction.Task, source: CompanionAnalyticsSource.Panel,
@@ -69,43 +69,43 @@ describe('CoworkEngineRouter', () => {
     await running;
   });
 
-  test('only stops the openclaw runtime when no session engine is recorded', () => {
-    const openclawRuntime = createRuntimeMock();
+  test('only stops the dsh runtime when no session engine is recorded', () => {
+    const dshRuntime = createRuntimeMock();
     const router = new CoworkEngineRouter({
-      getCurrentEngine: () => 'openclaw',
-      openclawRuntime,
+      getCurrentEngine: () => 'dsh',
+      dshRuntime,
     });
 
     router.stopSession('missing-session');
 
-    expect(openclawRuntime.stopSession).toHaveBeenCalledWith('missing-session');
+    expect(dshRuntime.stopSession).toHaveBeenCalledWith('missing-session');
   });
 
   test('forwards context maintenance events from the runtime', () => {
-    const openclawRuntime = createRuntimeMock();
+    const dshRuntime = createRuntimeMock();
     const router = new CoworkEngineRouter({
-      getCurrentEngine: () => 'openclaw',
-      openclawRuntime,
+      getCurrentEngine: () => 'dsh',
+      dshRuntime,
     });
     const listener = vi.fn();
 
     router.on('contextMaintenance', listener);
-    (openclawRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
+    (dshRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
       .emit('contextMaintenance', 'session-1', true);
 
     expect(listener).toHaveBeenCalledWith('session-1', true);
   });
 
   test('preserves the stopped turn identity when forwarding the stop event', () => {
-    const openclawRuntime = createRuntimeMock();
-    const router = new CoworkEngineRouter({ getCurrentEngine: () => 'openclaw', openclawRuntime });
+    const dshRuntime = createRuntimeMock();
+    const router = new CoworkEngineRouter({ getCurrentEngine: () => 'dsh', dshRuntime });
     const stopped = vi.fn();
     const completed = vi.fn();
     const turn = { userMessageId: 'user-1', traceId: '4bf92f3577b34da6a3ce929d0e0e4736', runIds: ['run-1'] };
     router.on('sessionStopped', stopped);
     router.on('complete', completed);
 
-    (openclawRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
+    (dshRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
       .emit('sessionStopped', 'session-1', turn);
 
     expect(stopped).toHaveBeenCalledWith('session-1', turn);
@@ -113,10 +113,10 @@ describe('CoworkEngineRouter', () => {
   });
 
   test('delegates BTW requests and forwards only the BTW result event', async () => {
-    const openclawRuntime = createRuntimeMock();
+    const dshRuntime = createRuntimeMock();
     const router = new CoworkEngineRouter({
-      getCurrentEngine: () => 'openclaw',
-      openclawRuntime,
+      getCurrentEngine: () => 'dsh',
+      dshRuntime,
     });
     const listener = vi.fn();
     router.on('btwResult', listener);
@@ -125,7 +125,7 @@ describe('CoworkEngineRouter', () => {
       success: true,
       runId: 'btw-1',
     });
-    expect(openclawRuntime.submitBtw).toHaveBeenCalledWith(
+    expect(dshRuntime.submitBtw).toHaveBeenCalledWith(
       'session-1',
       'What changed?',
       'btw-1',
@@ -135,7 +135,7 @@ describe('CoworkEngineRouter', () => {
       aborted: true,
       runId: 'btw-1',
     });
-    expect(openclawRuntime.abortBtw).toHaveBeenCalledWith('session-1', 'btw-1');
+    expect(dshRuntime.abortBtw).toHaveBeenCalledWith('session-1', 'btw-1');
 
     const result = {
       runId: 'btw-1',
@@ -146,7 +146,7 @@ describe('CoworkEngineRouter', () => {
       createdAt: 1,
       completedAt: 2,
     };
-    (openclawRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
+    (dshRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
       .emit('btwResult', 'session-1', result);
     expect(listener).toHaveBeenCalledWith('session-1', result);
   });

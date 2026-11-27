@@ -14,8 +14,9 @@
 //
 //   ELECTRON_RUN_AS_NODE=1 <electron> scripts/verify-dsh-remove-tree.cjs
 //
-// Exits non-zero if removeTree ever deletes through a link.
+// Also check that cleaning a read-only Git object preserves its other hard links.
 
+const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -48,17 +49,19 @@ fs.rmSync(naive.base, { recursive: true, force: true });
 console.log(`${LOG_TAG} ${runtimeLabel}: fs.rmSync(recursive) ${naiveFollowed ? 'FOLLOWS links' : 'does not follow links'}`);
 
 const guarded = buildFixture();
-removeTree(guarded.home);
-const survived = fs.existsSync(guarded.guarded);
-const homeGone = !fs.existsSync(guarded.home);
-fs.rmSync(guarded.base, { recursive: true, force: true });
+try {
+  const object = path.join(guarded.home, 'read-only-object');
+  fs.linkSync(guarded.guarded, object);
+  fs.chmodSync(object, 0o444);
+  const contents = fs.readFileSync(guarded.guarded);
+  const mode = fs.statSync(guarded.guarded).mode;
 
-if (!survived) {
-  console.error(`${LOG_TAG} removeTree deleted through the profile link — the runtime would be corrupted`);
-  process.exit(1);
+  removeTree(guarded.home);
+  assert.ok(!fs.existsSync(guarded.home), 'removeTree left the home behind');
+  assert.deepEqual(fs.readFileSync(guarded.guarded), contents, 'cleanup changed the runtime file');
+  assert.equal(fs.statSync(guarded.guarded).mode, mode, 'cleanup changed permissions on the retained hard link');
+} finally {
+  if (fs.existsSync(guarded.guarded)) fs.chmodSync(guarded.guarded, 0o600);
+  removeTree(guarded.base);
 }
-if (!homeGone) {
-  console.error(`${LOG_TAG} removeTree left the home behind`);
-  process.exit(1);
-}
-console.log(`${LOG_TAG} removeTree removed the home and left the link target intact`);
+console.log(`${LOG_TAG} Removed the read-only object and preserved the linked runtime file and its permissions`);

@@ -8,6 +8,9 @@ export interface Skill {
   enabled: boolean;       // Whether visible in popover
   isOfficial: boolean;    // "官方" badge
   isBuiltIn: boolean;     // Bundled with app, cannot be deleted
+  canDisable?: boolean;   // Core built-in skills cannot be disabled (false = always enabled)
+  modelInvocable?: boolean; // Whether the model may auto-invoke this skill by default
+  userInvocable?: boolean;  // Whether shown in user skill pickers / slash menus
   updatedAt: number;      // Timestamp
   prompt: string;         // SKILL.md body for management; do not inline into Cowork prompts
   skillPath: string;      // Absolute path to SKILL.md

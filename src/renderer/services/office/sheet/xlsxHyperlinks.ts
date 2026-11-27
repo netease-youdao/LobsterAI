@@ -5,7 +5,8 @@ import { formulaSheetName } from './sheetStructure';
 import type { Relationship } from './xlsxPackage';
 import { mapElements } from './xlsxStructureExport';
 import {
-  addElementPrefix, appendChildren, childInsertionPoint, elementPrefix, encodeXmlAttribute, firstChildElement, firstXmlElement, xmlAttribute, xmlElements,
+  addElementPrefix, appendChildren, childInsertionPoint, elementPrefix, encodeXmlAttribute, ensureXmlNamespace, firstChildElement, firstXmlElement,
+  namespacePrefixFor, xmlAttribute, xmlAttributes, xmlElements,
 } from './xlsxXml';
 
 /**
@@ -168,6 +169,10 @@ export function rewriteHyperlinks(
 ): { xml: string; relationships: string | undefined } {
   const worksheet = firstXmlElement(xml, 'worksheet');
   const prefix = elementPrefix(worksheet?.name ?? '');
+  const existingRelPrefix = worksheet && namespacePrefixFor(worksheet.open, RELATIONSHIPS_NS);
+  const relPrefix = existingRelPrefix ?? 'r';
+  const canBindOnWorksheet = Boolean(worksheet) && (Boolean(existingRelPrefix) || !xmlAttributes(worksheet!.open).has(`xmlns:${relPrefix}`));
+  const localRelNs = canBindOnWorksheet ? '' : ` xmlns:${relPrefix}="${RELATIONSHIPS_NS}"`;
   const removedIds = new Set<string>();
   let result = mapElements(xml, 'hyperlink', element => {
     const range = parseRangeReference(xmlAttribute(element.open, 'ref') ?? '');
@@ -195,7 +200,7 @@ export function rewriteHyperlinks(
     const id = `rId${next}`;
     used.add(id);
     newRelationships.push(`<Relationship Id="${id}" Type="${HYPERLINK_RELATIONSHIP}" Target="${encodeXmlAttribute(link.url)}" TargetMode="External"/>`);
-    elements.push(`<hyperlink ref="${ref}" r:id="${id}"${tooltip}/>`);
+    elements.push(`<hyperlink ref="${ref}"${localRelNs} ${relPrefix}:id="${id}"${tooltip}/>`);
   }
   if (newRelationships.length) {
     rels = rels
@@ -212,8 +217,8 @@ export function rewriteHyperlinks(
       result = result.slice(0, at) + addElementPrefix(`<hyperlinks>${elements.join('')}</hyperlinks>`, prefix) + result.slice(at);
     }
     // New relationship ids need the relationships namespace on the worksheet.
-    if (newRelationships.length && worksheet && !/\sxmlns:r=/.test(worksheet.open)) {
-      result = result.replace(worksheet.open, worksheet.open.replace(/>$/, ` xmlns:r="${RELATIONSHIPS_NS}">`));
+    if (newRelationships.length && canBindOnWorksheet) {
+      result = ensureXmlNamespace(result, 'worksheet', relPrefix, RELATIONSHIPS_NS).xml;
     }
   }
   // A container left without links would be invalid.

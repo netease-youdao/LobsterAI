@@ -16,6 +16,7 @@ interface TrayCompanionActions {
   isEnabled(): boolean;
   toggleEnabled(): void;
   openPanel(): void;
+  isAuthGateBlocked?: () => boolean;
 }
 
 export interface TrayReminderState {
@@ -59,6 +60,29 @@ function getLabels(): {
 
 function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
   const labels = getLabels();
+  const authGateBlocked = companionActions?.isAuthGateBlocked?.() === true;
+
+  if (authGateBlocked) {
+    return Menu.buildFromTemplate([
+      {
+        label: labels.showWindow,
+        click: () => {
+          const win = getWindow();
+          if (win && !win.isDestroyed()) {
+            if (!win.isVisible()) win.show();
+            if (!win.isFocused()) win.focus();
+          }
+        },
+      },
+      { type: 'separator' },
+      {
+        label: labels.quit,
+        click: () => {
+          app.quit();
+        },
+      },
+    ]);
+  }
 
   return Menu.buildFromTemplate([
     ...(trayReminder.count > 0

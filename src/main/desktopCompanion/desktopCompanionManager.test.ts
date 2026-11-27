@@ -28,9 +28,9 @@ import {
   DesktopCompanionSurface,
   DesktopCompanionTiming,
 } from '../../shared/desktopCompanion/constants';
+import { CompanionContextActionId, CompanionContextClipboardKind } from '../../shared/desktopCompanion/contextActions';
 import { CompanionContextMenuIpc, CompanionContextMenuSize } from '../../shared/desktopCompanion/contextMenu';
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
-import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
 import { CompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import {
@@ -42,6 +42,7 @@ import { COMPANION_RECENT_TASK_LIMIT, COMPANION_RECENT_TASKS_KEY, CompanionResul
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import { CompanionContextInspector } from './companionContextInspector';
 import { CompanionScreenPermissionError, CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { CompanionWindowLevel } from './companionWindow';
@@ -168,9 +169,10 @@ let getTaskInfo: ReturnType<typeof vi.fn<(id: string) => CompanionTaskInfo | nul
 let reportAnalytics: ReturnType<typeof vi.fn>;
 let guideOpenSettings: ReturnType<typeof vi.fn>;
 let requestScreenAccess: ReturnType<typeof vi.fn>;
+let contextInspector: CompanionContextInspector | undefined;
 
 function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
-  loadSelectionHook: () => SelectionHookModule | null = () => null) {
+  loadSelectionHook: () => SelectionHookModule | null = () => null, authGateBlocked = false) {
   reportAnalytics = vi.fn();
   guideOpenSettings = vi.fn(() => Promise.resolve());
   requestScreenAccess = vi.fn();
@@ -180,8 +182,14 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
   foreground = new FakeMonitor();
   fileDrag = new FakeMonitor();
   getTaskInfo = vi.fn(id => ({ id, title: `Task ${id}`, status: 'completed', updatedAt: 1000 }));
+  const inspector = contextInspector ?? new CompanionContextInspector({
+    readClipboard: () => ({ kind: 'empty' }),
+    queryActiveFile: async () => null,
+    statPath: () => null,
+  });
   manager = new DesktopCompanionManager({
     enginePhase,
+    authGateBlocked,
     reportAnalytics,
     store: {
       get: <T>(key: string) => values.get(key) as T | undefined,
@@ -196,6 +204,7 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
     openSettings,
     services: {
       foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook, languageClient, requestScreenAccess,
+      contextInspector: inspector,
       permissionGuide: {
         openSettings: guideOpenSettings, locateAppWindow: async () => ({ x: 400, y: 143, width: 715, height: 625 }),
         loadApp: async () => null, focusedWindow: () => null, onAppTerminated: () => () => undefined,
@@ -274,9 +283,9 @@ beforeEach(() => {
   mocks.windows.length = 0;
   mocks.handlers.clear();
   FakeSelectionHook.last = null;
+  contextInspector = undefined;
   // Most lifecycle cases start with the orb explicitly disabled and open surfaces on demand.
   values = new Map<string, unknown>([
-    [DesktopCompanionStoreKey.Greeted, true],
     [DesktopCompanionStoreKey.Preferences, { enabled: false }],
   ]);
 });
@@ -1070,7 +1079,6 @@ describe('desktop companion lifecycle', () => {
       shortcut: '',
       skin: 'lobster',
       selectionToolbar: true,
-      dragAssist: true,
       contextHints: true,
       selectionExcludedApps: [],
       selectionToolbarOrder: [...DEFAULT_COMPANION_TOOLBAR_ORDER],
@@ -1757,24 +1765,194 @@ describe('snoozing', () => {
   });
 });
 
-describe('stage: hints and drops', () => {
-  test('accepting a mail hint pre-fills the habit as a prompt and opens the panel', () => {
+describe('stage: on-demand context and drops', () => {
+  test('never pops up a welcome bubble or proactive app-switch hint on its own', () => {
     vi.useFakeTimers();
-    const start = new Date(2026, 9, 6, 9, 0).getTime();
-    vi.setSystemTime(start);
-    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
     create();
     orb().emit('ready-to-show');
-    vi.setSystemTime(start + CompanionHintRule.LaunchQuietMs + 1_000);
-    foreground.emit('change', 'com.apple.mail');
-    vi.advanceTimersByTime(CompanionHintRule.DwellMs + 500);
-    expect(manager.getState().stage).toMatchObject({ kind: DesktopCompanionStageKind.Hint, topic: 'mail' });
-    expect(manager.getState().foreground).toEqual({ appId: 'com.apple.mail', category: 'mail' });
-    invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.HintAccept });
+    // First appearance stays completely quiet — no welcome bubble.
+    vi.advanceTimersByTime(10_000);
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    // Dwelling in Mail or Excel never pops up a proactive bubble either.
+    foreground.emit('change', 'com.apple.mail');
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    expect(manager.getState().foreground).toEqual({ appId: 'com.apple.mail', category: 'mail' });
+    foreground.emit('change', 'com.microsoft.Excel');
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+  });
+
+  test('captures P1 active file and clipboard on demand when opening the panel and runs context actions end to end', async () => {
+    let clipboardProbe: any = { kind: 'empty' };
+    const queryActiveFile = vi.fn(async (appId: string) => (
+      appId === 'com.microsoft.Excel' ? 'file:///Users/alice/Documents/Q3.xlsx' : null
+    ));
+    contextInspector = new CompanionContextInspector({
+      readClipboard: () => clipboardProbe,
+      queryActiveFile,
+      statPath: target => (target === '/Users/alice/Documents/Q3.xlsx' ? { isDirectory: false } : null),
+      saveClipboardImage: async () => '/tmp/lobsterai/attachments/clipboard-1.png',
+    });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+
+    // User copies fresh content after startup while working in Excel.
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Text,
+      fingerprint: 'txt:chat-1',
+      text: '张三：请今天下午确认悬浮球的新版情境交互方案\n李四：收到，待会同步结果',
+    };
+
+    // Before opening the panel, no OS active-file lookup runs in the background.
+    foreground.emit('change', 'com.microsoft.Excel');
+    expect(queryActiveFile).not.toHaveBeenCalled();
+    expect(manager.getState().context).toBeNull();
+
+    // Opening the panel immediately captures synchronous context + resolves active file asynchronously.
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(queryActiveFile).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.getState().context).toMatchObject({
+      appId: 'com.microsoft.Excel',
+      category: 'spreadsheet',
+      activeFile: { path: '/Users/alice/Documents/Q3.xlsx', name: 'Q3.xlsx', kind: CompanionFileKind.Spreadsheet, isDirectory: false },
+      clipboard: { kind: CompanionContextClipboardKind.Text, fingerprint: 'txt:chat-1' },
+    });
+
+    // Running ActiveFilePrimary returns the verified spreadsheet attachment + analysis prompt.
+    const fileRes = await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.ActiveFilePrimary });
+    expect(fileRes).toEqual({
+      success: true,
+      prompt: 'desktopCompanionDropAnalyzePrompt',
+      attachments: [{ path: '/Users/alice/Documents/Q3.xlsx', name: 'Q3.xlsx', isImage: false, isDirectory: false }],
+    });
+
+    // Running ClipboardText materializes the copied text and consumes the fingerprint.
+    const clipRes = await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.ClipboardText });
+    expect(clipRes).toEqual({
+      success: true,
+      prompt: 'desktopCompanionContextClipboardDefaultPrompt',
+      pastedText: clipboardProbe.text,
+    });
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+
+    // Dismissing a new clipboard image hides it immediately and suppresses it on reopen.
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Image,
+      fingerprint: 'img:shot-1',
+      width: 640,
+      height: 400,
+      toPNG: () => Buffer.from('png'),
+    };
+    manager.hidePanel();
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard?.fingerprint).toBe('img:shot-1');
+    await invoke(DesktopCompanionIpc.DismissContextClipboard, 'img:shot-1');
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+    manager.hidePanel();
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+  });
+
+  test('suppresses clipboard copied inside a password manager and honors disabling contextHints', async () => {
+    let clipboardProbe: any = { kind: 'empty' };
+    contextInspector = new CompanionContextInspector({
+      readClipboard: () => clipboardProbe,
+      queryActiveFile: async () => 'file:///Users/alice/Documents/Q3.xlsx',
+      statPath: () => ({ isDirectory: false }),
+    });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+
+    // Leaving 1Password records the newly copied clipboard fingerprint as blocked.
+    foreground.emit('change', 'com.1password.1password');
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Text,
+      fingerprint: 'txt:secret-note',
+      text: 'This text was copied while 1Password was focused and must never appear.',
+    };
+    foreground.emit('change', 'com.google.Chrome');
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+
+    // Copying a fresh non-secret text in Chrome is allowed again.
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Text,
+      fingerprint: 'txt:chrome-note',
+      text: 'This paragraph was copied in Chrome after leaving the password manager and should appear.',
+    };
+    manager.hidePanel();
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard?.fingerprint).toBe('txt:chrome-note');
+
+    // Turning off contextHints clears context immediately and skips inspection on reopen.
+    manager.setPreferences({ contextHints: false });
+    expect(manager.getState().context).toBeNull();
+  });
+
+  test('context screenshot and file-picker actions carry their tailored prompt back into the panel', async () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+    foreground.emit('change', 'com.tencent.xinwechat');
+    manager.togglePanel(AnalyticsSource.Orb);
+
+    const captureSpy = vi.spyOn(CompanionScreenshotController.prototype, 'capture')
+      .mockResolvedValue({ path: '/tmp/chat-shot.png', name: 'shot.png', isImage: true });
+    await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.ChatScreenshotTodo });
+    await vi.waitFor(() => expect(manager.getState().draft.attachments).toHaveLength(1));
+    expect(captureSpy).toHaveBeenCalledTimes(1);
     expect(manager.getState().panelVisible).toBe(true);
-    expect(manager.getState().draft.prompt).toBe('desktopCompanionPromptMail');
-    expect(values.get(DesktopCompanionStoreKey.HintLedger)).toMatchObject({ categories: { mail: { acceptedAt: expect.any(Number) } } });
+    expect(manager.getState().draft.prompt).toBe('desktopCompanionContextChatScreenshotTodoPrompt');
+
+    // Reset draft and test SpreadsheetPickAnalyze filtered file dialog.
+    manager.setDraft({ prompt: '', attachments: [], workingDirectory: '' });
+    foreground.emit('change', 'com.microsoft.Excel');
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/sales.xlsx'] });
+    await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.SpreadsheetPickAnalyze });
+    await vi.waitFor(() => expect(manager.getState().draft.attachments[0]?.path).toBe('/tmp/sales.xlsx'));
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [{ name: 'Spreadsheets', extensions: expect.arrayContaining(['xlsx', 'csv']) }],
+    }));
+    expect(manager.getState().draft.prompt).toBe('desktopCompanionDropAnalyzePrompt');
+  });
+
+  test('hover launcher resolves an active file on demand and opens the panel with it on ContextFile click', async () => {
+    vi.useFakeTimers();
+    contextInspector = new CompanionContextInspector({
+      readClipboard: () => ({ kind: 'empty' }),
+      queryActiveFile: async () => 'file:///Users/alice/Documents/Report.pdf',
+      statPath: target => (target === '/Users/alice/Documents/Report.pdf' ? { isDirectory: false } : null),
+    });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+    foreground.emit('change', 'com.apple.Preview');
+
+    restOnOrb();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.Launcher);
+    expect(manager.getState().context?.activeFile).toMatchObject({
+      path: '/Users/alice/Documents/Report.pdf',
+      name: 'Report.pdf',
+      kind: CompanionFileKind.Pdf,
+    });
+
+    invoke(DesktopCompanionIpc.StageCommand, {
+      type: DesktopCompanionStageCommandType.LauncherRun,
+      action: CompanionLauncherAction.ContextFile,
+    }, stageWindow().webContents);
+    expect(manager.getState().panelVisible).toBe(true);
+    expect(manager.getState().draft.attachments).toEqual([
+      { path: '/Users/alice/Documents/Report.pdf', name: 'Report.pdf', isImage: false, isDirectory: false },
+    ]);
+    expect(manager.getState().draft.prompt).toBe('desktopCompanionDropDigestPrompt');
   });
 
   test('ordinary desktop drags never open a window or replace the current task', () => {
@@ -1906,12 +2084,12 @@ describe('stage: hints and drops', () => {
     expect(manager.getState().stage).toMatchObject({ files: [], kinds: [CompanionFileKind.Image] });
   });
 
-  test('turning off drag assistance immediately dismisses an open strip', () => {
+  test('turning off the orb immediately dismisses an open drop strip', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
     dragOverOrb(DesktopCompanionFileDragPhase.Enter);
-    manager.setPreferences({ dragAssist: false });
+    manager.setPreferences({ enabled: false });
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
     expect(manager.getState().fileDragActive).toBe(false);
     dragOverOrb(DesktopCompanionFileDragPhase.Enter);
@@ -2400,12 +2578,14 @@ describe('stage: hints and drops', () => {
     expect(manager.getState().foreground).toEqual({ appId: 'com.microsoft.Excel', category: 'spreadsheet' });
   });
 
-  test('drag detection and drops stay off when the drop zone is disabled', () => {
+  test('legacy dragAssist: false preference keeps file drag assistance enabled by default', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, dragAssist: false });
     create();
-    expect(fileDrag.start).not.toHaveBeenCalled();
+    expect(fileDrag.start).toHaveBeenCalled();
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
-    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    expect(manager.getState().fileDragActive).toBe(true);
+    dragOverOrb(DesktopCompanionFileDragPhase.Enter);
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.Drop);
   });
 });
 
@@ -2931,5 +3111,36 @@ describe('hover launcher', () => {
     expect(stageKind()).toBe(DesktopCompanionStageKind.None);
     vi.advanceTimersByTime(LauncherOpenDelayMs + LauncherCloseDelayMs * 2);
     expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+  });
+});
+
+describe('auth gate blocking', () => {
+  test('defers orb, global shortcut, selection listener, and quick panel while authGateBlocked is true and restores when unblocked', () => {
+    const startSelection = vi.spyOn(FakeSelectionHook.prototype, 'start');
+    const stopSelection = vi.spyOn(FakeSelectionHook.prototype, 'stop');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook, true);
+
+    expect(mocks.windows).toHaveLength(1); // Only the main window exists; no orb was created.
+    expect(globalShortcut.register).not.toHaveBeenCalled();
+    expect(startSelection).not.toHaveBeenCalled();
+
+    manager.togglePanel(AnalyticsSource.Tray);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(openMain).toHaveBeenCalledWith(null);
+
+    manager.setAuthGateBlocked(false);
+    expect(globalShortcut.register).toHaveBeenCalledTimes(1);
+    expect(mocks.windows.length).toBeGreaterThan(1);
+    expect(startSelection).toHaveBeenCalledTimes(1);
+
+    manager.togglePanel(AnalyticsSource.Tray);
+    expect(manager.getState().panelVisible).toBe(true);
+
+    manager.setAuthGateBlocked(true);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(globalShortcut.unregister).toHaveBeenCalledTimes(1);
+    expect(orb().visible).toBe(false);
+    expect(stopSelection).toHaveBeenCalledTimes(1);
   });
 });

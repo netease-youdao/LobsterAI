@@ -7,7 +7,8 @@ import { addContentType, addDefaultContentType, nextPartName, relationshipsPath,
 import type { AxisGeometry } from './xlsxStructureExport';
 import { mapElements, RelationshipTypes } from './xlsxStructureExport';
 import {
-  addElementPrefix, appendChildren, childInsertionPoint, decodeXml, elementPrefix, encodeXmlAttribute, firstXmlElement, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
+  addElementPrefix, appendChildren, childInsertionPoint, decodeXml, elementPrefix, encodeXmlAttribute, ensureXmlNamespace, firstXmlElement,
+  namespacePrefixFor, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
 } from './xlsxXml';
 
 /**
@@ -542,9 +543,12 @@ export function addSheetDrawings(files: Map<string, Uint8Array>, sheetPart: stri
     files.set(sheetRelsPath, encoder.encode(withRelationship(sheetRels, id, RelationshipTypes.Drawing, relativeTarget(sheetPart, drawingPart))));
     const worksheet = firstXmlElement(sheet, 'worksheet');
     const prefix = elementPrefix(worksheet?.name ?? '');
+    const relPrefix = (worksheet && namespacePrefixFor(worksheet.open, RELATIONSHIPS_NS)) ?? 'r';
+    const ensured = ensureXmlNamespace(sheet, 'worksheet', relPrefix, RELATIONSHIPS_NS);
+    sheet = ensured.xml;
+    const localRelNs = ensured.bound ? '' : ` xmlns:${relPrefix}="${RELATIONSHIPS_NS}"`;
     const at = childInsertionPoint(sheet, 'worksheet', AFTER_DRAWING) ?? sheet.lastIndexOf('</');
-    sheet = sheet.slice(0, at) + addElementPrefix(`<drawing r:id="${id}"/>`, prefix) + sheet.slice(at);
-    if (worksheet && !/\sxmlns:r=/.test(worksheet.open)) sheet = sheet.replace(worksheet.open, worksheet.open.replace(/>$/, ` xmlns:r="${RELATIONSHIPS_NS}">`));
+    sheet = sheet.slice(0, at) + addElementPrefix(`<drawing${localRelNs} ${relPrefix}:id="${id}"/>`, prefix) + sheet.slice(at);
   }
   const drawingRelsPath = relationshipsPath(drawingPart);
   let drawingRels = pkg.text(drawingRelsPath);

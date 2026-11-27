@@ -2,13 +2,14 @@ import type { AgentSource } from '@shared/agent/constants';
 
 import type { Platform } from '../../../shared/platform';
 import type { CoworkSessionStatus } from '../../types/cowork';
-import type { AgentSidebarIndicator } from './constants';
+import type { AgentSidebarIndicator, PinnedTaskSortMode } from './constants';
 
 export interface AgentSidebarAgentSummary {
   id: string;
   name: string;
   icon: string;
   iconCustomized?: boolean;
+  workingDirectory?: string;
   source?: AgentSource;
   presetId?: string;
   updateRevision?: number;
@@ -26,6 +27,8 @@ export interface AgentSidebarTaskNode {
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
+  cwd?: string;
+  forkGitBranch?: string | null;
   imPlatform?: Platform | null;
   updatedAt: number;
   createdAt: number;
@@ -46,6 +49,8 @@ export interface AgentSidebarAgentNode extends AgentSidebarAgentSummary {
 export interface AgentSidebarPreferenceState {
   expandedAgentIds: string[];
   expandedTaskListAgentIds: string[];
+  isPinnedSectionCollapsed?: boolean;
+  pinnedTaskSortMode?: PinnedTaskSortMode;
   selectedAgentId?: string;
   selectedTaskId?: string;
 }

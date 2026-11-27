@@ -1,17 +1,35 @@
 import { describe, expect, test } from 'vitest';
 
+import { SettingsTabId } from '../components/settings/settingsTabs';
 import { MainView } from '../types/navigation';
 import { describeAppDeepLinkTarget, isAppDeepLink, parseAppDeepLink } from './appDeepLink';
 
 describe('app deep links', () => {
   test('parses settings tabs and main views', () => {
-    expect(parseAppDeepLink('lobsterai://settings/im')).toEqual({ kind: 'settings', tab: 'im' });
+    expect(parseAppDeepLink('lobsterai://settings/im')).toEqual({ kind: 'settings', tab: SettingsTabId.Im });
+    expect(parseAppDeepLink('lobsterai://settings/email')).toEqual({ kind: 'settings', tab: SettingsTabId.Email });
+    expect(parseAppDeepLink('lobsterai://settings/dataPrivacy')).toEqual({
+      kind: 'settings',
+      tab: SettingsTabId.DataPrivacy,
+    });
     expect(parseAppDeepLink(' lobsterai://settings/desktopCompanion/ ')).toEqual({
       kind: 'settings',
-      tab: 'desktopCompanion',
+      tab: SettingsTabId.DesktopCompanion,
     });
     expect(parseAppDeepLink('lobsterai://view/scheduledTasks')).toEqual({ kind: 'view', view: 'scheduledTasks' });
     expect(parseAppDeepLink('lobsterai://view/skills')).toEqual({ kind: 'view', view: 'skills' });
+  });
+
+  test('normalizes retired settings tabs to general while keeping email active', () => {
+    expect(parseAppDeepLink('lobsterai://settings/email')).toEqual({ kind: 'settings', tab: 'email' });
+    expect(parseAppDeepLink('lobsterai://settings/coworkAgentEngine')).toEqual({
+      kind: 'settings',
+      tab: 'general',
+    });
+    expect(parseAppDeepLink('lobsterai://settings/coworkDreaming')).toEqual({
+      kind: 'settings',
+      tab: 'general',
+    });
   });
 
   test('rejects web urls, auth callbacks and unknown targets', () => {
@@ -26,8 +44,12 @@ describe('app deep links', () => {
     const translate = (key: string) => `<${key}>`;
     expect(describeAppDeepLinkTarget({ kind: 'view', view: MainView.Experts }, translate)).toBe('<expertPlaza>');
     expect(describeAppDeepLinkTarget({ kind: 'view', view: MainView.Connectors }, translate)).toBe('<connectors>');
-    expect(describeAppDeepLinkTarget({ kind: 'settings', tab: 'desktopCompanion' }, translate))
+    expect(describeAppDeepLinkTarget({ kind: 'settings', tab: SettingsTabId.DesktopCompanion }, translate))
       .toBe('<settings> · <desktopCompanionTitle>');
+    expect(describeAppDeepLinkTarget({ kind: 'settings', tab: SettingsTabId.Email }, translate))
+      .toBe('<settings> · <emailTab>');
+    expect(describeAppDeepLinkTarget({ kind: 'settings', tab: SettingsTabId.DataPrivacy }, translate))
+      .toBe('<settings> · <dataPrivacyTab>');
   });
 
   test('every main view a link can open has a name', () => {

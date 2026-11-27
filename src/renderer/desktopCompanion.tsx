@@ -12,8 +12,11 @@ import LanguageToolsSurface from './components/desktopCompanion/LanguageToolsSur
 import PermissionGuideSurface from './components/desktopCompanion/PermissionGuideSurface';
 import SelectionSurface from './components/desktopCompanion/SelectionSurface';
 import { useDesktopCompanionState } from './components/desktopCompanion/useDesktopCompanionState';
+import { installCleanRichTextCopy } from './services/clipboardRichText';
 import { i18nService } from './services/i18n';
 import { THEME_APPEARANCE_STORAGE_KEY } from './theme/engine/theme-manager';
+
+installCleanRichTextCopy(document);
 
 const surface = new URLSearchParams(window.location.search).get('surface');
 

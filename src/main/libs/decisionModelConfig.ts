@@ -3,6 +3,9 @@ import {
   type DecisionModelConfigView,
   DecisionModelProvider,
 } from '../../shared/decisionModel/constants';
+import { isValidDecisionEndpoint } from '../../shared/decisionModel/endpoint';
+
+export { isValidDecisionEndpoint };
 
 export interface DecisionModelConfig {
   enabled: boolean;
@@ -82,15 +85,6 @@ export function applyDecisionModelConfigUpdate(
     endpoint: typeof patch.endpoint === 'string' ? patch.endpoint : current.endpoint,
     apiKeys,
   });
-}
-
-export function isValidDecisionEndpoint(endpoint: string): boolean {
-  try {
-    const url = new URL(endpoint);
-    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
-  } catch {
-    return false;
-  }
 }
 
 /** Has everything a request needs, regardless of the enabled switch. */

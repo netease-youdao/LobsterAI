@@ -1,15 +1,12 @@
 import type { McpAuthMode } from '../../shared/mcp/auth';
+import type { McpManagedConnection, McpManagedProvider } from '../../shared/mcp/constants';
 import type { McpMarketplaceConnector } from '../../shared/mcp/marketplace';
+import type { McpToolFilter } from '../../shared/mcp/toolFilter';
+
+export type { McpToolFilter };
 
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
-
-// Per-server MCP tool selection, forwarded to OpenClaw's mcp.servers.*.toolFilter.
-// Excluded tools never reach the model payload (~350 prompt tokens saved per tool).
-export interface McpToolFilter {
-  include?: string[];
-  exclude?: string[];
-}
 
 export const McpRegistryEntryKind = {
   Server: 'server',
@@ -38,6 +35,7 @@ export interface McpServerConfig {
   githubUrl?: string;            // GitHub repository URL
   registryId?: string;           // matching registry entry ID
   launchResolution?: McpLaunchResolution;
+  runtimeConnection?: McpManagedConnection;
   createdAt: number;
   updatedAt: number;
 }
@@ -99,7 +97,7 @@ export interface McpRegistryEntry {
   requiredEnvKeys?: string[];    // env vars the user must fill
   optionalEnvKeys?: string[];    // optional env vars
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
-  oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
+  oauthProvider?: McpManagedProvider; // special app-managed OAuth/API key flow
   kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
   marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
   connector?: McpMarketplaceConnector; // remote URL/auth/credential form, tool allowlist, examples

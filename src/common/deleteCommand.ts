@@ -1,0 +1,1 @@
+export { isDeleteCommand } from './commandDanger';

@@ -22,7 +22,13 @@ import {
 } from './SettingsLayout';
 import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_META_TEXT } from './settingsTypography';
 
-const BrowserCredentialSettings: React.FC = () => {
+interface BrowserCredentialSettingsProps {
+  externalMode?: boolean;
+}
+
+const BrowserCredentialSettings: React.FC<BrowserCredentialSettingsProps> = ({
+  externalMode = false,
+}) => {
   const [credentials, setCredentials] = useState<BrowserCredentialSummary[]>([]);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [availabilityReason, setAvailabilityReason] = useState<string>();
@@ -192,6 +198,11 @@ const BrowserCredentialSettings: React.FC = () => {
         </button>
       )}
     >
+      {externalMode ? (
+        <div className={`rounded-xl border border-border bg-surface-raised px-4 py-2.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+          {i18nService.t('browserCredentialExternalModeNotice')}
+        </div>
+      ) : null}
       {available === false && !loading ? (
         <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-surface-raised px-4 py-3">
           <div className={`min-w-0 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`} role="status">
@@ -205,7 +216,7 @@ const BrowserCredentialSettings: React.FC = () => {
               type="button"
               onClick={() => void requestAccess()}
               disabled={requestingAccess || requiresRestart}
-              className="inline-flex h-8 shrink-0 items-center rounded-lg bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 shrink-0 items-center rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               {i18nService.t(requestingAccess
                 ? 'browserCredentialRequestingAccess'
@@ -319,7 +330,7 @@ const BrowserCredentialSettings: React.FC = () => {
               <button
                 type="submit"
                 disabled={saving || !origin.trim() || !username.trim() || !password}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:bg-gray-400"
+                className="rounded-lg bg-action px-4 py-2 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:bg-gray-400 disabled:text-white"
               >
                 {saving ? i18nService.t('saving') : i18nService.t('save')}
               </button>

@@ -13,7 +13,7 @@ Read, search, and manage email via IMAP protocol. Send email via SMTP. Supports 
 
 The `accounts.json` configuration file is automatically managed by LobsterAI Settings (邮箱设置). Legacy `.env` configuration is still supported as a fallback for older users. **Do NOT ask the user to create or edit these files — just run the commands directly.** If credentials are wrong, the scripts will return a clear error message; only then should you inform the user to check their email settings.
 
-The configuration files are located in this skill's directory (same folder as this SKILL.md file). The scripts load them automatically via absolute paths, regardless of the current working directory.
+The configuration files are automatically located by the scripts via LobsterAI's managed email config path (`EMAIL_ACCOUNTS_PATH` / `EMAIL_ENV_PATH`, falling back to this skill's directory), regardless of the current working directory.
 
 Use the provided scripts as the only email transport interface. Do not write temporary IMAP/SMTP scripts, do not use raw sockets, OpenSSL, `net`, `tls`, or alternate mail clients, and do not inspect `.env`, `accounts.json`, or script source unless the official command output explicitly reports missing configuration and the user asks you to diagnose it. If an official command fails or times out, report that command result and suggest checking LobsterAI Settings; do not implement a fallback protocol client.
 

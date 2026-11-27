@@ -180,7 +180,7 @@ const ArtifactSubscriptionPromptDialog = ({
                     );
                     onSubscribe();
                   }}
-                  className="ml-2 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
+                  className="ml-2 rounded-md bg-action px-3 py-1.5 text-sm text-action-foreground transition-colors hover:bg-action-hover"
                 >
                   {i18nService.t('subscriptionGateOpenAction')}
                 </button>
@@ -211,7 +211,7 @@ const ArtifactSubscriptionPromptDialog = ({
                   );
                   onLogin();
                 }}
-                className="h-11 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                className="h-11 rounded-lg bg-action px-5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 {i18nService.t('publishingTrialLoginAction')}
               </button>

@@ -92,6 +92,13 @@ describe('sfnt reader', () => {
     }
   });
 
+  test('returns a plain standalone font without rebuilding tables', async () => {
+    const original = readFont('Carlito-Regular.ttf');
+    const extracted = await extractFace(bufferSource(original), 0);
+    expect(extracted).toEqual(original);
+    await expect(extractFace(bufferSource(original), 1)).rejects.toThrow();
+  });
+
   test('rejects data that is not a font', async () => {
     await expect(readFontFaces(bufferSource(Buffer.from('<html>not a font</html>')))).rejects.toThrow();
   });

@@ -7,7 +7,10 @@ import {
   PlusIcon as AddIcon,
 } from '@heroicons/react/24/outline';
 import { PublishingRecoveryAnalyticsSurface } from '@shared/analytics/constants';
-import { ArtifactBrowserPartition } from '@shared/artifactPreview/constants';
+import {
+  ArtifactBrowserPartition,
+  ArtifactBrowserWindowOpenDisposition,
+} from '@shared/artifactPreview/constants';
 import { isWorkspaceDiffArtifact } from '@shared/artifactPreview/workspaceChanges';
 import { AuthSubscriptionStatus } from '@shared/auth/constants';
 import { buildBrowserSearchUrl } from '@shared/browserWebAccess/constants';
@@ -66,6 +69,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { subscribeArtifactBrowserWindowOpen } from '@/services/artifactWorkspace';
 import { authService } from '@/services/auth';
 import { copyTextToClipboard } from '@/services/clipboard';
 import { getPortalPricingUrl, PortalPricingKeyfrom } from '@/services/endpoints';
@@ -75,7 +79,7 @@ import {
   readLocalServiceProjectDirectoryCandidate as readNodeDeploymentProjectDirectoryCandidate,
   writeLocalServiceProjectDirectory as writeNodeDeploymentProjectDirectory,
 } from '@/services/localServiceProjectDirectoryCache';
-import { getMarkdownDocumentContent } from '@/services/markdownDocument';
+import { getMarkdownDocument, getMarkdownDocumentContent } from '@/services/markdownDocument';
 import { refreshOpenOfficeEditor } from '@/services/office/officeFormats';
 import {
   armPublishingSubscriptionRecovery,
@@ -109,10 +113,14 @@ import {
   ArtifactTypeValue,
   PREVIEWABLE_ARTIFACT_TYPES,
 } from '@/types/artifact';
-import { openLocalPathWithToast, revealLocalPathWithToast } from '@/utils/localFileActions';
+import { revealLocalPathWithToast } from '@/utils/localFileActions';
 
-import CopyIcon from '../icons/CopyIcon';
 import ServiceDeploymentIcon from '../icons/ServiceDeploymentIcon';
+import Tooltip, {
+  TOOLTIP_DARK_BUBBLE_CLASS_NAME,
+  TooltipAlign,
+  TooltipPosition,
+} from '../ui/Tooltip';
 import {
   ArtifactPreviewActionSource,
   ArtifactPublishEntryPoint,
@@ -120,6 +128,16 @@ import {
   getArtifactBrowserUrlType,
   reportArtifactPreviewAction,
 } from './artifactAnalytics';
+import {
+  type ArtifactCodeControlsConfig,
+  ArtifactCodeControlsContext,
+} from './ArtifactCodeControlsContext';
+import ArtifactDocumentToolbar from './ArtifactDocumentToolbar';
+import {
+  buildInlineArtifactDownload,
+  canDownloadArtifact,
+} from './artifactDocumentToolbarModel';
+import ArtifactFileDrawer from './ArtifactFileDrawer';
 import { useOptionalArtifactFileShare } from './ArtifactFileShareController';
 import {
   type ArtifactFileShareRequest as HtmlSharePendingRequest,
@@ -143,6 +161,10 @@ import {
   resolveBrowserToolbarPublishTarget,
 } from './artifactToolbarPublishPolicy';
 import { resolveRemovedActiveBrowserAnnotationBatch } from './browserAnnotationSession';
+import {
+  type BrowserLocalServiceContext,
+  type BrowserPreviewTab,
+} from './browserPreviewTabs';
 import {
   type DeploymentAnalyticsOperationContext,
   getDeploymentAnalyticsFinalStatus,
@@ -216,12 +238,40 @@ import {
 } from './PublishingTrialStatus';
 import {
   OfficePreviewActionsContext,
+  type OfficePreviewSaveStatusConfig,
   type OfficePreviewZoomControlsConfig,
 } from './renderers/office/common/OfficePreviewActionsContext';
-import { OfficeZoomControls } from './renderers/office/common/OfficeZoomControls';
 import { usePublishingRecoveryExposureLifecycle } from './usePublishingRecoveryExposureLifecycle';
+import WorkspaceFileBrowser from './WorkspaceFileBrowser';
 
 const t = (key: string) => i18nService.t(key);
+
+const ArtifactToolbarTooltip: React.FC<{
+  content: React.ReactNode;
+  children: React.ReactNode;
+  align?: TooltipAlign;
+  disabled?: boolean;
+  className?: string;
+}> = ({
+  content,
+  children,
+  align = TooltipAlign.Center,
+  disabled = false,
+  className = 'shrink-0',
+}) => (
+  <Tooltip
+    portal
+    content={content}
+    position={TooltipPosition.Bottom}
+    align={align}
+    delay={300}
+    disabled={disabled}
+    bubbleClassName={TOOLTIP_DARK_BUBBLE_CLASS_NAME}
+    className={className}
+  >
+    {children}
+  </Tooltip>
+);
 
 const logArtifactFileActionFailure = (operation: string, detail?: unknown): void => {
   const message = `${operation} failed${detail ? `: ${String(detail)}` : ''}`;
@@ -233,15 +283,12 @@ const logArtifactFileActionFailure = (operation: string, detail?: unknown): void
   }
 };
 
-const BROWSER_OPENABLE_TYPES = new Set<ArtifactType>(['html', 'svg', 'mermaid']);
-
-const SYSTEM_OPENABLE_TYPES = new Set<ArtifactType>(['document', 'video']);
-
 const NON_CODE_TYPES = new Set<ArtifactType>([
   'document',
   'image',
   'video',
   'text',
+  ArtifactTypeValue.Code,
   ArtifactTypeValue.LocalService,
 ]);
 
@@ -249,6 +296,7 @@ const COPYABLE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg']);
 
 const PANEL_CLOSE_DRAG_THRESHOLD = 48;
 const FILE_LIST_DRAWER_TRANSITION_MS = 180;
+const FILE_LIST_DRAWER_KEEP_OPEN_MIN_WIDTH = 740;
 const HtmlSharePhase = {
   Idle: 'idle',
   Checking: 'checking',
@@ -382,14 +430,6 @@ interface NodeDeploymentDialogState {
   error?: string;
   accessSyncError?: string;
   accessSyncSuccess?: string;
-}
-
-interface BrowserLocalServiceContext {
-  artifactId?: string;
-  url: string;
-  origin: string;
-  projectDirectory?: string;
-  projectCandidates?: ShareDeploymentProjectCandidate[];
 }
 
 interface NodeDeploymentLaunchContext {
@@ -707,27 +747,6 @@ function dataUrlToPngBlob(dataUrl: string): Promise<Blob> {
   });
 }
 
-function buildBrowserHtml(artifact: Artifact): string | null {
-  switch (artifact.type) {
-    case 'html':
-      return artifact.content;
-    case 'svg':
-      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f5}</style></head><body>${artifact.content}</body></html>`;
-    case 'mermaid':
-      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title><script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><\/script><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff;font-family:system-ui,sans-serif}</style></head><body><pre class="mermaid">${escapeHtml(artifact.content)}</pre><script>mermaid.initialize({startOnLoad:true,theme:'default',securityLevel:'loose'});<\/script></body></html>`;
-    default:
-      return null;
-  }
-}
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 export interface LocalServiceDeploymentRequest {
   requestId: number;
   sessionId: string;
@@ -746,24 +765,34 @@ interface ArtifactPanelProps {
   minPanelWidth?: number;
   maxPanelWidth?: number;
   isPanelExpanded?: boolean;
-  browserAddress?: string;
-  browserUrl?: string;
-  browserLocalServiceContext?: BrowserLocalServiceContext | null;
+  browserTabs?: BrowserPreviewTab[];
+  activeBrowserTabId?: string | null;
   localServiceDeploymentRequest?: LocalServiceDeploymentRequest | null;
-  browserHtmlArtifactId?: string | null;
-  onBrowserAddressChange?: (value: string) => void;
-  onBrowserUrlChange?: (value: string) => void;
-  onBrowserTitleChange?: (value: string) => void;
-  onBrowserLocalServiceContextChange?: (context: BrowserLocalServiceContext | null) => void;
+  onBrowserAddressChange?: (tabId: string, value: string) => void;
+  onBrowserUrlChange?: (tabId: string, value: string) => void;
+  onBrowserTitleChange?: (tabId: string, value: string) => void;
+  onBrowserLocalServiceContextChange?: (tabId: string, context: BrowserLocalServiceContext | null) => void;
   onLocalServiceDeploymentRequestConsumed?: (requestId: number) => void;
   onOpenFileListTab?: () => void;
-  onOpenBrowserTab?: () => void;
+  onOpenBrowserTab?: (options?: {
+    url?: string;
+    afterTabId?: string;
+    background?: boolean;
+    referrer?: string;
+  }) => void;
+  onOpenLocalServiceInBrowser?: (artifact: Artifact) => void;
   onOpenHtmlFileInBrowser?: (artifact: Artifact) => void;
   onAddSelectedText?: (snippet: CoworkSelectedTextSnippet) => void;
   selectedTextEnabled?: boolean;
+  newTabPanel?: React.ReactNode;
   agentBrowserPanel?: React.ReactNode;
   subagentPanel?: React.ReactNode;
   userAttachmentPanel?: React.ReactNode;
+  sideChatPanel?: React.ReactNode;
+  onOpenLocalFilePicker?: () => void;
+  onOpenWorkspaceFile?: (filePath: string) => Promise<void> | void;
+  onCreateBlankDocumentFromFileList?: () => void;
+  onRevealWorkspaceFromFileList?: () => void;
   onAnnotationSend?: () => void;
 }
 
@@ -827,6 +856,7 @@ export interface BrowserAnnotationPayload {
 }
 
 const EMPTY_BROWSER_ANNOTATION_BATCHES: CoworkBrowserAnnotationBatch[] = [];
+const EMPTY_BROWSER_TABS: BrowserPreviewTab[] = [];
 
 const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   sessionId,
@@ -836,11 +866,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   minPanelWidth = MIN_PANEL_WIDTH,
   maxPanelWidth = MAX_PANEL_WIDTH,
   isPanelExpanded = false,
-  browserAddress: controlledBrowserAddress,
-  browserUrl: controlledBrowserUrl,
-  browserLocalServiceContext,
+  browserTabs = EMPTY_BROWSER_TABS,
+  activeBrowserTabId = null,
   localServiceDeploymentRequest,
-  browserHtmlArtifactId,
   onBrowserAddressChange,
   onBrowserUrlChange,
   onBrowserTitleChange,
@@ -848,12 +876,19 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   onLocalServiceDeploymentRequestConsumed,
   onOpenFileListTab,
   onOpenBrowserTab,
+  onOpenLocalServiceInBrowser,
   onOpenHtmlFileInBrowser,
   onAddSelectedText,
   selectedTextEnabled = false,
+  newTabPanel,
   agentBrowserPanel,
   subagentPanel,
   userAttachmentPanel,
+  sideChatPanel,
+  onOpenLocalFilePicker,
+  onOpenWorkspaceFile,
+  onCreateBlankDocumentFromFileList,
+  onRevealWorkspaceFromFileList,
   onAnnotationSend,
 }) => {
   const dispatch = useDispatch();
@@ -876,10 +911,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     ).length,
     0,
   ), [browserAnnotationBatches]);
-  const [showFileListDrawer, setShowFileListDrawer] = useState(false);
-  const [isFileListDrawerVisible, setIsFileListDrawerVisible] = useState(false);
-  const [localBrowserAddress, setLocalBrowserAddress] = useState('');
-  const [localBrowserUrl, setLocalBrowserUrl] = useState('');
   const [htmlSharePhase, setHtmlSharePhase] = useState<HtmlSharePhase>(HtmlSharePhase.Idle);
   const [htmlShareDialog, setHtmlShareDialog] = useState<HtmlShareDialogState | null>(null);
   const [subscriptionPrompt, setSubscriptionPrompt] =
@@ -912,15 +943,22 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const [htmlShareCopyStatus, setHtmlShareCopyStatus] =
     useState<HtmlShareCopyStatus>(HtmlShareCopyStatus.Idle);
   const [isArtifactActionsMenuOpen, setIsArtifactActionsMenuOpen] = useState(false);
+  const [showFileListDrawer, setShowFileListDrawer] = useState(false);
+  const [isFileListDrawerVisible, setIsFileListDrawerVisible] = useState(false);
   const [officePreviewZoomControls, setOfficePreviewZoomControls] =
     useState<OfficePreviewZoomControlsConfig | null>(null);
+  const [officePreviewSaveStatus, setOfficePreviewSaveStatus] =
+    useState<OfficePreviewSaveStatusConfig | null>(null);
+  const [officeOwnsDocumentToolbar, setOfficeOwnsDocumentToolbar] = useState(false);
+  const [codeControls, setCodeControls] = useState<ArtifactCodeControlsConfig | null>(null);
   const fileListDrawerRef = useRef<HTMLDivElement>(null);
   const fileListButtonRef = useRef<HTMLButtonElement>(null);
+  const isFileListDrawerOpenRef = useRef(false);
+  const fileListDrawerAnimationFrameRef = useRef<number | undefined>(undefined);
+  const fileListDrawerCloseTimeoutRef = useRef<number | undefined>(undefined);
   const artifactActionsMenuRef = useRef<HTMLDivElement>(null);
   const artifactActionsMenuButtonRef = useRef<HTMLButtonElement>(null);
   const nodeDeploymentPersistenceAddMenuRef = useRef<HTMLDivElement>(null);
-  const fileListDrawerAnimationFrameRef = useRef<number | undefined>(undefined);
-  const fileListDrawerCloseTimeoutRef = useRef<number | undefined>(undefined);
   const htmlShareCopyStatusTimerRef = useRef<number | undefined>(undefined);
   const nodeDeploymentLookupDialogTimerRef = useRef<number | undefined>(undefined);
   const nodeDeploymentLookupRef = useRef<NodeDeploymentLookupState | null>(nodeDeploymentLookup);
@@ -967,6 +1005,18 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const selectedArtifact = activePreviewTab
     ? (artifactsById.get(activePreviewTab.artifactId) ?? null)
     : null;
+  const activeBrowserTab = useMemo(
+    () => (
+      (activeBrowserTabId
+        ? browserTabs.find(tab => tab.id === activeBrowserTabId)
+        : undefined)
+      ?? browserTabs[0]
+      ?? null
+    ),
+    [activeBrowserTabId, browserTabs],
+  );
+  const browserHtmlArtifactId = activeBrowserTab?.htmlPreviewArtifactId ?? null;
+  const browserLocalServiceContext = activeBrowserTab?.localServiceContext ?? null;
   const browserHtmlArtifact = browserHtmlArtifactId
     ? (artifactsById.get(browserHtmlArtifactId) ?? null)
     : null;
@@ -979,12 +1029,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const activeTab = activePreviewTab?.contentView ?? ArtifactContentView.Preview;
   const canShowCodeView = Boolean(selectedArtifact && !NON_CODE_TYPES.has(selectedArtifact.type));
   const isCodeViewActive = canShowCodeView && activeTab === ArtifactContentView.Code;
-  const contentViewActionTarget = isCodeViewActive
-    ? ArtifactContentView.Preview
-    : ArtifactContentView.Code;
-  const contentViewActionLabel = isCodeViewActive
-    ? t('artifactPreview')
-    : t('artifactCode');
   const selectedTextContext = useMemo(
     () => (
       selectedTextEnabled && onAddSelectedText
@@ -1029,15 +1073,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     constrainedMinPanelWidth,
     Math.min(constrainedMaxPanelWidth, panelWidth),
   );
-  const browserAddress = controlledBrowserAddress ?? localBrowserAddress;
-  const browserUrl = controlledBrowserUrl ?? localBrowserUrl;
-  const browserAnnotationBatch = useMemo(
-    () => browserAnnotationBatches.find(batch => (
-      normalizeBrowserPreviewUrlForMatch(batch.pageUrl)
-      === normalizeBrowserPreviewUrlForMatch(browserUrl)
-    )),
-    [browserAnnotationBatches, browserUrl],
-  );
+  const browserAddress = activeBrowserTab?.address ?? '';
+  const browserUrl = activeBrowserTab?.url ?? '';
   const browserLocalService = isBrowserTabActive && !browserHtmlArtifact
     ? parseLocalServiceUrl(browserUrl || browserAddress)
     : null;
@@ -1090,11 +1127,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     htmlSharePhase === HtmlSharePhase.Checking ||
     htmlSharePhase === HtmlSharePhase.Packing ||
     htmlSharePhase === HtmlSharePhase.Uploading;
-  const browserHtmlAutoRefreshFilePath =
-    isBrowserTabActive && browserHtmlArtifact?.type === ArtifactTypeValue.Html
-      ? browserHtmlArtifact.filePath
-      : undefined;
-  const browserHtmlPreviewUrl = browserHtmlAutoRefreshFilePath ? browserUrl : undefined;
   const canUseHtmlShareDialogLink = Boolean(
     htmlShareDialog?.url &&
       !isHtmlShareStatusUpdating &&
@@ -1111,70 +1143,44 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       htmlShareDialog?.status === HtmlShareStatus.Disabled ||
       htmlShareDialog?.targetStatus === HtmlShareStatus.Disabled,
   );
-  const isCompactHtmlToolbar = selectedArtifact?.type === ArtifactTypeValue.Html;
-  const isCompactArtifactToolbar = Boolean(selectedArtifact);
   const showRefreshAction = Boolean(selectedArtifact?.filePath);
   const showCopyAction = Boolean(selectedArtifact && isCopyableArtifact(selectedArtifact));
-  const showOpenBrowserAction = Boolean(
-    selectedArtifact && BROWSER_OPENABLE_TYPES.has(selectedArtifact.type),
-  );
-  const showOpenWithAppAction = Boolean(
-    selectedArtifact &&
-      SYSTEM_OPENABLE_TYPES.has(selectedArtifact.type) &&
-      selectedArtifact.filePath,
-  );
-  const showRevealInFolderAction = Boolean(selectedArtifact?.filePath);
-  const showPrimaryOpenWithAppAction = Boolean(!isCompactHtmlToolbar && showOpenWithAppAction);
-  const showPrimaryRevealInFolderAction = Boolean(
-    !isCompactHtmlToolbar &&
-      !showPrimaryOpenWithAppAction &&
-      showRevealInFolderAction,
-  );
-  const showOpenBrowserActionInMenu = Boolean(!isCompactHtmlToolbar && showOpenBrowserAction);
-  const showOpenWithAppActionInMenu = Boolean(isCompactHtmlToolbar && showOpenWithAppAction);
-  const showRevealInFolderActionInMenu = Boolean(
-    showRevealInFolderAction && !showPrimaryRevealInFolderAction,
-  );
-  const showContentViewActionInMenu = canShowCodeView;
-  const showOfficeZoomControlsInMenu = Boolean(officePreviewZoomControls);
-  const hasArtifactActionMenuItems = Boolean(
-    showContentViewActionInMenu ||
-      showRefreshAction ||
-      showCopyAction ||
-      showOpenBrowserActionInMenu ||
-      showOpenWithAppActionInMenu ||
-      showRevealInFolderActionInMenu,
-  );
-  const showArtifactActionsMenu = Boolean(
-    isCompactArtifactToolbar &&
-      (hasArtifactActionMenuItems || showOfficeZoomControlsInMenu),
-  );
-  const officePreviewActionsContextValue = useMemo(
+  const showDownloadAction = canDownloadArtifact(selectedArtifact);
+  const workspaceFilesRefreshTrigger = useMemo(() => {
+    const last = artifacts[artifacts.length - 1];
+    return `${artifacts.length}:${last?.id ?? ''}:${last?.filePath ?? ''}:${last?.contentVersion ?? ''}`;
+  }, [artifacts]);
+  const artifactCodeControlsContextValue = useMemo(
     () => ({
-      setZoomControls: setOfficePreviewZoomControls,
+      setCodeControls,
     }),
     [],
   );
 
   const handleBrowserAddressChange = useCallback(
-    (value: string) => {
-      setLocalBrowserAddress(value);
-      onBrowserAddressChange?.(value);
+    (tabId: string, value: string) => {
+      onBrowserAddressChange?.(tabId, value);
     },
     [onBrowserAddressChange],
   );
 
   const handleBrowserUrlChange = useCallback(
-    (value: string) => {
-      setLocalBrowserUrl(value);
-      onBrowserUrlChange?.(value);
+    (tabId: string, value: string) => {
+      onBrowserUrlChange?.(tabId, value);
     },
     [onBrowserUrlChange],
   );
 
+  const handleBrowserTitleChange = useCallback(
+    (tabId: string, value: string) => {
+      onBrowserTitleChange?.(tabId, value);
+    },
+    [onBrowserTitleChange],
+  );
+
   const handleBrowserLocalServiceOpen = useCallback(
-    (service: LocalWebService) => {
-      onBrowserLocalServiceContextChange?.({
+    (tabId: string, service: LocalWebService) => {
+      onBrowserLocalServiceContextChange?.(tabId, {
         url: service.url,
         origin: normalizeLocalServiceOriginForCompare(service.url),
         ...(service.projectDirectory?.trim()
@@ -1186,6 +1192,32 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       });
     },
     [onBrowserLocalServiceContextChange],
+  );
+
+  const handleBrowserOpenNewTab = useCallback(
+    (sourceTabId: string, url: string, options?: { background?: boolean; referrer?: string }) => {
+      onOpenBrowserTab?.({
+        url,
+        afterTabId: sourceTabId,
+        background: options?.background,
+        referrer: options?.referrer,
+      });
+    },
+    [onOpenBrowserTab],
+  );
+
+  const handleBrowserAnnotationBatchChange = useCallback(
+    (batch: CoworkBrowserAnnotationBatch | null, removedBatchId?: string) => {
+      if (batch) {
+        dispatch(upsertDraftBrowserAnnotationBatch({ draftKey: sessionId, batch }));
+      } else if (removedBatchId) {
+        dispatch(removeDraftBrowserAnnotationBatch({
+          draftKey: sessionId,
+          batchId: removedBatchId,
+        }));
+      }
+    },
+    [dispatch, sessionId],
   );
 
   const rememberLocalServiceProjectDirectory = useCallback((
@@ -1245,12 +1277,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
 
     if (
+      activeBrowserTab &&
       browserLocalServiceContext &&
       normalizeLocalServiceOriginForCompare(
         browserLocalServiceContext.origin || browserLocalServiceContext.url,
       ) === localServiceOrigin
     ) {
-      onBrowserLocalServiceContextChange?.({
+      onBrowserLocalServiceContextChange?.(activeBrowserTab.id, {
         ...browserLocalServiceContext,
         ...(matchingArtifact?.id ? { artifactId: matchingArtifact.id } : {}),
         projectDirectory: normalizedProjectDirectory,
@@ -1258,6 +1291,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       });
     }
   }, [
+    activeBrowserTab,
     artifacts,
     browserLocalServiceContext,
     dispatch,
@@ -1274,6 +1308,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       window.cancelAnimationFrame(fileListDrawerAnimationFrameRef.current);
     }
 
+    isFileListDrawerOpenRef.current = true;
     setShowFileListDrawer(true);
     fileListDrawerAnimationFrameRef.current = window.requestAnimationFrame(() => {
       fileListDrawerAnimationFrameRef.current = undefined;
@@ -1290,6 +1325,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       window.clearTimeout(fileListDrawerCloseTimeoutRef.current);
     }
 
+    isFileListDrawerOpenRef.current = false;
     setIsFileListDrawerVisible(false);
     fileListDrawerCloseTimeoutRef.current = window.setTimeout(() => {
       setShowFileListDrawer(false);
@@ -1298,7 +1334,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, []);
 
   const toggleFileListDrawer = useCallback(() => {
-    if (showFileListDrawer && isFileListDrawerVisible) {
+    if (isFileListDrawerOpenRef.current) {
       reportSelectedArtifactAction('file_list_drawer_toggle', {
         targetOpen: false,
       });
@@ -1312,10 +1348,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     openFileListDrawer();
   }, [
     closeFileListDrawer,
-    isFileListDrawerVisible,
     openFileListDrawer,
     reportSelectedArtifactAction,
-    showFileListDrawer,
   ]);
 
   const handleResizeStart = useCallback(
@@ -1630,12 +1664,45 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, [closeFileListDrawer, selectedArtifact]);
 
   useEffect(() => {
+    closeFileListDrawer();
+  }, [sessionId, closeFileListDrawer]);
+
+  useEffect(() => {
     setIsArtifactActionsMenuOpen(false);
+    setCodeControls(null);
   }, [activePreviewTab?.id]);
 
   useEffect(() => {
-    closeFileListDrawer();
-  }, [sessionId, closeFileListDrawer]);
+    if (!showFileListDrawer) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      const element = target instanceof Element ? target : target.parentElement;
+      if (
+        fileListDrawerRef.current?.contains(target)
+        || fileListButtonRef.current?.contains(target)
+        || element?.closest('[data-artifact-file-drawer-toggle="true"]')
+        || element?.closest('[data-local-file-context-menu="true"]')
+      ) {
+        return;
+      }
+      closeFileListDrawer();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeFileListDrawer();
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeFileListDrawer, showFileListDrawer]);
 
   useEffect(() => {
     if (!isArtifactActionsMenuOpen) return;
@@ -1665,34 +1732,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     };
   }, [isArtifactActionsMenuOpen]);
 
-  useEffect(() => {
-    if (!showFileListDrawer) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        fileListDrawerRef.current?.contains(target) ||
-        fileListButtonRef.current?.contains(target)
-      ) {
-        return;
-      }
-      closeFileListDrawer();
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        closeFileListDrawer();
-      }
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [closeFileListDrawer, showFileListDrawer]);
-
   // Auto-refresh when the previewed file changes on disk. Markdown is left out: EditableMarkdownFile
   // polls and version-checks its file itself, and a watch would re-read it after each autosave.
   useEffect(() => {
@@ -1720,14 +1759,16 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const openLocalServiceArtifact = useCallback(
     (artifact: Artifact): boolean => {
       if (artifact.type !== ArtifactTypeValue.LocalService) return false;
+      if (onOpenLocalServiceInBrowser) {
+        onOpenLocalServiceInBrowser(artifact);
+        return true;
+      }
       const url = artifact.url || artifact.content;
       if (!url) return true;
-      onOpenBrowserTab?.();
-      handleBrowserAddressChange(url);
-      handleBrowserUrlChange(url);
+      onOpenBrowserTab?.({ url });
       return true;
     },
-    [handleBrowserAddressChange, handleBrowserUrlChange, onOpenBrowserTab],
+    [onOpenBrowserTab, onOpenLocalServiceInBrowser],
   );
 
   const handleSelectArtifact = useCallback(
@@ -1760,6 +1801,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     ],
   );
 
+  const shouldCloseDrawerOnFileSelect = !isPanelExpanded && constrainedPanelWidth < FILE_LIST_DRAWER_KEEP_OPEN_MIN_WIDTH;
+
   const handleSelectArtifactFromDrawer = useCallback(
     (id: string) => {
       const artifact = artifacts.find(item => item.id === id);
@@ -1781,6 +1824,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         closeFileListDrawer();
         return;
       }
+      if (id === selectedArtifactId || shouldCloseDrawerOnFileSelect) {
+        closeFileListDrawer();
+      }
       dispatch(openArtifactPreviewTab({ sessionId, artifactId: id }));
     },
     [
@@ -1789,7 +1835,29 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       dispatch,
       onOpenHtmlFileInBrowser,
       openLocalServiceArtifact,
+      selectedArtifactId,
       sessionId,
+      shouldCloseDrawerOnFileSelect,
+    ],
+  );
+
+  const handleOpenWorkspaceFileFromDrawer = useCallback(
+    async (filePath: string) => {
+      if (!onOpenWorkspaceFile) return;
+      const isAlreadyActive = Boolean(
+        selectedArtifact?.filePath
+        && normalizeShellFilePath(selectedArtifact.filePath) === normalizeShellFilePath(filePath),
+      );
+      if (isAlreadyActive || shouldCloseDrawerOnFileSelect) {
+        closeFileListDrawer();
+      }
+      await onOpenWorkspaceFile(filePath);
+    },
+    [
+      closeFileListDrawer,
+      onOpenWorkspaceFile,
+      selectedArtifact?.filePath,
+      shouldCloseDrawerOnFileSelect,
     ],
   );
 
@@ -1890,47 +1958,72 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     void revealLocalPathWithToast(selectedArtifact.filePath);
   }, [reportSelectedArtifactAction, selectedArtifact]);
 
-  const handleOpenInBrowser = useCallback(() => {
-    if (!selectedArtifact) return;
-    reportSelectedArtifactAction('open_in_browser', {
-      openTarget: selectedArtifact.type === ArtifactTypeValue.Html ? 'lobster_browser' : 'external_browser',
-    });
+  const handleDownload = useCallback(async () => {
+    if (!selectedArtifact || selectedArtifact.type === ArtifactTypeValue.LocalService) return;
 
-    if (
-      selectedArtifact.type === ArtifactTypeValue.Html &&
-      selectedArtifact.filePath &&
-      onOpenHtmlFileInBrowser
-    ) {
-      onOpenHtmlFileInBrowser(selectedArtifact);
-      return;
-    }
-
-    // Mermaid needs HTML wrapper with mermaid.js to render in browser
-    if (selectedArtifact.type === 'mermaid') {
-      if (!selectedArtifact.content) return;
-      const html = buildBrowserHtml(selectedArtifact);
-      if (html) {
-        window.electron?.shell?.openHtmlInBrowser(html);
+    if (selectedArtifact.filePath) {
+      const normalizedPath = normalizeShellFilePath(selectedArtifact.filePath);
+      try {
+        if (
+          selectedArtifact.type === ArtifactTypeValue.Markdown
+          && getMarkdownDocumentContent(normalizedPath) !== undefined
+        ) {
+          await getMarkdownDocument(normalizedPath).flush();
+        }
+        const saveFileCopy = window.electron?.dialog?.saveFileCopy;
+        if (!saveFileCopy) {
+          throw new Error('saveFileCopy dialog is unavailable');
+        }
+        const result = await saveFileCopy(normalizedPath);
+        if (result?.canceled) return;
+        if (!result?.success) {
+          logArtifactFileActionFailure('download artifact file', result?.error);
+          reportSelectedArtifactAction('download_file', { result: 'failed' });
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: t('fileMenuSaveFailed'),
+          }));
+          return;
+        }
+        reportSelectedArtifactAction('download_file', { result: 'success' });
+      } catch (error) {
+        logArtifactFileActionFailure('download artifact file', error);
+        reportSelectedArtifactAction('download_file', { result: 'failed' });
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: t('fileMenuSaveFailed'),
+        }));
       }
       return;
     }
 
-    // Has file on disk: open directly via native path
-    // NOTE: shell.openExternal with file:// URLs fails on Windows when path contains
-    // non-ASCII characters (e.g. Chinese) — ERROR_FILE_NOT_FOUND (0x2).
-    // Use shell.openPath which handles native Unicode paths correctly.
-    if (selectedArtifact.filePath) {
-      void openLocalPathWithToast(selectedArtifact.filePath);
-      return;
-    }
+    const inlineDownload = buildInlineArtifactDownload(selectedArtifact);
+    if (!inlineDownload) return;
 
-    // No file path: generate HTML and open via temp file
-    if (!selectedArtifact.content) return;
-    const html = buildBrowserHtml(selectedArtifact);
-    if (html) {
-      window.electron?.shell?.openHtmlInBrowser(html);
+    let objectUrl: string | null = null;
+    try {
+      const href = inlineDownload.isDataUrl
+        ? inlineDownload.content
+        : (objectUrl = URL.createObjectURL(
+            new Blob([inlineDownload.content], { type: inlineDownload.mimeType }),
+          ));
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.download = inlineDownload.fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      reportSelectedArtifactAction('download_file', { result: 'success' });
+    } catch (error) {
+      logArtifactFileActionFailure('download inline artifact', error);
+      reportSelectedArtifactAction('download_file', { result: 'failed' });
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: t('fileMenuSaveFailed'),
+      }));
+    } finally {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
     }
-  }, [onOpenHtmlFileInBrowser, reportSelectedArtifactAction, selectedArtifact]);
+  }, [reportSelectedArtifactAction, selectedArtifact]);
 
   const closeSubscriptionPrompt = useCallback(() => {
     const feature = subscriptionPrompt?.feature;
@@ -4653,15 +4746,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     updateHtmlShare,
   ]);
 
-  const handleOpenWithApp = useCallback(() => {
-    if (selectedArtifact?.filePath) {
-      reportSelectedArtifactAction('open_with_app', {
-        openTarget: 'external_app',
-      });
-      void openLocalPathWithToast(normalizeShellFilePath(selectedArtifact.filePath));
-    }
-  }, [reportSelectedArtifactAction, selectedArtifact]);
-
   const handleRefresh = useCallback(async (trigger: ArtifactRefreshTrigger = ArtifactRefreshTrigger.Manual) => {
     if (!selectedArtifact?.filePath) return;
     if (selectedArtifact.type === 'video') {
@@ -4824,7 +4908,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       ? t('htmlShareStartSharing')
       : t('htmlShareStopSharing');
   const htmlShareAvailabilityActionClassName = isHtmlShareStoppedDialog
-    ? 'inline-flex h-10 min-w-[96px] items-center justify-center whitespace-nowrap rounded-lg bg-primary px-4 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60'
+    ? 'inline-flex h-10 min-w-[96px] items-center justify-center whitespace-nowrap rounded-lg bg-action px-4 text-base text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60'
     : 'inline-flex h-10 min-w-[96px] items-center justify-center whitespace-nowrap rounded-lg border border-border bg-background px-4 text-base text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60';
   const htmlShareCopyButtonLabel =
     htmlShareCopyStatus === HtmlShareCopyStatus.Failed
@@ -5039,7 +5123,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const nodeDeploymentCopyActionClassName =
     nodeDeploymentFooterActions.showRecovery || isNodeDeploymentRedeployRequired
       ? 'border border-border bg-background text-secondary hover:bg-surface hover:text-foreground'
-      : 'bg-primary text-primary-foreground hover:bg-primary/90';
+      : 'bg-action text-action-foreground hover:bg-action-hover';
   const nodeDeploymentCopyButtonLabel =
     htmlShareCopyStatus === HtmlShareCopyStatus.Failed
       ? t('copyFailed')
@@ -5177,6 +5261,50 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
     return undefined;
   })();
+  const officePreviewDocumentActions = useMemo(
+    () => (
+      selectedArtifact
+        ? {
+            canShare: Boolean(artifactToolbarPublishTarget),
+            onShare: handleShareSelectedArtifact,
+            canDownload: showDownloadAction,
+            onDownload: () => { void handleDownload(); },
+            canRefresh: showRefreshAction,
+            onRefresh: () => { void handleRefresh(); },
+            canRevealInFolder: Boolean(
+              selectedArtifact.filePath && selectedArtifact.type !== ArtifactTypeValue.LocalService,
+            ),
+            onRevealInFolder: handleRevealInFolder,
+            canOpenFileList: true,
+            onOpenFileList: toggleFileListDrawer,
+            isFileListDrawerOpen: showFileListDrawer && isFileListDrawerVisible,
+            fileListButtonRef,
+          }
+        : null
+    ),
+    [
+      artifactToolbarPublishTarget,
+      handleDownload,
+      handleRefresh,
+      handleRevealInFolder,
+      handleShareSelectedArtifact,
+      isFileListDrawerVisible,
+      selectedArtifact,
+      showDownloadAction,
+      showFileListDrawer,
+      showRefreshAction,
+      toggleFileListDrawer,
+    ],
+  );
+  const officePreviewActionsContextValue = useMemo(
+    () => ({
+      setZoomControls: setOfficePreviewZoomControls,
+      setSaveStatus: setOfficePreviewSaveStatus,
+      setOwnsDocumentToolbar: setOfficeOwnsDocumentToolbar,
+      documentActions: officePreviewDocumentActions,
+    }),
+    [officePreviewDocumentActions],
+  );
 
   return (
     <>
@@ -5202,194 +5330,133 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           <div className="absolute inset-0 z-30 cursor-col-resize bg-transparent" />
         )}
 
-        {selectedArtifact ? (
-          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-            {/* Header: current file + actions. A workspace review owns its toolbar and file tree. */}
-            {!isWorkspaceDiffArtifact(selectedArtifact) && <div className="h-10 flex items-center gap-2 px-3 border-b border-border shrink-0">
-              <span className="text-sm font-medium truncate">
-                {selectedArtifact.fileName || selectedArtifact.title}
-              </span>
-              <span className="flex-1" />
-              {artifactToolbarPublishTarget && (
-                <button
-                  type="button"
-                  onClick={handleShareSelectedArtifact}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
-                  aria-label={t('htmlShare')}
-                  title={t('htmlShare')}
+        {browserTabs.length > 0 && (
+          <div
+            className={
+              isBrowserTabActive
+                ? 'relative flex h-full min-h-0 flex-1 flex-col'
+                : 'pointer-events-none invisible absolute inset-0 z-0 flex flex-col overflow-hidden'
+            }
+            aria-hidden={!isBrowserTabActive}
+          >
+            {browserTabs.map(tab => {
+              const isThisTabActive = isBrowserTabActive && tab.id === activeBrowserTab?.id;
+              const tabHtmlArtifact = tab.htmlPreviewArtifactId
+                ? (artifactsById.get(tab.htmlPreviewArtifactId) ?? null)
+                : null;
+              const tabAutoRefreshFilePath = tabHtmlArtifact?.type === ArtifactTypeValue.Html
+                ? tabHtmlArtifact.filePath
+                : undefined;
+              const tabLocalHtmlPreviewUrl = tabAutoRefreshFilePath ? tab.url : undefined;
+              const tabNormalizedUrl = normalizeBrowserPreviewUrlForMatch(tab.url);
+              const tabAnnotationBatch = tabNormalizedUrl
+                ? (
+                    browserAnnotationBatches.find(batch => (
+                      batch.browserTabId === tab.id
+                      && normalizeBrowserPreviewUrlForMatch(batch.pageUrl) === tabNormalizedUrl
+                    ))
+                    ?? browserAnnotationBatches.find(batch => (
+                      normalizeBrowserPreviewUrlForMatch(batch.pageUrl) === tabNormalizedUrl
+                    ))
+                  )
+                : undefined;
+              return (
+                <div
+                  key={tab.id}
+                  className={
+                    isThisTabActive
+                      ? 'relative z-10 flex h-full min-h-0 flex-1 flex-col'
+                      : 'pointer-events-none invisible absolute inset-0 z-0 flex flex-col overflow-hidden'
+                  }
+                  aria-hidden={!isThisTabActive}
                 >
-                  <ShareUploadIcon />
-                </button>
-              )}
-              {showArtifactActionsMenu && (
-                <div className="relative">
-                  <button
-                    ref={artifactActionsMenuButtonRef}
-                    type="button"
-                    onClick={() => setIsArtifactActionsMenuOpen(value => {
-                      const nextOpen = !value;
-                      reportSelectedArtifactAction('actions_menu_toggle', {
-                        targetOpen: nextOpen,
-                      });
-                      return nextOpen;
-                    })}
-                    className={`p-1 rounded transition-colors ${
-                      isArtifactActionsMenuOpen
-                        ? 'bg-surface text-foreground'
-                        : 'text-secondary hover:text-foreground hover:bg-surface'
-                    }`}
-                    aria-label={t('artifactActionsMenu')}
-                    title={t('artifactActionsMenu')}
-                  >
-                    <MoreHorizontalToolbarIcon />
-                  </button>
-                  {isArtifactActionsMenuOpen && (
-                    <div
-                      ref={artifactActionsMenuRef}
-                      className="absolute right-0 top-7 z-40 w-44 rounded-lg border border-border bg-surface-raised p-1.5 text-sm text-foreground shadow-xl"
-                    >
-                      {showContentViewActionInMenu && (
-                        <button
-                          type="button"
-                          onClick={() => runArtifactMenuAction(() => handleSetContentView(contentViewActionTarget))}
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors hover:bg-surface"
-                        >
-                          <ContentViewIcon />
-                          <span>{contentViewActionLabel}</span>
-                        </button>
-                      )}
-                      {showRefreshAction && (
-                        <button
-                          type="button"
-                          onClick={() => runArtifactMenuAction(handleRefresh)}
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors hover:bg-surface"
-                        >
-                          <RefreshIcon />
-                          <span>{t('artifactRefresh')}</span>
-                        </button>
-                      )}
-                      {showCopyAction && (
-                        <button
-                          type="button"
-                          onClick={() => runArtifactMenuAction(() => void handleCopy())}
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors hover:bg-surface"
-                        >
-                          <CopyIcon className="h-3.5 w-3.5" />
-                          <span>{t('artifactCopyCode')}</span>
-                        </button>
-                      )}
-                      {showOpenBrowserActionInMenu && (
-                        <button
-                          type="button"
-                          onClick={() => runArtifactMenuAction(handleOpenInBrowser)}
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors hover:bg-surface"
-                        >
-                          <BrowserIcon />
-                          <span>{t('artifactOpenInBrowser')}</span>
-                        </button>
-                      )}
-                      {showOpenWithAppActionInMenu && (
-                        <button
-                          type="button"
-                          onClick={() => runArtifactMenuAction(handleOpenWithApp)}
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors hover:bg-surface"
-                        >
-                          <OpenExternalIcon />
-                          <span>{t('artifactOpenWithApp')}</span>
-                        </button>
-                      )}
-                      {showRevealInFolderActionInMenu && (
-                        <button
-                          type="button"
-                          onClick={() => runArtifactMenuAction(handleRevealInFolder)}
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-colors hover:bg-surface"
-                        >
-                          <FolderIcon />
-                          <span>{t('artifactOpenFolder')}</span>
-                        </button>
-                      )}
-                      {officePreviewZoomControls && (
-                        <div
-                          className={`${hasArtifactActionMenuItems ? 'mt-1 border-t border-border/70 pt-1.5' : ''} px-1 py-1`}
-                        >
-                          <div className="flex h-8 items-center gap-1.5">
-                            <span className="shrink-0 whitespace-nowrap text-xs text-secondary">
-                              {t('artifactBrowserZoom')}
-                            </span>
-                            <OfficeZoomControls
-                              zoomFactor={officePreviewZoomControls.zoomFactor}
-                              displayZoomFactor={officePreviewZoomControls.displayZoomFactor}
-                              onZoomOut={officePreviewZoomControls.onZoomOut}
-                              onZoomIn={officePreviewZoomControls.onZoomIn}
-                              onResetZoom={officePreviewZoomControls.onResetZoom}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <BrowserTabContent
+                    tabId={tab.id}
+                    isActive={isThisTabActive}
+                    address={tab.address}
+                    currentUrl={tab.url}
+                    initialReferrer={tab.initialReferrer}
+                    sessionArtifacts={artifacts}
+                    autoRefreshFilePath={tabAutoRefreshFilePath}
+                    localHtmlPreviewUrl={tabLocalHtmlPreviewUrl}
+                    onAddressChange={handleBrowserAddressChange}
+                    onCurrentUrlChange={handleBrowserUrlChange}
+                    onTitleChange={handleBrowserTitleChange}
+                    onLocalServiceOpen={handleBrowserLocalServiceOpen}
+                    onOpenNewTab={handleBrowserOpenNewTab}
+                    publishAction={isThisTabActive ? browserPublishAction : undefined}
+                    draftKey={sessionId}
+                    annotationBatch={tabAnnotationBatch}
+                    onAnnotationBatchChange={handleBrowserAnnotationBatchChange}
+                    annotationSendCount={annotationSendCount}
+                    onAnnotationSend={onAnnotationSend}
+                  />
                 </div>
-              )}
-              {isCompactHtmlToolbar && showOpenBrowserAction && (
-                <button
-                  onClick={handleOpenInBrowser}
-                  className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
-                  title={t('artifactOpenInBrowser')}
-                >
-                  <OpenExternalIcon />
-                </button>
-              )}
-              {showPrimaryOpenWithAppAction && (
-                <button
-                  onClick={handleOpenWithApp}
-                  className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
-                  title={t('artifactOpenWithApp')}
-                >
-                  <OpenExternalIcon />
-                </button>
-              )}
-              {showPrimaryRevealInFolderAction && (
-                <button
-                  onClick={handleRevealInFolder}
-                  className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
-                  title={t('artifactOpenFolder')}
-                >
-                  <FolderIcon />
-                </button>
-              )}
-              <button
-                ref={fileListButtonRef}
-                onClick={toggleFileListDrawer}
-                className={`p-1 rounded transition-colors ${
-                  isFileListDrawerVisible
-                    ? 'text-primary bg-primary/10'
-                    : 'text-secondary hover:text-foreground hover:bg-surface'
-                }`}
-                title={t('artifactFileList')}
-              >
-                <FileListIcon />
-              </button>
-            </div>}
+              );
+            })}
+          </div>
+        )}
 
+        {selectedArtifact ? (
+          <div className="relative z-10 flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+            {/* Document context & action bar. Workspace reviews and self-hosted Office editors own their toolbar. */}
+            {!isWorkspaceDiffArtifact(selectedArtifact) && !officeOwnsDocumentToolbar && (
+              <ArtifactDocumentToolbar
+                artifact={selectedArtifact}
+                canShowCodeView={canShowCodeView}
+                isCodeViewActive={isCodeViewActive}
+                onSetContentView={handleSetContentView}
+                codeControls={codeControls}
+                saveStatus={officePreviewSaveStatus}
+                zoomControls={officePreviewZoomControls}
+                canShare={Boolean(artifactToolbarPublishTarget)}
+                onShare={handleShareSelectedArtifact}
+                canDownload={showDownloadAction}
+                onDownload={() => { void handleDownload(); }}
+                canCopy={showCopyAction}
+                onCopy={() => { void handleCopy(); }}
+                canRefresh={showRefreshAction}
+                onRefresh={() => { void handleRefresh(); }}
+                onRevealInFolder={handleRevealInFolder}
+                onOpenFileList={toggleFileListDrawer}
+                isFileListDrawerOpen={showFileListDrawer && isFileListDrawerVisible}
+                fileListButtonRef={fileListButtonRef}
+                isMenuOpen={isArtifactActionsMenuOpen}
+                onToggleMenu={() => setIsArtifactActionsMenuOpen(value => {
+                  const nextOpen = !value;
+                  reportSelectedArtifactAction('actions_menu_toggle', {
+                    targetOpen: nextOpen,
+                  });
+                  return nextOpen;
+                })}
+                onRunMenuAction={runArtifactMenuAction}
+                menuButtonRef={artifactActionsMenuButtonRef}
+                menuRef={artifactActionsMenuRef}
+              />
+            )}
+
+            {/* Inline right-side file drawer */}
             {showFileListDrawer && !isWorkspaceDiffArtifact(selectedArtifact) && (
               <div
                 ref={fileListDrawerRef}
-                className={`absolute top-10 right-0 bottom-0 z-20 flex w-[min(320px,86%)] flex-col border-l border-border bg-background shadow-xl transition-[transform,opacity] duration-[180ms] ease-out motion-reduce:transition-none ${
+                className={`absolute ${officeOwnsDocumentToolbar ? 'top-10' : 'top-9'} right-0 bottom-0 z-30 flex w-[min(284px,84%)] flex-col border-l border-border bg-background shadow-xl transition-[transform,opacity] duration-[180ms] ease-out motion-reduce:transition-none ${
                   isFileListDrawerVisible
                     ? 'translate-x-0 opacity-100'
                     : 'translate-x-full opacity-0 pointer-events-none'
                 }`}
               >
-                <div className="h-9 flex items-center px-3 border-b border-border shrink-0">
-                  <span className="text-xs font-medium text-secondary">
-                    {t('artifactFileList')}
-                  </span>
-                </div>
-                <FileDirectoryView
+                <ArtifactFileDrawer
+                  sessionId={sessionId}
+                  workingDirectory={workingDirectory}
                   artifacts={previewableArtifacts}
-                  selectedId={selectedArtifactId}
-                  onSelect={handleSelectArtifactFromDrawer}
-                  compact
+                  selectedArtifactId={selectedArtifactId}
+                  activeFilePath={selectedArtifact.filePath}
+                  isOpen={isFileListDrawerVisible}
+                  refreshTrigger={workspaceFilesRefreshTrigger}
+                  onSelectArtifact={handleSelectArtifactFromDrawer}
+                  onOpenWorkspaceFile={onOpenWorkspaceFile ? handleOpenWorkspaceFileFromDrawer : undefined}
+                  onRevealWorkspace={onRevealWorkspaceFromFileList}
+                  onClose={closeFileListDrawer}
                 />
               </div>
             )}
@@ -5397,56 +5464,62 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             {/* Render area */}
             <div className="flex-1 min-h-0 overflow-hidden">
               <OfficePreviewActionsContext.Provider value={officePreviewActionsContextValue}>
-                <ArtifactRenderer
-                  artifact={selectedArtifact}
-                  sessionArtifacts={artifacts}
-                  selectedTextContext={selectedTextContext}
-                  sourceView={isCodeViewActive}
-                />
+                <ArtifactCodeControlsContext.Provider value={artifactCodeControlsContextValue}>
+                  <ArtifactRenderer
+                    artifact={selectedArtifact}
+                    sessionArtifacts={artifacts}
+                    selectedTextContext={selectedTextContext}
+                    sourceView={isCodeViewActive}
+                  />
+                </ArtifactCodeControlsContext.Provider>
               </OfficePreviewActionsContext.Provider>
             </div>
           </div>
-        ) : activeSpecialTab === ArtifactSpecialTab.Browser ? (
-          <BrowserTabContent
-            address={browserAddress}
-            currentUrl={browserUrl}
-            sessionArtifacts={artifacts}
-            autoRefreshFilePath={browserHtmlAutoRefreshFilePath}
-            localHtmlPreviewUrl={browserHtmlPreviewUrl}
-            onAddressChange={handleBrowserAddressChange}
-            onCurrentUrlChange={handleBrowserUrlChange}
-            onTitleChange={onBrowserTitleChange}
-            onLocalServiceOpen={handleBrowserLocalServiceOpen}
-            publishAction={browserPublishAction}
-            draftKey={sessionId}
-            annotationBatch={browserAnnotationBatch}
-            onAnnotationBatchChange={batch => {
-              if (batch) {
-                dispatch(upsertDraftBrowserAnnotationBatch({ draftKey: sessionId, batch }));
-              } else if (browserAnnotationBatch) {
-                dispatch(removeDraftBrowserAnnotationBatch({
-                  draftKey: sessionId,
-                  batchId: browserAnnotationBatch.id,
-                }));
-              }
-            }}
-            annotationSendCount={annotationSendCount}
-            onAnnotationSend={onAnnotationSend}
-          />
+        ) : activeSpecialTab === ArtifactSpecialTab.Browser ? null : activeSpecialTab === ArtifactSpecialTab.NewTab && newTabPanel ? (
+          <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            {newTabPanel}
+          </div>
         ) : activeSpecialTab === ArtifactSpecialTab.AgentBrowser && agentBrowserPanel ? (
-          agentBrowserPanel
+          <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            {agentBrowserPanel}
+          </div>
         ) : activeSpecialTab === ArtifactSpecialTab.Subagents && subagentPanel ? (
-          subagentPanel
+          <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            {subagentPanel}
+          </div>
         ) : activeSpecialTab === ArtifactSpecialTab.UserAttachment && userAttachmentPanel ? (
-          userAttachmentPanel
+          <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            {userAttachmentPanel}
+          </div>
+        ) : activeSpecialTab === ArtifactSpecialTab.SideChat && sideChatPanel ? (
+          <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            {sideChatPanel}
+          </div>
         ) : (
-          /* No artifact selected: show full-width file list */
-          <div className="flex-1 flex flex-col h-full overflow-hidden">
-            <FileDirectoryView
-              artifacts={previewableArtifacts}
-              selectedId={selectedArtifactId}
-              onSelect={handleSelectArtifact}
-            />
+          /* No artifact selected: show workspace directory tree (fallback to session file list when no cwd) */
+          <div className="relative z-10 flex-1 flex flex-col h-full overflow-hidden bg-background">
+            {onOpenWorkspaceFile ? (
+              <WorkspaceFileBrowser
+                sessionId={sessionId}
+                workingDirectory={workingDirectory}
+                activeFilePath={null}
+                isActive={activeSpecialTab === ArtifactSpecialTab.FileList}
+                refreshTrigger={workspaceFilesRefreshTrigger}
+                onOpenFile={onOpenWorkspaceFile}
+                onOpenLocalFile={onOpenLocalFilePicker}
+                onCreateBlankDocument={onCreateBlankDocumentFromFileList}
+                onRevealWorkspace={onRevealWorkspaceFromFileList}
+              />
+            ) : (
+              <FileDirectoryView
+                artifacts={previewableArtifacts}
+                selectedId={selectedArtifactId}
+                onSelect={handleSelectArtifact}
+                onOpenLocalFile={onOpenLocalFilePicker}
+                onCreateBlankDocument={onCreateBlankDocumentFromFileList}
+                onRevealWorkspace={onRevealWorkspaceFromFileList}
+              />
+            )}
           </div>
         )}
       </aside>
@@ -5615,7 +5688,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                         }
                       }}
                       disabled={isHtmlSharing || !htmlSharePendingRequest}
-                      className="inline-flex h-10 min-w-[104px] items-center justify-center whitespace-nowrap rounded-lg bg-primary px-4 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-10 min-w-[104px] items-center justify-center whitespace-nowrap rounded-lg bg-action px-4 text-base text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isHtmlSharing ? t('htmlShareUploading') : t('htmlShareCreateAction')}
                     </button>
@@ -5637,7 +5710,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       type="button"
                       onClick={updateHtmlShareAccessMode}
                       disabled={isHtmlShareAccessModeActionDisabled}
-                      className="inline-flex h-10 min-w-[128px] items-center justify-center whitespace-nowrap rounded-lg bg-primary px-4 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-10 min-w-[128px] items-center justify-center whitespace-nowrap rounded-lg bg-action px-4 text-base text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isHtmlShareStatusUpdating
                         ? t('htmlShareAccessModeUpdating')
@@ -5658,7 +5731,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       className={`inline-flex h-10 min-w-[104px] items-center justify-center whitespace-nowrap rounded-lg px-4 text-base transition-colors ${
                         htmlShareCopyStatus === HtmlShareCopyStatus.Failed
                           ? 'bg-red-500 text-white hover:bg-red-500/90'
-                          : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                          : 'bg-action text-action-foreground hover:bg-action-hover'
                       }`}
                     >
                       {htmlShareCopyButtonLabel}
@@ -6200,7 +6273,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       className={`inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                         nodeDeployment && !isNodeDeploymentRedeployRequired
                           ? 'border border-border bg-background text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                          : 'bg-action text-action-foreground hover:bg-action-hover'
                       }`}
                     >
                       {showNodeDeploymentSubmitSpinner && (
@@ -6219,7 +6292,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                         type="button"
                         onClick={() => void submitNodeDeploymentPermissionChange()}
                         disabled={isNodeDeploymentPermissionSubmitDisabled}
-                        className="inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-action px-4 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isNodeDeploymentAccessUpdating && (
                           <ArrowPathIcon
@@ -6279,13 +6352,14 @@ type BrowserWebviewElement = HTMLElement & {
     getSize?: () => { width: number; height: number };
   }>;
   executeJavaScript?: (code: string) => Promise<unknown>;
-  loadURL?: (url: string) => Promise<void>;
+  loadURL?: (url: string, options?: { httpReferrer?: string }) => Promise<void>;
   goBack?: () => void;
   goForward?: () => void;
   reload?: () => void;
   stop?: () => void;
   getURL?: () => string;
   getTitle?: () => string;
+  getWebContentsId?: () => number;
   getZoomFactor?: () => number;
   setZoomFactor?: (factor: number) => void;
   send?: (channel: string, ...args: unknown[]) => void;
@@ -6307,13 +6381,6 @@ export const BrowserAnnotationStatus = {
 
 export type BrowserAnnotationStatus =
   (typeof BrowserAnnotationStatus)[keyof typeof BrowserAnnotationStatus];
-
-const BrowserToolbarAction = {
-  Annotate: 'annotate',
-  OpenExternal: 'openExternal',
-} as const;
-
-type BrowserToolbarAction = (typeof BrowserToolbarAction)[keyof typeof BrowserToolbarAction];
 
 const BrowserZoom = {
   Min: 0.25,
@@ -6443,12 +6510,6 @@ const BROWSER_DEVICE_PRESETS: BrowserDevicePreset[] = [
 ];
 
 const BROWSER_DEVICE_SCALE_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2];
-
-interface BrowserToolbarTooltipPosition {
-  left: number;
-  top: number;
-  placement: 'top' | 'bottom';
-}
 
 export interface BrowserAnnotationResult {
   status: BrowserAnnotationStatus;
@@ -6862,27 +6923,38 @@ export function buildBrowserAnnotationScript(labels: BrowserAnnotationLabels): s
 }
 
 interface BrowserTabContentProps {
+  tabId: string;
+  isActive: boolean;
   address: string;
   currentUrl: string;
+  initialReferrer?: string;
   sessionArtifacts?: Artifact[];
   autoRefreshFilePath?: string;
   localHtmlPreviewUrl?: string;
-  onAddressChange: (value: string) => void;
-  onCurrentUrlChange: (value: string) => void;
-  onTitleChange?: (value: string) => void;
-  onLocalServiceOpen?: (service: LocalWebService) => void;
+  onAddressChange: (tabId: string, value: string) => void;
+  onCurrentUrlChange: (tabId: string, value: string) => void;
+  onTitleChange?: (tabId: string, value: string) => void;
+  onLocalServiceOpen?: (tabId: string, service: LocalWebService) => void;
+  onOpenNewTab?: (
+    sourceTabId: string,
+    url: string,
+    options?: { background?: boolean; referrer?: string },
+  ) => void;
   publishAction?: BrowserPublishAction;
   draftKey: string;
   annotationBatch?: CoworkBrowserAnnotationBatch;
-  onAnnotationBatchChange: (batch: CoworkBrowserAnnotationBatch | null) => void;
+  onAnnotationBatchChange: (batch: CoworkBrowserAnnotationBatch | null, removedBatchId?: string) => void;
   /** Draft annotations (across pages) that would survive send-time normalization. */
   annotationSendCount?: number;
   onAnnotationSend?: () => void;
 }
 
 const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
+  tabId,
+  isActive,
   address,
   currentUrl,
+  initialReferrer,
   sessionArtifacts,
   autoRefreshFilePath,
   localHtmlPreviewUrl,
@@ -6890,6 +6962,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   onCurrentUrlChange,
   onTitleChange,
   onLocalServiceOpen,
+  onOpenNewTab,
   publishAction,
   draftKey,
   annotationBatch,
@@ -6905,7 +6978,11 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     BrowserScreenshotStatus.Idle,
   );
   const [isAnnotating, setIsAnnotating] = useState(false);
-  const browserTabIdRef = useRef(crypto.randomUUID());
+  const browserTabIdRef = useRef(tabId);
+  browserTabIdRef.current = tabId;
+  const onOpenNewTabRef = useRef(onOpenNewTab);
+  onOpenNewTabRef.current = onOpenNewTab;
+  const consumedInitialReferrerRef = useRef(false);
   const documentIdRef = useRef(crypto.randomUUID());
   const navigationVersionRef = useRef(1);
   const annotationRevisionRef = useRef(0);
@@ -6919,11 +6996,6 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   const replacedCaptureAssetsRef = useRef(new Map<string, BrowserAnnotationScreenshotRef>());
   const [localServices, setLocalServices] = useState<LocalWebService[]>([]);
   const [isLoadingLocalServices, setIsLoadingLocalServices] = useState(false);
-  const [hoveredToolbarAction, setHoveredToolbarAction] = useState<BrowserToolbarAction | null>(
-    null,
-  );
-  const [toolbarTooltipPosition, setToolbarTooltipPosition] =
-    useState<BrowserToolbarTooltipPosition | null>(null);
   const [webviewNode, setWebviewNode] = useState<BrowserWebviewElement | null>(null);
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [isBrowserMenuOpen, setIsBrowserMenuOpen] = useState(false);
@@ -6937,8 +7009,6 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   const [deviceWidth, setDeviceWidth] = useState<number>(BrowserDeviceViewport.DefaultWidth);
   const [deviceHeight, setDeviceHeight] = useState<number>(BrowserDeviceViewport.DefaultHeight);
   const [deviceScale, setDeviceScale] = useState<number>(BrowserDeviceScale.Default);
-  const annotateButtonRef = useRef<HTMLDivElement>(null);
-  const openExternalButtonRef = useRef<HTMLDivElement>(null);
   const addressBarRef = useRef<HTMLDivElement>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
   const browserMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -7236,9 +7306,6 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   const hideAddressOpenExternal = useCallback(() => {
     setIsAddressBarFocused(false);
     setIsAddressOpenExternalHovered(false);
-    setHoveredToolbarAction(action =>
-      action === BrowserToolbarAction.OpenExternal ? null : action,
-    );
   }, []);
 
   useEffect(
@@ -7356,7 +7423,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       const pageUrl = node.getURL?.() || currentUrl;
       const addressSnapshot = address;
       const emitTitle = (value: string | undefined) => {
-        onTitleChange(normalizeBrowserPageTitle(value, pageUrl, addressSnapshot));
+        onTitleChange(tabId, normalizeBrowserPageTitle(value, pageUrl, addressSnapshot));
       };
 
       if (!node.executeJavaScript) {
@@ -7374,7 +7441,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           emitTitle(node.getTitle?.());
         });
     },
-    [address, currentUrl, onTitleChange],
+    [address, currentUrl, onTitleChange, tabId],
   );
 
   const syncNavigationState = useCallback(
@@ -7385,54 +7452,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       syncBrowserTitle(node);
       const nextUrl = node.getURL?.();
       if (nextUrl && nextUrl !== BrowserPageUrl.Blank) {
-        onCurrentUrlChange(nextUrl);
-        onAddressChange(getBrowserAddressForUrl(nextUrl));
+        onCurrentUrlChange(tabId, nextUrl);
+        onAddressChange(tabId, getBrowserAddressForUrl(nextUrl));
       }
     },
-    [getBrowserAddressForUrl, onAddressChange, onCurrentUrlChange, syncBrowserTitle],
+    [getBrowserAddressForUrl, onAddressChange, onCurrentUrlChange, syncBrowserTitle, tabId],
   );
-
-  const getToolbarActionElement = useCallback(
-    (action: BrowserToolbarAction): HTMLDivElement | null => {
-      switch (action) {
-        case BrowserToolbarAction.Annotate:
-          return annotateButtonRef.current;
-        case BrowserToolbarAction.OpenExternal:
-          return openExternalButtonRef.current;
-        default:
-          return null;
-      }
-    },
-    [],
-  );
-
-  useLayoutEffect(() => {
-    if (!hoveredToolbarAction) {
-      setToolbarTooltipPosition(null);
-      return;
-    }
-
-    const updatePosition = () => {
-      const element = getToolbarActionElement(hoveredToolbarAction);
-      if (!element) {
-        setToolbarTooltipPosition(null);
-        return;
-      }
-      const rect = element.getBoundingClientRect();
-      const placement = rect.top >= 34 ? 'top' : 'bottom';
-      const top = placement === 'top' ? rect.top - 8 : rect.bottom + 8;
-      const left = Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2));
-      setToolbarTooltipPosition({ left, top, placement });
-    };
-
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [getToolbarActionElement, hoveredToolbarAction]);
 
   useLayoutEffect(() => {
     if (!webviewNode) return;
@@ -7445,8 +7470,8 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     const handleNavigate = (event: Event) => {
       const nextUrl = (event as Event & { url?: string }).url;
       if (nextUrl && nextUrl !== BrowserPageUrl.Blank) {
-        onCurrentUrlChange(nextUrl);
-        onAddressChange(getBrowserAddressForUrl(nextUrl));
+        onCurrentUrlChange(tabId, nextUrl);
+        onAddressChange(tabId, getBrowserAddressForUrl(nextUrl));
       }
       syncNavigationState(webviewNode);
     };
@@ -7503,8 +7528,37 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     sendAnnotationCommand,
     syncBrowserTitle,
     syncNavigationState,
+    tabId,
     webviewNode,
   ]);
+
+  useEffect(() => {
+    if (isActive) return;
+    setIsBrowserMenuOpen(false);
+    hideAddressOpenExternal();
+    if (webviewNode && document.activeElement === webviewNode) {
+      webviewNode.blur();
+    }
+  }, [hideAddressOpenExternal, isActive, webviewNode]);
+
+  useEffect(() => {
+    if (!isWebviewReady || !webviewNode) return undefined;
+    let guestWebContentsId: number | null = null;
+    try {
+      guestWebContentsId = webviewNode.getWebContentsId?.() ?? null;
+    } catch {
+      return undefined;
+    }
+    if (guestWebContentsId === null) return undefined;
+
+    return subscribeArtifactBrowserWindowOpen(event => {
+      if (event.webContentsId !== guestWebContentsId) return;
+      onOpenNewTabRef.current?.(tabId, event.url, {
+        background: event.disposition === ArtifactBrowserWindowOpenDisposition.BackgroundTab,
+        referrer: event.referrer,
+      });
+    });
+  }, [isWebviewReady, tabId, webviewNode]);
 
   useEffect(() => {
     if (!isWebviewReady || !webviewNode?.setZoomFactor) return;
@@ -7550,8 +7604,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     lastRequestedWebviewRef.current = webviewNode;
     setIsLoading(true);
     let loadPromise: Promise<void>;
+    const referrerToUse = !consumedInitialReferrerRef.current ? initialReferrer : undefined;
     try {
-      loadPromise = webviewNode.loadURL(currentUrl);
+      if (referrerToUse) consumedInitialReferrerRef.current = true;
+      loadPromise = referrerToUse
+        ? webviewNode.loadURL(currentUrl, { httpReferrer: referrerToUse })
+        : webviewNode.loadURL(currentUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('dom-ready') || message.includes('attached to the DOM')) {
@@ -7570,7 +7628,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       lastRequestedWebviewRef.current = null;
       setIsLoading(false);
     });
-  }, [currentUrl, isWebviewReady, webviewNode]);
+  }, [currentUrl, initialReferrer, isWebviewReady, webviewNode]);
 
   const handleNavigate = useCallback(() => {
     const trimmedAddress = address.trim();
@@ -7582,18 +7640,18 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
       localHtmlPreviewUrl &&
       trimmedAddress === autoRefreshFilePath
     ) {
-      onTitleChange?.('');
-      onCurrentUrlChange(localHtmlPreviewUrl);
-      onAddressChange(autoRefreshFilePath);
+      onTitleChange?.(tabId, '');
+      onCurrentUrlChange(tabId, localHtmlPreviewUrl);
+      onAddressChange(tabId, autoRefreshFilePath);
       webviewNodeRef.current?.reload?.();
       return;
     }
 
     const nextUrl = normalizeBrowserUrl(address);
     if (!nextUrl) return;
-    onTitleChange?.('');
-    onCurrentUrlChange(nextUrl);
-    onAddressChange(nextUrl);
+    onTitleChange?.(tabId, '');
+    onCurrentUrlChange(tabId, nextUrl);
+    onAddressChange(tabId, nextUrl);
   }, [
     address,
     autoRefreshFilePath,
@@ -7602,6 +7660,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     onCurrentUrlChange,
     onTitleChange,
     reportBrowserAction,
+    tabId,
   ]);
 
   const handleOpenLocalService = useCallback(
@@ -7611,12 +7670,12 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         servicePort: service.port,
         serviceOnline: service.online,
       });
-      onLocalServiceOpen?.(service);
-      onTitleChange?.('');
-      onCurrentUrlChange(service.url);
-      onAddressChange(service.url);
+      onLocalServiceOpen?.(tabId, service);
+      onTitleChange?.(tabId, '');
+      onCurrentUrlChange(tabId, service.url);
+      onAddressChange(tabId, service.url);
     },
-    [onAddressChange, onCurrentUrlChange, onLocalServiceOpen, onTitleChange, reportBrowserAction],
+    [onAddressChange, onCurrentUrlChange, onLocalServiceOpen, onTitleChange, reportBrowserAction, tabId],
   );
 
   const handleAddressKeyDown = useCallback(
@@ -7655,12 +7714,10 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   const handleAddressOpenExternalMouseEnter = useCallback(() => {
     if (!currentUrl) return;
     setIsAddressOpenExternalHovered(true);
-    setHoveredToolbarAction(BrowserToolbarAction.OpenExternal);
   }, [currentUrl]);
 
   const handleAddressOpenExternalMouseLeave = useCallback(() => {
     setIsAddressOpenExternalHovered(false);
-    setHoveredToolbarAction(null);
   }, []);
 
   const handleOpenExternal = useCallback(() => {
@@ -7765,10 +7822,10 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
     setIsBrowserMenuOpen(false);
     lastRequestedUrlRef.current = '';
     lastRequestedWebviewRef.current = null;
-    onAddressChange('');
-    onCurrentUrlChange('');
-    onTitleChange?.('');
-  }, [onAddressChange, onCurrentUrlChange, onTitleChange, reportBrowserAction]);
+    onAddressChange(tabId, '');
+    onCurrentUrlChange(tabId, '');
+    onTitleChange?.(tabId, '');
+  }, [onAddressChange, onCurrentUrlChange, onTitleChange, reportBrowserAction, tabId]);
 
   const handleClearBrowserCookies = useCallback(async () => {
     setIsBrowserMenuOpen(false);
@@ -7954,57 +8011,68 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
         ? t('artifactBrowserScreenshotFailed')
         : t('artifactBrowserScreenshot');
 
-  const hoveredToolbarLabel =
-    hoveredToolbarAction === BrowserToolbarAction.Annotate
-      ? t(isAnnotating ? 'artifactBrowserAnnotating' : 'artifactBrowserAnnotate')
-      : hoveredToolbarAction === BrowserToolbarAction.OpenExternal
-        ? t('artifactBrowserOpenExternal')
-        : '';
+  const reloadButtonLabel = isLoading ? t('artifactBrowserStop') : t('artifactBrowserReload');
+  const annotateButtonLabel = t(isAnnotating ? 'artifactBrowserAnnotateExit' : 'artifactBrowserAnnotate');
   const showAddressOpenExternal =
     Boolean(currentUrl) && (isAddressBarFocused || isAddressOpenExternalHovered);
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3">
-        <button
-          type="button"
-          onClick={() => {
-            reportBrowserAction('browser_back');
-            webviewNode?.goBack?.();
-          }}
-          disabled={!canGoBack}
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-35"
-          title={t('artifactBrowserBack')}
+        <ArtifactToolbarTooltip
+          content={t('artifactBrowserBack')}
+          className={`shrink-0 ${!canGoBack ? 'cursor-not-allowed' : ''}`}
         >
-          <ChevronLeftIcon />
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            reportBrowserAction('browser_forward');
-            webviewNode?.goForward?.();
-          }}
-          disabled={!canGoForward}
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-35"
-          title={t('artifactBrowserForward')}
+          <button
+            type="button"
+            onClick={() => {
+              reportBrowserAction('browser_back');
+              webviewNode?.goBack?.();
+            }}
+            disabled={!canGoBack}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:pointer-events-none disabled:opacity-35"
+            aria-label={t('artifactBrowserBack')}
+          >
+            <ChevronLeftIcon />
+          </button>
+        </ArtifactToolbarTooltip>
+        <ArtifactToolbarTooltip
+          content={t('artifactBrowserForward')}
+          className={`shrink-0 ${!canGoForward ? 'cursor-not-allowed' : ''}`}
         >
-          <ChevronRightBrowserIcon />
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            reportBrowserAction(isLoading ? 'browser_stop' : 'browser_reload');
-            if (isLoading) {
-              webviewNode?.stop?.();
-            } else {
-              webviewNode?.reload?.();
-            }
-          }}
-          disabled={!currentUrl}
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-35"
-          title={isLoading ? t('artifactBrowserStop') : t('artifactBrowserReload')}
+          <button
+            type="button"
+            onClick={() => {
+              reportBrowserAction('browser_forward');
+              webviewNode?.goForward?.();
+            }}
+            disabled={!canGoForward}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:pointer-events-none disabled:opacity-35"
+            aria-label={t('artifactBrowserForward')}
+          >
+            <ChevronRightBrowserIcon />
+          </button>
+        </ArtifactToolbarTooltip>
+        <ArtifactToolbarTooltip
+          content={reloadButtonLabel}
+          className={`shrink-0 ${!currentUrl ? 'cursor-not-allowed' : ''}`}
         >
-          {isLoading ? <StopIcon /> : <RefreshIcon />}
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              reportBrowserAction(isLoading ? 'browser_stop' : 'browser_reload');
+              if (isLoading) {
+                webviewNode?.stop?.();
+              } else {
+                webviewNode?.reload?.();
+              }
+            }}
+            disabled={!currentUrl}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:pointer-events-none disabled:opacity-35"
+            aria-label={reloadButtonLabel}
+          >
+            {isLoading ? <StopIcon /> : <RefreshIcon />}
+          </button>
+        </ArtifactToolbarTooltip>
         <div
           ref={addressBarRef}
           className="relative flex h-7 min-w-0 flex-1 items-center rounded-md border border-transparent bg-transparent px-2 pr-10 transition-colors hover:bg-surface focus-within:border-border focus-within:bg-surface"
@@ -8016,14 +8084,13 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
             ref={addressInputRef}
             type="text"
             value={address}
-            onChange={event => onAddressChange(event.target.value)}
+            onChange={event => onAddressChange(tabId, event.target.value)}
             onKeyDown={handleAddressKeyDown}
             onFocus={handleAddressFocus}
             placeholder={t('artifactBrowserUrlPlaceholder')}
             className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted"
           />
           <div
-            ref={openExternalButtonRef}
             className={`absolute inset-y-0 right-0 flex w-8 items-center justify-center overflow-hidden rounded-r-[5px] transition-opacity duration-150 ${
               showAddressOpenExternal
                 ? 'opacity-100'
@@ -8032,59 +8099,65 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
             onMouseEnter={handleAddressOpenExternalMouseEnter}
             onMouseLeave={handleAddressOpenExternalMouseLeave}
           >
-            <button
-              type="button"
-              onMouseDown={event => event.preventDefault()}
-              onClick={handleOpenExternal}
+            <ArtifactToolbarTooltip
+              content={t('artifactBrowserOpenExternal')}
               disabled={!currentUrl}
-              tabIndex={showAddressOpenExternal ? 0 : -1}
-              className="inline-flex h-full w-full items-center justify-center rounded-l-none rounded-r-[5px] border-l border-border bg-black/[0.035] text-secondary transition-colors hover:bg-black/[0.06] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 dark:bg-white/[0.045] dark:hover:bg-white/[0.075]"
-              aria-label={t('artifactBrowserOpenExternal')}
-              title={t('artifactBrowserOpenExternal')}
+              className="h-full w-full"
             >
-              <BrowserAddressOpenExternalIcon />
-            </button>
+              <button
+                type="button"
+                onMouseDown={event => event.preventDefault()}
+                onClick={handleOpenExternal}
+                disabled={!currentUrl}
+                tabIndex={showAddressOpenExternal ? 0 : -1}
+                className="inline-flex h-full w-full items-center justify-center rounded-l-none rounded-r-[5px] border-l border-border bg-black/[0.035] text-secondary transition-colors hover:bg-black/[0.06] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35 dark:bg-white/[0.045] dark:hover:bg-white/[0.075]"
+                aria-label={t('artifactBrowserOpenExternal')}
+              >
+                <BrowserAddressOpenExternalIcon />
+              </button>
+            </ArtifactToolbarTooltip>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {publishAction && (
-            <button
-              type="button"
-              onClick={publishAction.onClick}
-              disabled={publishAction.disabled}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label={publishAction.label}
-              title={publishAction.label}
+            <ArtifactToolbarTooltip
+              content={publishAction.label}
+              className={`shrink-0 ${publishAction.disabled ? 'cursor-not-allowed' : ''}`}
             >
-              {publishAction.busy ? (
-                <span
-                  className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary"
-                  aria-hidden="true"
-                />
-              ) : publishAction.kind === ArtifactToolbarPublishActionKind.Share ? (
-                <ShareUploadIcon />
-              ) : (
-                <ServiceDeploymentIcon className="h-[18px] w-[18px] translate-y-[1.5px]" />
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={publishAction.onClick}
+                disabled={publishAction.disabled}
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:pointer-events-none disabled:opacity-35"
+                aria-label={publishAction.label}
+              >
+                {publishAction.busy ? (
+                  <span
+                    className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary"
+                    aria-hidden="true"
+                  />
+                ) : publishAction.kind === ArtifactToolbarPublishActionKind.Share ? (
+                  <ShareForwardIcon />
+                ) : (
+                  <ServiceDeploymentIcon className="h-[18px] w-[18px] translate-y-[1.5px]" />
+                )}
+              </button>
+            </ArtifactToolbarTooltip>
           )}
-          <div
-            ref={annotateButtonRef}
-            className="flex h-7 shrink-0 items-center justify-center"
-            onMouseEnter={() => setHoveredToolbarAction(BrowserToolbarAction.Annotate)}
-            onMouseLeave={() => setHoveredToolbarAction(null)}
+          <ArtifactToolbarTooltip
+            content={annotateButtonLabel}
+            className={`flex h-7 shrink-0 items-center justify-center ${!currentUrl ? 'cursor-not-allowed' : ''}`}
           >
             <button
               type="button"
               onClick={handleToggleAnnotation}
               disabled={!currentUrl}
-              className={`inline-flex h-7 items-center justify-center rounded text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-35 ${
+              className={`inline-flex h-7 items-center justify-center rounded text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:pointer-events-none disabled:opacity-35 ${
                 isAnnotating
                   ? 'gap-1.5 bg-primary/10 px-2 text-primary hover:bg-primary/15'
                   : 'w-7 text-secondary hover:bg-surface hover:text-foreground'
               }`}
-              aria-label={t(isAnnotating ? 'artifactBrowserAnnotating' : 'artifactBrowserAnnotate')}
-              title={isAnnotating ? t('artifactBrowserAnnotating') : t('artifactBrowserAnnotate')}
+              aria-label={annotateButtonLabel}
             >
               <AnnotateIcon />
               {isAnnotating ? (
@@ -8094,7 +8167,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                 </span>
               ) : null}
             </button>
-          </div>
+          </ArtifactToolbarTooltip>
           {isAnnotating && annotationSendCount > 0 && onAnnotationSend ? (
             <button
               type="button"
@@ -8104,7 +8177,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                 });
                 onAnnotationSend();
               }}
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-primary pl-2.5 pr-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-action pl-2.5 pr-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
             >
               <span className="whitespace-nowrap">{t('browserAnnotationsSend')}</span>
               <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-semibold">
@@ -8112,26 +8185,31 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
               </span>
             </button>
           ) : null}
-          <button
-            ref={browserMenuButtonRef}
-            type="button"
-            onClick={() => setIsBrowserMenuOpen(value => {
-              const nextOpen = !value;
-              reportBrowserAction('browser_more_menu_toggle', {
-                targetOpen: nextOpen,
-              });
-              return nextOpen;
-            })}
-            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 ${
-              isBrowserMenuOpen
-                ? 'bg-surface text-foreground'
-                : 'text-secondary hover:bg-surface hover:text-foreground'
-            }`}
-            aria-label={t('artifactBrowserMenu')}
-            title={t('artifactBrowserMenu')}
+          <ArtifactToolbarTooltip
+            content={t('artifactBrowserMenu')}
+            align={TooltipAlign.End}
+            disabled={isBrowserMenuOpen}
           >
-            <MoreVerticalIcon />
-          </button>
+            <button
+              ref={browserMenuButtonRef}
+              type="button"
+              onClick={() => setIsBrowserMenuOpen(value => {
+                const nextOpen = !value;
+                reportBrowserAction('browser_more_menu_toggle', {
+                  targetOpen: nextOpen,
+                });
+                return nextOpen;
+              })}
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 ${
+                isBrowserMenuOpen
+                  ? 'bg-surface text-foreground'
+                  : 'text-secondary hover:bg-surface hover:text-foreground'
+              }`}
+              aria-label={t('artifactBrowserMenu')}
+            >
+              <MoreVerticalIcon />
+            </button>
+          </ArtifactToolbarTooltip>
         </div>
       </div>
       {isBrowserMenuOpen && (
@@ -8217,24 +8295,6 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           </button>
         </div>
       )}
-      {hoveredToolbarLabel &&
-        toolbarTooltipPosition &&
-        createPortal(
-          <div
-            className="pointer-events-none fixed z-[9999] -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] leading-none text-background shadow-sm"
-            style={{
-              left: toolbarTooltipPosition.left,
-              top: toolbarTooltipPosition.top,
-              transform:
-                toolbarTooltipPosition.placement === 'top'
-                  ? 'translate(-50%, -100%)'
-                  : 'translate(-50%, 0)',
-            }}
-          >
-            {hoveredToolbarLabel}
-          </div>,
-          document.body,
-        )}
       {currentUrl ? (
         <div className="flex min-h-0 flex-1 flex-col bg-background">
           {isDeviceToolbarVisible && (
@@ -8273,14 +8333,16 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                 aria-label={t('artifactBrowserDeviceHeight')}
                 title={t('artifactBrowserDeviceHeight')}
               />
-              <button
-                type="button"
-                onClick={handleRotateDevice}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground"
-                title={t('artifactBrowserDeviceRotate')}
-              >
-                <RotateDeviceIcon />
-              </button>
+              <ArtifactToolbarTooltip content={t('artifactBrowserDeviceRotate')}>
+                <button
+                  type="button"
+                  onClick={handleRotateDevice}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                  aria-label={t('artifactBrowserDeviceRotate')}
+                >
+                  <RotateDeviceIcon />
+                </button>
+              </ArtifactToolbarTooltip>
               <select
                 value={deviceScale}
                 onChange={event => handleDeviceScaleChange(event.target.value)}
@@ -8294,14 +8356,19 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                 ))}
               </select>
               <span className="min-w-0 flex-1" />
-              <button
-                type="button"
-                onClick={() => setIsDeviceToolbarVisible(false)}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground"
-                title={t('artifactBrowserHideDeviceToolbar')}
+              <ArtifactToolbarTooltip
+                content={t('artifactBrowserHideDeviceToolbar')}
+                align={TooltipAlign.End}
               >
-                <CloseIcon />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsDeviceToolbarVisible(false)}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                  aria-label={t('artifactBrowserHideDeviceToolbar')}
+                >
+                  <CloseIcon />
+                </button>
+              </ArtifactToolbarTooltip>
             </div>
           )}
           <div
@@ -8337,7 +8404,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                   src: BrowserPageUrl.Blank,
                   partition: ArtifactBrowserPartition.Default,
                   className: 'h-full w-full bg-white',
-                  allowpopups: 'false',
+                  allowpopups: 'true',
                 })}
               </div>
             </div>
@@ -8348,15 +8415,21 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
           <div className="w-full max-w-[420px]">
             <div className="mb-3 flex items-center justify-between px-1">
               <div className="text-xs text-muted">{t('artifactBrowserLocalServices')}</div>
-              <button
-                type="button"
-                onClick={loadLocalServices}
-                className="inline-flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                title={t('artifactBrowserLocalServicesRefresh')}
-                disabled={isLoadingLocalServices}
+              <ArtifactToolbarTooltip
+                content={t('artifactBrowserLocalServicesRefresh')}
+                align={TooltipAlign.End}
+                className={`shrink-0 ${isLoadingLocalServices ? 'cursor-not-allowed' : ''}`}
               >
-                <RefreshIcon />
-              </button>
+                <button
+                  type="button"
+                  onClick={loadLocalServices}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-surface hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                  aria-label={t('artifactBrowserLocalServicesRefresh')}
+                  disabled={isLoadingLocalServices}
+                >
+                  <RefreshIcon />
+                </button>
+              </ArtifactToolbarTooltip>
             </div>
             {localServices.length > 0 ? (
               <div className="space-y-2">
@@ -8406,39 +8479,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
   );
 };
 
-const FolderIcon = () => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M2 4.5A1.5 1.5 0 013.5 3h2.879a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" />
-  </svg>
-);
-
-const BrowserIcon = () => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <circle cx="8" cy="8" r="6" />
-    <ellipse cx="8" cy="8" rx="2.5" ry="6" />
-    <path d="M2 8h12" />
-  </svg>
-);
-
-const ShareUploadIcon = () => (
+const ShareForwardIcon = () => (
   <svg
     width="16"
     height="16"
@@ -8448,10 +8489,9 @@ const ShareUploadIcon = () => (
     strokeWidth="1.5"
     strokeLinecap="round"
     strokeLinejoin="round"
+    aria-hidden="true"
   >
-    <path d="M2 11v1.5A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5V11" />
-    <path d="M5 5l3-3 3 3" />
-    <path d="M8 2v9" />
+    <path d="M8.75 2.75L14 7.75L8.75 12.75V10.15C5.6 10.15 3.4 11.05 2 13.25C2.1 8.4 4.7 5.35 8.75 5.35V2.75Z" />
   </svg>
 );
 
@@ -8516,23 +8556,6 @@ const StopIcon = () => (
   </svg>
 );
 
-const OpenExternalIcon = () => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M12 9v3.5a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 012 12.5v-7A1.5 1.5 0 013.5 4H7" />
-    <path d="M10 2h4v4" />
-    <path d="M7 9l7-7" />
-  </svg>
-);
-
 const BrowserAddressOpenExternalIcon = () => (
   <svg
     width="14"
@@ -8546,48 +8569,6 @@ const BrowserAddressOpenExternalIcon = () => (
   >
     <path d="M4.75 11.25l6.5-6.5" />
     <path d="M7.75 4.75h3.5v3.5" />
-  </svg>
-);
-
-const MoreHorizontalToolbarIcon = () => (
-  <svg width="16" height="14" viewBox="0 0 16 14" fill="currentColor" aria-hidden="true">
-    <circle cx="4" cy="8.6" r="1.15" />
-    <circle cx="8" cy="8.6" r="1.15" />
-    <circle cx="12" cy="8.6" r="1.15" />
-  </svg>
-);
-
-const ContentViewIcon = () => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M2.5 3.5h11" />
-    <path d="M2.5 8h11" />
-    <path d="M2.5 12.5h6" />
-  </svg>
-);
-
-const FileListIcon = () => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M4.5 2.881c0-.644.522-1.167 1.167-1.167h2.552c.323 0 .635.117.878.33l.58.507c.243.213.555.33.877.33h3.351c.736 0 1.333.597 1.333 1.333v5.945c0 .49-.398.889-.889.889" />
-    <path d="M1.143 6.476c0-.736.597-1.333 1.333-1.333h2.314c.323 0 .635.117.878.33l.58.507c.242.213.554.33.877.33h3.351c.736 0 1.333.597 1.333 1.334v4.833c0 .736-.597 1.333-1.333 1.333H2.476c-.736 0-1.333-.597-1.333-1.333V6.476z" />
   </svg>
 );
 

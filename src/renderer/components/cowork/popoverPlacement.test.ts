@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest';
 
-import { choosePopoverPlacement, type PopoverEdgeRect } from './popoverPlacement';
+import {
+  choosePopoverPlacement,
+  type PopoverEdgeRect,
+  resolveFixedPopoverPlacement,
+} from './popoverPlacement';
 
 const VERTICAL = { top: 0, bottom: 800 };
 const HORIZONTAL = { left: 250, right: 1300 };
@@ -89,5 +93,86 @@ describe('choosePopoverPlacement', () => {
       { preferredAlign: 'left', estimatedHeight: 300, desiredWidth: 200 },
     );
     expect(placement.direction).toBe('up');
+  });
+});
+
+describe('resolveFixedPopoverPlacement', () => {
+  test('aligns to the anchor left edge when the popover fits inside the pane boundary', () => {
+    const placement = resolveFixedPopoverPlacement({
+      anchor: { top: 220, bottom: 248, left: 280, right: 360 },
+      viewportWidth: 1200,
+      viewportHeight: 800,
+      desiredWidth: 260,
+      estimatedHeight: 320,
+      gap: 8,
+      margin: 12,
+      boundary: { top: 48, bottom: 800, left: 240, right: 720 },
+    });
+
+    expect(placement).toEqual({
+      left: 280,
+      width: 260,
+      direction: 'down',
+      top: 256,
+      maxHeight: 532,
+    });
+  });
+
+  test('clamps inside the chat pane right boundary so a right browser WebContentsView cannot clip it', () => {
+    // Chat occupies 240..640; Agent Browser WebContentsView occupies 640..1200.
+    // The usage chip sits near the right side of the chat pane (415..510).
+    const placement = resolveFixedPopoverPlacement({
+      anchor: { top: 200, bottom: 228, left: 415, right: 510 },
+      viewportWidth: 1200,
+      viewportHeight: 800,
+      desiredWidth: 260,
+      estimatedHeight: 320,
+      gap: 8,
+      margin: 12,
+      boundary: { top: 48, bottom: 800, left: 240, right: 640 },
+    });
+
+    expect(placement.width).toBe(260);
+    expect(placement.left).toBe(368);
+    expect(placement.left + placement.width).toBeLessThanOrEqual(640 - 12);
+    expect(placement.direction).toBe('down');
+    expect(placement.top).toBe(236);
+  });
+
+  test('extends leftward over the HTML sidebar before shrinking when the chat pane is narrower than the popover', () => {
+    const placement = resolveFixedPopoverPlacement({
+      anchor: { top: 500, bottom: 528, left: 310, right: 390 },
+      viewportWidth: 1200,
+      viewportHeight: 800,
+      desiredWidth: 260,
+      estimatedHeight: 320,
+      gap: 8,
+      margin: 12,
+      boundary: { top: 48, bottom: 800, left: 240, right: 460 },
+    });
+
+    expect(placement.width).toBe(260);
+    expect(placement.left).toBe(188);
+    expect(placement.left + placement.width).toBeLessThanOrEqual(460 - 12);
+    expect(placement.direction).toBe('up');
+    expect(placement.bottom).toBe(308);
+    expect(placement.maxHeight).toBe(432);
+  });
+
+  test('shrinks width when total viewport space left of boundary.right is narrower than desiredWidth', () => {
+    const placement = resolveFixedPopoverPlacement({
+      anchor: { top: 500, bottom: 528, left: 120, right: 200 },
+      viewportWidth: 900,
+      viewportHeight: 800,
+      desiredWidth: 260,
+      estimatedHeight: 320,
+      gap: 8,
+      margin: 12,
+      boundary: { top: 48, bottom: 800, left: 0, right: 240 },
+    });
+
+    expect(placement.width).toBe(216);
+    expect(placement.left).toBe(12);
+    expect(placement.left + placement.width).toBe(228);
   });
 });

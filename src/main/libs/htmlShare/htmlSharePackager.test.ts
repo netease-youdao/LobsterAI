@@ -168,18 +168,48 @@ describe('htmlSharePackager', () => {
         '<!doctype html>',
         '<a href="memory/day.md">memory</a>',
         '<script src=".openclaw/state.js"></script>',
+        '<script src=".dsh/config.json"></script>',
       ].join('\n'),
     );
     await writeFile(path.join(root, 'memory/day.md'), 'private');
     await writeFile(path.join(root, '.openclaw/state.js'), 'console.log("private");');
+    await writeFile(path.join(root, '.dsh/config.json'), '{"secret":"token"}');
 
     const packaged = await packageHtmlFile(path.join(root, 'index.html'));
     const entries = await getArchiveEntries(packaged.archivePath);
 
     expect(entries).toEqual(['index.html']);
     expect(packaged.warnings).toEqual([
+      'Blocked referenced resource: .dsh/config.json',
       'Blocked referenced resource: .openclaw/state.js',
       'Blocked referenced resource: memory/day.md',
+    ]);
+  });
+
+  test('treats .dsh as a share boundary marker without leaking .dsh or parent files', async () => {
+    const outerRoot = await createTempRoot();
+    const projectRoot = path.join(outerRoot, 'workspace');
+    await writeFile(path.join(outerRoot, 'outside.css'), 'body { color: red; }');
+    await writeFile(path.join(projectRoot, '.dsh/profile.json'), '{"token":"secret"}');
+    await writeFile(path.join(projectRoot, 'assets/theme.css'), 'body { color: teal; }');
+    await writeFile(
+      path.join(projectRoot, 'pages/demo.html'),
+      [
+        '<!doctype html>',
+        '<link rel="stylesheet" href="../assets/theme.css">',
+        '<link rel="stylesheet" href="../../outside.css">',
+        '<a href="../.dsh/profile.json">profile</a>',
+      ].join('\n'),
+    );
+
+    const packaged = await packageHtmlFile(path.join(projectRoot, 'pages/demo.html'));
+    const entries = await getArchiveEntries(packaged.archivePath);
+
+    expect(packaged.entryFile).toBe('pages/demo.html');
+    expect(entries).toEqual(['assets/theme.css', 'pages/demo.html']);
+    expect(packaged.warnings).toEqual([
+      'Blocked referenced resource: ../../outside.css',
+      'Blocked referenced resource: .dsh/profile.json',
     ]);
   });
 

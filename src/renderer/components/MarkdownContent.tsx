@@ -21,6 +21,7 @@ import { remarkMarkdownLayout } from '../utils/remarkMarkdownLayout';
 import { remarkPandocInlineMath } from '../utils/remarkPandocInlineMath';
 import CodeBlock from './CodeBlock';
 import LocalFileContextMenu from './common/LocalFileContextMenu';
+import { MARKDOWN_PREVIEW_IMAGE_ATTR } from './cowork/imagePreviewNavigation';
 import { type MarkdownLinkOpener, useMarkdownLinkOpener } from './markdownLinkOpener';
 
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file', 'localfile', 'kit']);
@@ -57,7 +58,12 @@ const formatContentSize = (bytes: number): string => {
 };
 
 const encodeFileUrl = (url: string): string => {
-  const encoded = encodeURI(url);
+  // Encode unescaped characters without double-encoding existing %XX sequences
+  // (e.g. file:///Users/.../Application%20Support/... from encodeURI / pathToFileURL).
+  const encoded = url
+    .split(/(%[0-9A-Fa-f]{2})/g)
+    .map((part, index) => (index % 2 === 1 ? part : encodeURI(part)))
+    .join('');
   return encoded.replace(/\(/g, '%28').replace(/\)/g, '%29');
 };
 
@@ -565,7 +571,7 @@ const MARKDOWN_IMAGE_MAX_HEIGHT = 384;
 
 const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null,
-  onImageClick?: (image: { src: string; alt?: string | null }) => void,
+  onImageClick?: (image: { src: string; alt?: string | null }, element?: HTMLImageElement) => void,
   spacing: MarkdownSpacing = 'normal',
 ) => ({
   p: ({ node: _node, className: _className, children, ...props }: any) => (
@@ -674,7 +680,10 @@ const createMarkdownComponents = (
           event.currentTarget.naturalWidth,
           event.currentTarget.naturalHeight,
         )}
-        onClick={onImageClick && resolvedSrc ? () => onImageClick({ src: resolvedSrc, alt: altText }) : undefined}
+        onClick={onImageClick && resolvedSrc
+          ? (event: React.MouseEvent<HTMLImageElement>) => onImageClick({ src: resolvedSrc, alt: altText }, event.currentTarget)
+          : undefined}
+        {...(onImageClick && resolvedSrc ? { [MARKDOWN_PREVIEW_IMAGE_ATTR]: 'true' } : {})}
         {...props}
       />
     );
@@ -774,7 +783,7 @@ interface MarkdownContentProps {
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   enableLargePreview?: boolean;
   forceExpanded?: boolean;
-  onImageClick?: (image: { src: string; alt?: string | null }) => void;
+  onImageClick?: (image: { src: string; alt?: string | null }, element?: HTMLImageElement) => void;
 }
 
 const MarkdownContent: React.FC<MarkdownContentProps> = ({

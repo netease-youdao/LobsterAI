@@ -1,47 +1,83 @@
-import { XMarkIcon } from '@heroicons/react/24/outline';
-import { DefaultAgentAvatarIcon } from '@shared/agent/avatar';
+import {
+  ArrowPathIcon,
+  ArrowUturnLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  SparklesIcon,
+  StopIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
+import {
+  AgentCreateIconSource,
+  AgentDraftErrorCode,
+  AgentDraftLanguage,
+  AgentDraftMode,
+  type GeneratedAgentDraft,
+  pickRandomAgentAvatarIcon,
+  resolveAgentIconOnAiDraft,
+  resolveAgentIconOnTitleChange,
+  SubagentCollaborationMode,
+} from '@shared/agent';
 import { ExpertUiEvent } from '@shared/agent/presets';
 import { ENABLE_EXPERT_PLAZA_UI } from '@shared/featureFlags';
-import type { Platform } from '@shared/platform';
-import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
-import { coworkService } from '../../services/cowork';
+import { getAgentImPlatforms } from '../../services/agentImBindings';
+import { saveAgentOnboardingMeta } from '../../services/agentOnboarding';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
 import type { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
-import type { DingTalkInstanceConfig, DiscordInstanceConfig, FeishuInstanceConfig, IMGatewayConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from '../../types/im';
+import type { IMGatewayConfig } from '../../types/im';
 import type { Skill } from '../../types/skill';
-import { getAgentDisplayName, getAgentDisplayNameById } from '../../utils/agentDisplay';
+import { getAgentDisplayName } from '../../utils/agentDisplay';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
-import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
-import AgentAvatarPicker from './AgentAvatarPicker';
-import AgentConfirmDialog from './AgentConfirmDialog';
-import AgentDetailToolbar from './AgentDetailToolbar';
+import ModelSelector from '../ModelSelector';
 import {
-  AGENT_DESCRIPTION_INPUT_CLASS,
-  AGENT_HEADER_FIELDS_CLASS,
-  AGENT_HEADER_IDENTITY_CLASS,
-  AGENT_NAME_INPUT_CLASS,
-} from './agentHeaderStyles';
+  SETTINGS_DESCRIPTION_TEXT,
+  SETTINGS_ITEM_TITLE_TEXT,
+} from '../settings/settingsTypography';
+import AgentAvatarPicker from './AgentAvatarPicker';
+import {
+  countSelectedCollaborators,
+  getDisplayedCollaboratorIds,
+  isRestrictedCollaborationMode,
+  resolveCollaborationPayloadOnSave,
+  selectCollaborationScope,
+  toggleCollaboratorAgent,
+} from './agentCollaborationHelpers';
+import AgentCollaborationSettings from './AgentCollaborationSettings';
+import AgentConfirmDialog from './AgentConfirmDialog';
+import { formatAgentDraftError } from './agentDraftErrors';
+import AgentImBindingList from './AgentImBindingList';
+import {
+  AgentCreateAiActionKind,
+  buildCreateDraftInputs,
+  deriveAgentNameFromFolder,
+  resolveCreateAiActionKind,
+  resolveCreateSubmitDescription,
+} from './agentPersonaHelpers';
 import AgentSkillSelector from './AgentSkillSelector';
-import { AgentConfirmDialogVariant, AgentDetailTab } from './constants';
+import AgentWorkingDirectoryField from './AgentWorkingDirectoryField';
+import { AgentConfirmDialogVariant } from './constants';
 
-type MultiInstancePlatform = 'dingtalk' | 'feishu' | 'qq' | 'wecom' | 'nim' | 'telegram' | 'discord' | 'popo';
-type MultiInstanceConfig = DingTalkInstanceConfig | FeishuInstanceConfig | QQInstanceConfig | WecomInstanceConfig | NimInstanceConfig | TelegramInstanceConfig | DiscordInstanceConfig | PopoInstanceConfig;
-type AgentCreateAnalyticsSource = 'home_agent_sidebar' | 'home_agent_sidebar_empty' | 'agents_view' | 'agent_create_modal';
+type AgentCreateAnalyticsSource =
+  | 'home_agent_sidebar'
+  | 'home_agent_sidebar_empty'
+  | 'agents_view'
+  | 'agent_create_modal';
+
 type AgentCreateActionType =
   | 'open'
   | 'close'
   | 'open_expert_plaza'
-  | 'tab_change'
+  | 'ai_draft_generate'
   | 'create_submit'
   | 'create_success'
   | 'create_failed'
@@ -49,16 +85,20 @@ type AgentCreateActionType =
   | 'discard_confirm_submit'
   | 'discard_confirm_cancel';
 
-const MULTI_INSTANCE_PLATFORMS: MultiInstancePlatform[] = ['dingtalk', 'feishu', 'qq', 'wecom', 'nim', 'telegram', 'discord', 'popo'];
+interface AiDraftUndoSnapshot {
+  instructions: string;
+  generatedDraft: GeneratedAgentDraft | null;
+  seedGoal: string | null;
+  hadUserInput: boolean;
+  autoFilledName?: string;
+  previousIcon?: string;
+  previousIconSource?: AgentCreateIconSource;
+}
+
 const AGENT_CREATE_ANALYTICS_DEFAULT_SOURCE: AgentCreateAnalyticsSource = 'agent_create_modal';
 
-const isMultiInstancePlatform = (platform: Platform): platform is MultiInstancePlatform =>
-  MULTI_INSTANCE_PLATFORMS.includes(platform as MultiInstancePlatform);
-
 const serializeAnalyticsList = (values: string[]): string | undefined => {
-  const normalizedValues = values
-    .map(value => value.trim())
-    .filter(Boolean);
+  const normalizedValues = values.map(value => value.trim()).filter(Boolean);
   return normalizedValues.length > 0 ? normalizedValues.join(',') : undefined;
 };
 
@@ -88,67 +128,155 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   presentation = 'modal',
   source = AGENT_CREATE_ANALYTICS_DEFAULT_SOURCE,
 }) => {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [systemPrompt, setSystemPrompt] = useState('');
-  const [identity, setIdentity] = useState('');
-  const [userInfo, setUserInfo] = useState('');
-  const [icon, setIcon] = useState(DefaultAgentAvatarIcon);
-  const [model, setModel] = useState<Model | null>(null);
-  const [workingDirectory, setWorkingDirectory] = useState('');
-  const [skillIds, setSkillIds] = useState<string[]>([]);
-  const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
-  const [creating, setCreating] = useState(false);
-  const [activeTab, setActiveTab] = useState<AgentDetailTab>(AgentDetailTab.Identity);
   const globalSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const agents = useSelector((state: RootState) => state.agent.agents);
-  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
-  const coworkConfig = useSelector((state: RootState) => state.cowork.config);
   const skills = useSelector((state: RootState) => state.skill.skills);
+  const mcpServers = useSelector((state: RootState) => state.mcp.servers);
+
+  const [name, setName] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [icon, setIcon] = useState<string>(() => pickRandomAgentAvatarIcon({
+    existingIcons: agents.filter(agent => agent.enabled).map(agent => agent.icon),
+  }));
+  const [iconSource, setIconSource] = useState<AgentCreateIconSource>(AgentCreateIconSource.InitialRandom);
+  const [model, setModel] = useState<Model | null>(null);
+  const [workingDirectory, setWorkingDirectory] = useState('');
+  const [restrictSkills, setRestrictSkills] = useState(false);
+  const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [subagentCollaborationMode, setSubagentCollaborationMode] = useState<SubagentCollaborationMode>(
+    SubagentCollaborationMode.All,
+  );
+  const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
+  const [boundKeys, setBoundKeys] = useState<Set<string>>(new Set());
+  const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
+  const language = i18nService.getLanguage();
+  const imPlatforms = useMemo(() => getAgentImPlatforms(imConfig, language), [imConfig, language]);
+
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showImSection, setShowImSection] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [streamingDraftPreview, setStreamingDraftPreview] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [generatedDraft, setGeneratedDraft] = useState<GeneratedAgentDraft | null>(null);
+  const [aiUndoSnapshot, setAiUndoSnapshot] = useState<AiDraftUndoSnapshot | null>(null);
+  const [creating, setCreating] = useState(false);
   const [showUnsavedConfirm, setShowUnsavedConfirm] = useState(false);
-  const initialWorkingDirectoryRef = useRef('');
+
+  const agentsRef = useRef(agents);
+  const initialIconRef = useRef(icon);
+  const lastInitialIconRef = useRef<string | null>(null);
+  const iconRef = useRef(icon);
+  const iconSourceRef = useRef<AgentCreateIconSource>(iconSource);
   const initialModelRef = useRef('');
-  const initialUserInfoRef = useRef('');
   const initializedOpenRef = useRef(false);
   const openPlazaOnCloseRef = useRef(false);
+  const draftRequestSeqRef = useRef(0);
+  const activeDraftRequestIdRef = useRef<string | null>(null);
+  const seedGoalRef = useRef<string | null>(null);
+  const preDraftSnapshotRef = useRef<{
+    instructions: string;
+    generatedDraft: GeneratedAgentDraft | null;
+    aiUndoSnapshot: AiDraftUndoSnapshot | null;
+    seedGoal: string | null;
+  } | null>(null);
+  const instructionsTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // IM binding state — keys are platform names or `platform:<instanceId>` for multi-instance platforms.
-  const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
-  const [boundKeys, setBoundKeys] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    agentsRef.current = agents;
+  }, [agents]);
+
+  useEffect(() => () => {
+    if (activeDraftRequestIdRef.current) {
+      void agentService.cancelGenerateDraft(activeDraftRequestIdRef.current);
+      activeDraftRequestIdRef.current = null;
+    }
+  }, []);
+
+  const updateIconState = useCallback((nextIcon: string, nextSource: AgentCreateIconSource) => {
+    iconRef.current = nextIcon;
+    iconSourceRef.current = nextSource;
+    setIcon(nextIcon);
+    setIconSource(nextSource);
+  }, []);
+
+  const enabledSkills = useMemo(() => skills.filter(skill => skill.enabled), [skills]);
+  const enabledMcpServers = useMemo(() => mcpServers.filter(server => server.enabled), [mcpServers]);
+
+  const effectiveSkillIds = useMemo(
+    () => (restrictSkills ? skillIds : []),
+    [restrictSkills, skillIds],
+  );
+
+  const resolvedCollaboration = useMemo(
+    () => resolveCollaborationPayloadOnSave({
+      mode: subagentCollaborationMode,
+      allowAgentIds: subagentAllowAgentIds,
+    }),
+    [subagentAllowAgentIds, subagentCollaborationMode],
+  );
+
+  const hasAdvancedOverrides = useMemo(() => {
+    const currentModelRef = model ? toOpenClawModelRef(model) : '';
+    return (
+      currentModelRef !== initialModelRef.current
+      || (restrictSkills && skillIds.length > 0)
+      || resolvedCollaboration.subagentCollaborationMode !== SubagentCollaborationMode.All
+      || resolvedCollaboration.subagentAllowAgentIds.length > 0
+      || boundKeys.size > 0
+    );
+  }, [
+    boundKeys.size,
+    model,
+    resolvedCollaboration.subagentAllowAgentIds.length,
+    resolvedCollaboration.subagentCollaborationMode,
+    restrictSkills,
+    skillIds.length,
+  ]);
 
   const getChangedFields = useCallback((): string[] => {
     const changedFields: string[] = [];
     if (name.trim()) changedFields.push('name');
-    if (description.trim()) changedFields.push('description');
-    if (systemPrompt.trim()) changedFields.push('systemPrompt');
-    if (identity.trim()) changedFields.push('identity');
-    if (userInfo !== initialUserInfoRef.current) changedFields.push('userInfo');
-    if (icon !== DefaultAgentAvatarIcon) changedFields.push('icon');
+    if (instructions.trim()) changedFields.push('systemPrompt');
+    if (iconSource === AgentCreateIconSource.UserCustom && icon !== initialIconRef.current) {
+      changedFields.push('icon');
+    }
     if ((model ? toOpenClawModelRef(model) : '') !== initialModelRef.current) changedFields.push('model');
-    if (workingDirectory !== initialWorkingDirectoryRef.current) changedFields.push('workingDirectory');
-    if (skillIds.length > 0) changedFields.push('skillIds');
-    if (subagentAllowAgentIds.length > 0) changedFields.push('subagentAllowAgentIds');
+    if (workingDirectory.trim()) changedFields.push('workingDirectory');
+    if (effectiveSkillIds.length > 0) changedFields.push('skillIds');
+    if (resolvedCollaboration.subagentCollaborationMode !== SubagentCollaborationMode.All) {
+      changedFields.push('subagentCollaborationMode');
+    }
+    if (resolvedCollaboration.subagentAllowAgentIds.length > 0) {
+      changedFields.push('subagentAllowAgentIds');
+    }
     if (boundKeys.size > 0) changedFields.push('imBindings');
     return changedFields;
-  }, [boundKeys.size, description, icon, identity, model, name, skillIds.length, subagentAllowAgentIds.length, systemPrompt, userInfo, workingDirectory]);
+  }, [
+    boundKeys.size,
+    effectiveSkillIds.length,
+    icon,
+    iconSource,
+    instructions,
+    model,
+    name,
+    resolvedCollaboration.subagentAllowAgentIds.length,
+    resolvedCollaboration.subagentCollaborationMode,
+    workingDirectory,
+  ]);
 
-  const isDirty = useCallback((): boolean => {
-    return getChangedFields().length > 0;
-  }, [getChangedFields]);
+  const isDirty = useCallback((): boolean => getChangedFields().length > 0, [getChangedFields]);
 
   const getSelectedSkills = useCallback((): Skill[] => (
-    skillIds
+    effectiveSkillIds
       .map(skillId => skills.find(skill => skill.id === skillId))
       .filter((skill): skill is Skill => Boolean(skill))
-  ), [skillIds, skills]);
+  ), [effectiveSkillIds, skills]);
 
   const getImPlatformsForAnalytics = useCallback((): string[] => {
     const platforms = new Set<string>();
     boundKeys.forEach((key) => {
       const platform = key.split(':')[0]?.trim();
-      if (platform) {
-        platforms.add(platform);
-      }
+      if (platform) platforms.add(platform);
     });
     return Array.from(platforms).sort();
   }, [boundKeys]);
@@ -156,30 +284,25 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   const reportAgentCreateAction = useCallback((
     actionType: AgentCreateActionType,
     options: {
-      activeTab?: AgentDetailTab;
       changedFields?: string[];
-      errorCode?: 'user_info_write_failed' | 'create_agent_failed' | 'unknown';
+      errorCode?: 'create_agent_failed' | 'unknown';
       includeConfigDetails?: boolean;
       isDirty?: boolean;
       result?: 'success' | 'failed';
-      targetTab?: AgentDetailTab;
     } = {},
   ): void => {
     const changedFields = options.changedFields ?? [];
     const selectedSkills = options.includeConfigDetails ? getSelectedSkills() : [];
     const imPlatforms = options.includeConfigDetails ? getImPlatformsForAnalytics() : [];
-    console.debug(`[AgentCreateModal] reporting analytics action ${actionType}`);
     void reportYdAnalyzer({
       action: LogReporterAction.AgentCreateAction,
       source,
       actionType,
-      activeTab: options.activeTab ?? activeTab,
-      targetTab: options.targetTab,
-      creationMode: 'blank',
+      creationMode: generatedDraft ? 'ai_assisted' : 'quick',
       isDirty: options.isDirty,
       changedFieldCount: changedFields.length,
       changedFields: changedFields.length > 0 ? changedFields.join(',') : undefined,
-      skillCount: skillIds.length,
+      skillCount: effectiveSkillIds.length,
       imBindingCount: boundKeys.size,
       hasModel: Boolean(model),
       hasWorkingDirectory: workingDirectory.trim().length > 0,
@@ -202,50 +325,80 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
       imPlatforms: options.includeConfigDetails ? serializeAnalyticsList(imPlatforms) : undefined,
     });
   }, [
-    activeTab,
     boundKeys.size,
+    effectiveSkillIds.length,
+    generatedDraft,
     getImPlatformsForAnalytics,
     getSelectedSkills,
     model,
-    skillIds.length,
     source,
     workingDirectory,
   ]);
 
+  const cancelActiveDraft = useCallback((restoreSnapshot: boolean) => {
+    draftRequestSeqRef.current += 1;
+    const activeId = activeDraftRequestIdRef.current;
+    activeDraftRequestIdRef.current = null;
+    if (activeId) {
+      void agentService.cancelGenerateDraft(activeId);
+    }
+    const snapshot = preDraftSnapshotRef.current;
+    preDraftSnapshotRef.current = null;
+    setGenerating(false);
+    setStreamingDraftPreview(false);
+    if (restoreSnapshot && snapshot) {
+      setInstructions(snapshot.instructions);
+      setGeneratedDraft(snapshot.generatedDraft);
+      setAiUndoSnapshot(snapshot.aiUndoSnapshot);
+      seedGoalRef.current = snapshot.seedGoal;
+    }
+  }, []);
+
+  const resetForm = useCallback(() => {
+    cancelActiveDraft(false);
+    const nextInitialIcon = pickRandomAgentAvatarIcon({
+      existingIcons: agentsRef.current.filter(agent => agent.enabled).map(agent => agent.icon),
+      excludeIcon: lastInitialIconRef.current,
+    });
+    lastInitialIconRef.current = nextInitialIcon;
+    initialIconRef.current = nextInitialIcon;
+    seedGoalRef.current = null;
+    setName('');
+    setInstructions('');
+    updateIconState(nextInitialIcon, AgentCreateIconSource.InitialRandom);
+    setModel(globalSelectedModel ?? null);
+    setWorkingDirectory('');
+    setRestrictSkills(false);
+    setSkillIds([]);
+    setSubagentCollaborationMode(SubagentCollaborationMode.All);
+    setSubagentAllowAgentIds([]);
+    setBoundKeys(new Set());
+    setShowAdvanced(false);
+    setShowImSection(false);
+    setGenerating(false);
+    setStreamingDraftPreview(false);
+    setDraftError(null);
+    setGeneratedDraft(null);
+    setAiUndoSnapshot(null);
+    setShowUnsavedConfirm(false);
+  }, [cancelActiveDraft, globalSelectedModel, updateIconState]);
+
   useEffect(() => {
     if (!isOpen) {
       initializedOpenRef.current = false;
+      cancelActiveDraft(false);
       return;
     }
     if (initializedOpenRef.current) return;
     initializedOpenRef.current = true;
     openPlazaOnCloseRef.current = false;
-    setName('');
-    setDescription('');
-    setSystemPrompt('');
-    setIdentity('');
-    setUserInfo('');
-    initialUserInfoRef.current = '';
-    setIcon(DefaultAgentAvatarIcon);
-    const currentAgent = agents.find((agent) => agent.id === currentAgentId);
-    const defaultWorkingDirectory = currentAgent?.workingDirectory?.trim() || coworkConfig.workingDirectory || '';
-    initialWorkingDirectoryRef.current = defaultWorkingDirectory;
     initialModelRef.current = globalSelectedModel ? toOpenClawModelRef(globalSelectedModel) : '';
-    setModel(globalSelectedModel ?? null);
-    setWorkingDirectory(defaultWorkingDirectory);
-    setSkillIds([]);
-    setSubagentAllowAgentIds([]);
-    setActiveTab(AgentDetailTab.Identity);
-    setShowUnsavedConfirm(false);
-    setBoundKeys(new Set());
-    reportAgentCreateAction('open', {
-      activeTab: AgentDetailTab.Identity,
-      isDirty: false,
-    });
+    resetForm();
+    reportAgentCreateAction('open', { isDirty: false });
     imService.loadConfig().then((cfg) => {
       if (cfg) setImConfig(cfg);
     });
-  }, [agents, coworkConfig.workingDirectory, currentAgentId, globalSelectedModel, isOpen, reportAgentCreateAction]);
+  }, [cancelActiveDraft, globalSelectedModel, isOpen, reportAgentCreateAction, resetForm]);
 
   useEffect(() => {
     if (!isOpen || model || !globalSelectedModel) return;
@@ -257,23 +410,8 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
 
   if (!isOpen) return null;
 
-  const resetForm = () => {
-    setName('');
-    setDescription('');
-    setSystemPrompt('');
-    setIdentity('');
-    setUserInfo('');
-    initialUserInfoRef.current = '';
-    setIcon(DefaultAgentAvatarIcon);
-    setModel(null);
-    setWorkingDirectory('');
-    setSkillIds([]);
-    setSubagentAllowAgentIds([]);
-    setActiveTab(AgentDetailTab.Identity);
-    setBoundKeys(new Set());
-  };
-
   const closeEditor = () => {
+    draftRequestSeqRef.current += 1;
     onClose();
     if (openPlazaOnCloseRef.current) {
       window.dispatchEvent(new Event(ExpertUiEvent.OpenPlaza));
@@ -312,18 +450,175 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     setShowUnsavedConfirm(false);
   };
 
-  const handleTabChange = (targetTab: AgentDetailTab) => {
-    if (targetTab === activeTab) return;
-    reportAgentCreateAction('tab_change', {
-      activeTab,
-      isDirty: isDirty(),
-      targetTab,
+  const handleNameChange = (nextName: string) => {
+    setName(nextName);
+    const resolvedIcon = resolveAgentIconOnTitleChange({
+      title: nextName,
+      initialIcon: initialIconRef.current,
+      currentIcon: iconRef.current,
+      currentSource: iconSourceRef.current,
     });
-    setActiveTab(targetTab);
+    if (resolvedIcon.icon !== iconRef.current || resolvedIcon.source !== iconSourceRef.current) {
+      updateIconState(resolvedIcon.icon, resolvedIcon.source);
+    }
+  };
+
+  const handleFolderChange = (nextFolder: string) => {
+    setWorkingDirectory(nextFolder);
+    if (nextFolder.trim()) {
+      const derivedName = deriveAgentNameFromFolder(name, nextFolder);
+      if (derivedName !== name) {
+        handleNameChange(derivedName);
+      }
+    }
+  };
+
+  const handleInstructionsChange = (nextValue: string) => {
+    setInstructions(nextValue);
+    if (draftError) setDraftError(null);
+    if (aiUndoSnapshot) setAiUndoSnapshot(null);
+    if (!nextValue.trim()) {
+      setGeneratedDraft(null);
+      seedGoalRef.current = null;
+    }
+  };
+
+  const handleUndoAiDraft = () => {
+    if (!aiUndoSnapshot || generating) return;
+    setInstructions(aiUndoSnapshot.instructions);
+    setGeneratedDraft(aiUndoSnapshot.generatedDraft);
+    seedGoalRef.current = aiUndoSnapshot.seedGoal;
+    if (aiUndoSnapshot.autoFilledName && name === aiUndoSnapshot.autoFilledName) {
+      setName('');
+    }
+    if (
+      aiUndoSnapshot.previousIcon
+      && aiUndoSnapshot.previousIconSource
+      && iconSourceRef.current === AgentCreateIconSource.AiDraft
+    ) {
+      updateIconState(aiUndoSnapshot.previousIcon, aiUndoSnapshot.previousIconSource);
+    }
+    setAiUndoSnapshot(null);
+    setDraftError(null);
+    requestAnimationFrame(() => {
+      instructionsTextareaRef.current?.focus();
+    });
+  };
+
+  const canGenerateWithAi = Boolean(name.trim() || instructions.trim() || workingDirectory.trim());
+  const isAiOutputUnmodified = Boolean(generatedDraft && instructions === generatedDraft.instructions);
+  const aiActionKind = resolveCreateAiActionKind({ instructions, isAiOutputUnmodified });
+
+  const handleGenerateDraft = async () => {
+    if (generating) {
+      cancelActiveDraft(true);
+      return;
+    }
+    if (!canGenerateWithAi) return;
+    const reqSeq = ++draftRequestSeqRef.current;
+    const requestId = `agent-create-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const draftInputs = buildCreateDraftInputs({
+      actionKind: aiActionKind,
+      name,
+      instructions,
+      workingDirectory,
+      seedGoal: seedGoalRef.current,
+      hasExistingDraft: Boolean(generatedDraft),
+    });
+    const snapshot = {
+      instructions,
+      generatedDraft,
+      aiUndoSnapshot,
+      seedGoal: seedGoalRef.current,
+    };
+    const previousIcon = iconRef.current;
+    const previousIconSource = iconSourceRef.current;
+    preDraftSnapshotRef.current = snapshot;
+    activeDraftRequestIdRef.current = requestId;
+    setGenerating(true);
+    setStreamingDraftPreview(false);
+    setDraftError(null);
+    setAiUndoSnapshot(null);
+    reportAgentCreateAction('ai_draft_generate', { isDirty: isDirty() });
+
+    const language = i18nService.getLanguage() === 'en'
+      ? AgentDraftLanguage.En
+      : AgentDraftLanguage.Zh;
+
+    const result = await agentService.generateDraft(
+      {
+        requestId,
+        mode: AgentDraftMode.Create,
+        name: name.trim() || undefined,
+        goal: draftInputs.goal,
+        workingDirectory: workingDirectory.trim() || undefined,
+        ...(draftInputs.existingInstructions ? { existingInstructions: draftInputs.existingInstructions } : {}),
+        language,
+      },
+      {
+        onProgress: (preview) => {
+          if (reqSeq !== draftRequestSeqRef.current) return;
+          if (preview.instructions !== undefined) {
+            setStreamingDraftPreview(true);
+            setInstructions(preview.instructions);
+            requestAnimationFrame(() => {
+              const el = instructionsTextareaRef.current;
+              if (el) {
+                el.scrollTop = el.scrollHeight;
+              }
+            });
+          }
+        },
+      },
+    );
+
+    if (reqSeq !== draftRequestSeqRef.current) return;
+    activeDraftRequestIdRef.current = null;
+    preDraftSnapshotRef.current = null;
+    setGenerating(false);
+    setStreamingDraftPreview(false);
+
+    if (!result.success) {
+      setInstructions(snapshot.instructions);
+      setGeneratedDraft(snapshot.generatedDraft);
+      setAiUndoSnapshot(snapshot.aiUndoSnapshot);
+      seedGoalRef.current = snapshot.seedGoal;
+      if (result.errorCode !== AgentDraftErrorCode.Cancelled) {
+        setDraftError(formatAgentDraftError(result.errorCode));
+      }
+      return;
+    }
+
+    const { draft } = result;
+    setGeneratedDraft(draft);
+    seedGoalRef.current = draftInputs.nextSeedGoal;
+    const nextDraftName = !name.trim() && draft.name ? draft.name : undefined;
+    if (nextDraftName) {
+      setName(nextDraftName);
+    }
+    setInstructions(draft.instructions);
+    const resolvedIcon = resolveAgentIconOnAiDraft({
+      draftAvatarSvg: draft.avatarSvg,
+      draftName: nextDraftName ?? name,
+      currentIcon: iconRef.current,
+      currentSource: iconSourceRef.current,
+    });
+    const iconChangedByAi = resolvedIcon.icon !== iconRef.current || resolvedIcon.source !== iconSourceRef.current;
+    if (iconChangedByAi) {
+      updateIconState(resolvedIcon.icon, resolvedIcon.source);
+    }
+    setAiUndoSnapshot({
+      instructions: snapshot.instructions,
+      generatedDraft: snapshot.generatedDraft,
+      seedGoal: snapshot.seedGoal,
+      hadUserInput: aiActionKind === AgentCreateAiActionKind.Refine,
+      ...(nextDraftName ? { autoFilledName: nextDraftName } : {}),
+      ...(iconChangedByAi ? { previousIcon, previousIconSource } : {}),
+    });
   };
 
   const handleCreate = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || creating || generating) return;
     const changedFields = getChangedFields();
     reportAgentCreateAction('create_submit', {
       changedFields,
@@ -332,27 +627,31 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     });
     setCreating(true);
     try {
+      const trimmedInstructions = instructions.trim();
+      const effectiveDescription = resolveCreateSubmitDescription({
+        instructions: trimmedInstructions,
+        generatedDescription: generatedDraft?.description,
+      });
+
       const agent = await agentService.createAgent({
         name: name.trim(),
-        description: description.trim(),
-        systemPrompt: systemPrompt.trim(),
-        identity: identity.trim(),
+        description: effectiveDescription,
+        systemPrompt: trimmedInstructions,
+        identity: '',
         model: model ? toOpenClawModelRef(model) : '',
         thinkingLevel: resolveThinkingLevelForModel(model),
         workingDirectory: workingDirectory.trim(),
         icon: icon.trim() || undefined,
-        skillIds,
-        subagentAllowAgentIds,
+        skillIds: effectiveSkillIds,
+        subagentCollaborationMode: resolvedCollaboration.subagentCollaborationMode,
+        subagentAllowAgentIds: resolvedCollaboration.subagentAllowAgentIds,
       });
       if (agent) {
-        if (userInfo !== initialUserInfoRef.current) {
-          const userInfoSaved = await coworkService.writeBootstrapFile('USER.md', userInfo, { agentId: agent.id });
-          if (!userInfoSaved) {
-            console.warn(`[AgentCreateModal] failed to save USER.md for agent ${agent.id}`);
-            window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
-          }
+        if (generatedDraft && generatedDraft.starterPrompts.length > 0) {
+          saveAgentOnboardingMeta(agent.id, {
+            starterPrompts: generatedDraft.starterPrompts,
+          });
         }
-        // Save IM bindings after agent is created
         if (boundKeys.size > 0 && imConfig) {
           const currentBindings = { ...(imConfig.settings?.platformAgentBindings || {}) };
           for (const key of boundKeys) {
@@ -397,396 +696,497 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   };
 
   const handleToggleIMBinding = (key: string) => {
-    const next = new Set(boundKeys);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
-    }
-    setBoundKeys(next);
-  };
-
-  /** Get enabled instances for a multi-instance platform (doesn't require live connection) */
-  const getEnabledInstances = (platform: MultiInstancePlatform) => {
-    if (!imConfig) return [];
-    const cfg = imConfig[platform];
-    const instances = cfg?.instances;
-    if (!Array.isArray(instances)) return [];
-    return instances.filter((inst: MultiInstanceConfig) => inst.enabled);
-  };
-
-  const isPlatformConfigured = (platform: Platform): boolean => {
-    if (!imConfig) return false;
-    if (isMultiInstancePlatform(platform)) {
-      return getEnabledInstances(platform).length > 0;
-    }
-    return 'enabled' in imConfig[platform] && imConfig[platform].enabled === true;
-  };
-
-  /** Resolve agent name by id */
-  const getAgentName = (aid: string): string | null => {
-    return getAgentDisplayNameById(aid, agents);
-  };
-
-  const availableSubagentAgents = agents
-    .filter((candidate) => candidate.enabled)
-    .sort((left, right) => getAgentDisplayName(left).localeCompare(getAgentDisplayName(right)));
-
-  const handleToggleSubagentAllowAgent = (targetAgentId: string) => {
-    setSubagentAllowAgentIds((current) => {
-      if (current.includes(targetAgentId)) {
-        return current.filter(id => id !== targetAgentId);
-      }
-      return [...current, targetAgentId];
+    setBoundKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
   };
 
-  const renderToggle = (isOn: boolean) => (
-    <div
-      className={`relative w-9 h-5 rounded-full transition-colors ${
-        isOn ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
-      }`}
-    >
-      <div
-        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-          isOn ? 'translate-x-4' : 'translate-x-0.5'
-        }`}
-      />
-    </div>
-  );
+  const handleSelectCollaborationScope = (restricted: boolean) => {
+    const next = selectCollaborationScope({
+      currentMode: subagentCollaborationMode,
+      allowAgentIds: subagentAllowAgentIds,
+      restricted,
+    });
+    setSubagentCollaborationMode(next.mode);
+    setSubagentAllowAgentIds(next.allowAgentIds);
+  };
 
-  const tabs: { key: AgentDetailTab; label: string }[] = [
-    { key: AgentDetailTab.Identity, label: i18nService.t('coworkBootstrapIdentityTitle') },
-    { key: AgentDetailTab.Prompt, label: i18nService.t('coworkBootstrapSoulTitle') },
-    { key: AgentDetailTab.User, label: i18nService.t('coworkBootstrapUserTitle') },
-    { key: AgentDetailTab.Skills, label: i18nService.t('agentTabSkills') },
-    { key: AgentDetailTab.Collaboration, label: i18nService.t('agentTabCollaboration') },
-    { key: AgentDetailTab.Im, label: i18nService.t('agentTabIM') },
-  ];
+  const handleToggleSubagentAllowAgent = (targetAgentId: string) => {
+    const next = toggleCollaboratorAgent({
+      mode: subagentCollaborationMode,
+      allowAgentIds: subagentAllowAgentIds,
+      targetAgentId,
+    });
+    setSubagentCollaborationMode(next.mode);
+    setSubagentAllowAgentIds(next.allowAgentIds);
+  };
 
-  const renderTextEditor = (
-    value: string,
-    onChange: (value: string) => void,
-    placeholder: string,
-    ariaLabel: string,
-    hint: string,
-  ) => (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <p className="shrink-0 text-xs leading-5 text-secondary">
-        {hint}
-      </p>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        className="min-h-0 flex-1 w-full resize-none border border-transparent bg-transparent text-sm leading-6 text-foreground placeholder:text-secondary/45 focus:outline-none"
-      />
-    </div>
-  );
+  const availableSubagentAgents = agents
+    .filter(candidate => candidate.enabled)
+    .sort((left, right) => getAgentDisplayName(left).localeCompare(getAgentDisplayName(right)));
 
-  const renderCollaborationSettings = () => (
-    <div className="h-full overflow-y-auto">
-      <div className="mb-4">
-        <div className="text-sm font-semibold text-foreground">
-          {i18nService.t('agentSubagentsTitle')}
-        </div>
-        <p className="mt-1 text-xs leading-5 text-secondary">
-          {i18nService.t('agentSubagentsHint')}
-        </p>
-      </div>
-      {availableSubagentAgents.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-secondary">
-          {i18nService.t('agentSubagentsEmpty')}
-        </div>
-      ) : (
-        <div className="space-y-1">
-          {availableSubagentAgents.map((candidate) => {
-            const checked = subagentAllowAgentIds.includes(candidate.id);
-            return (
-              <label
-                key={candidate.id}
-                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-raised"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-sm">
-                    <span className="font-medium text-secondary">
-                      {getAgentDisplayName(candidate).slice(0, 1).toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {getAgentDisplayName(candidate)}
-                    </div>
-                    <div className="truncate text-xs text-secondary">
-                      {candidate.id}
-                    </div>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => handleToggleSubagentAllowAgent(candidate.id)}
-                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                  aria-label={getAgentDisplayName(candidate)}
-                />
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  const isRestrictedCollab = isRestrictedCollaborationMode(subagentCollaborationMode);
+  const displayedAllowAgentIds = getDisplayedCollaboratorIds(subagentCollaborationMode, subagentAllowAgentIds);
+  const availableCandidateIds = new Set(availableSubagentAgents.map(candidate => candidate.id));
+  const selectedCollaboratorCount = countSelectedCollaborators(displayedAllowAgentIds, availableCandidateIds);
+
+  const collabDescription = !isRestrictedCollab
+    ? availableSubagentAgents.length > 0
+      ? i18nService.t('agentSubagentsScopeAllHint').replace('{count}', String(availableSubagentAgents.length))
+      : i18nService.t('agentSubagentsScopeAllEmptyHint')
+    : selectedCollaboratorCount > 0
+      ? i18nService.t('agentSubagentsScopeCustomCount').replace('{count}', String(selectedCollaboratorCount))
+      : i18nService.t('agentSubagentsAllowlistEmptyHint');
+
+  const imSummaryLabel = boundKeys.size > 0
+    ? i18nService.t('agentSettingsImSummaryCount').replace('{count}', String(boundKeys.size))
+    : i18nService.t('agentSettingsImSummaryNone');
+
+  const globalCapabilitiesSubtitle = enabledMcpServers.length > 0
+    ? i18nService.t('agentSettingsCapabilitiesGlobalStats')
+        .replace('{skills}', String(enabledSkills.length))
+        .replace('{mcps}', String(enabledMcpServers.length))
+    : i18nService.t('agentSettingsCapabilitiesGlobalSkillsOnly')
+        .replace('{skills}', String(enabledSkills.length));
+
+  const hasGlobalCapabilities = enabledSkills.length > 0 || enabledMcpServers.length > 0;
+  const capabilitiesDescription = restrictSkills && skillIds.length > 0
+    ? i18nService.t('agentSettingsSkillScopeCustomCount').replace('{count}', String(skillIds.length))
+    : hasGlobalCapabilities
+      ? globalCapabilitiesSubtitle
+      : i18nService.t('agentSettingsCapabilitiesGlobalSummary');
+
+  const aiActionLabel = (() => {
+    switch (aiActionKind) {
+      case AgentCreateAiActionKind.Regenerate:
+        return i18nService.t('agentCreateAiRegenerate');
+      case AgentCreateAiActionKind.Refine:
+        return i18nService.t('agentCreateAiRefine');
+      default:
+        return i18nService.t('agentCreateAiGenerate');
+    }
+  })();
 
   const editorContent = (
     <>
-      <div className="flex shrink-0 items-start justify-between gap-4 px-7 py-5">
-        <div className={AGENT_HEADER_IDENTITY_CLASS}>
-          <AgentAvatarPicker value={icon} onChange={setIcon} />
-          <div className={AGENT_HEADER_FIELDS_CLASS}>
+      {/* Header */}
+      <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border/70 px-6 py-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-foreground">
+            {i18nService.t('createNewAgent')}
+          </h2>
+          <p className="mt-0.5 text-xs text-secondary">
+            {i18nService.t('agentCreateSubtitle')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleClose}
+          className="rounded-lg p-1.5 text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+        >
+          <XMarkIcon className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-4 [scrollbar-gutter:stable]">
+        {/* 1. Avatar + Name */}
+        <div className="flex items-center gap-3.5">
+          <AgentAvatarPicker
+            value={icon}
+            onChange={(nextIcon) => {
+              updateIconState(nextIcon, AgentCreateIconSource.UserCustom);
+            }}
+          />
+          <div className="min-w-0 flex-1">
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={i18nService.t('agentNamePlaceholder')}
+              onChange={(e) => handleNameChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing && name.trim() && !creating && !generating) {
+                  e.preventDefault();
+                  void handleCreate();
+                }
+              }}
+              placeholder={i18nService.t('agentCreateNamePlaceholder')}
               aria-label={i18nService.t('agentName')}
-              className={AGENT_NAME_INPUT_CLASS}
+              className="h-10 w-full rounded-xl border border-border-input bg-transparent px-3.5 text-sm font-medium text-foreground placeholder:font-normal placeholder:text-secondary/50 focus:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-foreground/[0.06]"
               autoFocus
-            />
-            <input
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder={i18nService.t('agentDescriptionPlaceholder')}
-              aria-label={i18nService.t('agentDescription')}
-              className={AGENT_DESCRIPTION_INPUT_CLASS}
             />
           </div>
         </div>
-        <div className="mt-1 flex shrink-0 items-center gap-2">
+
+        {/* 2. Unified Goal / Role & Rules with in-place AI generation */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="agent-create-goal" className="text-sm font-medium text-foreground">
+              {i18nService.t('agentCreateGoalLabel')}
+            </label>
+            <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[11px] text-secondary">
+              {i18nService.t('agentCreateOptionalTag')}
+            </span>
+          </div>
+
+          <div
+            className={`overflow-hidden rounded-xl border bg-surface transition-colors ${
+              generating
+                ? 'border-foreground/25 ring-2 ring-foreground/[0.06]'
+                : 'border-border-input focus-within:border-foreground/30 focus-within:ring-2 focus-within:ring-foreground/[0.06]'
+            }`}
+          >
+            <textarea
+              ref={instructionsTextareaRef}
+              id="agent-create-goal"
+              rows={5}
+              value={instructions}
+              onChange={(e) => handleInstructionsChange(e.target.value)}
+              readOnly={generating}
+              placeholder={i18nService.t('agentCreateGoalPlaceholder')}
+              className="block min-h-[132px] max-h-[260px] w-full resize-y bg-transparent px-3.5 pt-3 pb-2.5 text-sm leading-6 text-foreground placeholder:text-secondary/50 focus:outline-none"
+            />
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle bg-surface-raised/45 px-2.5 py-2">
+              <div className="flex min-w-0 items-center gap-1.5">
+                {generating ? (
+                  <span className="inline-flex items-center gap-1.5 px-1 py-1 text-xs font-medium text-foreground/80">
+                    <ArrowPathIcon className="h-3.5 w-3.5 shrink-0 animate-spin text-foreground" />
+                    <span>
+                      {streamingDraftPreview
+                        ? i18nService.t('agentRulesAiStreaming')
+                        : i18nService.t('agentCreateAiGenerating')}
+                    </span>
+                  </span>
+                ) : aiUndoSnapshot ? (
+                  <div className="flex flex-wrap items-center gap-1.5 px-1 animate-fade-in">
+                    <span className="text-xs text-secondary">
+                      {aiUndoSnapshot.hadUserInput
+                        ? i18nService.t('agentCreateAiRefinedHint')
+                        : i18nService.t('agentCreateAiGeneratedHint')}
+                    </span>
+                    <span className="text-secondary/35" aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      onClick={handleUndoAiDraft}
+                      className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-xs font-medium text-foreground/85 transition-colors hover:bg-surface hover:text-foreground"
+                    >
+                      <ArrowUturnLeftIcon className="h-3 w-3 shrink-0" />
+                      <span>
+                        {aiUndoSnapshot.hadUserInput
+                          ? i18nService.t('agentRulesAiUndo')
+                          : i18nService.t('agentRulesUndoAction')}
+                      </span>
+                    </button>
+                  </div>
+                ) : !canGenerateWithAi ? (
+                  <span className="px-1 text-xs text-secondary/75">
+                    {i18nService.t('agentCreateAiReadyHint')}
+                  </span>
+                ) : null}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleGenerateDraft()}
+                disabled={!generating && !canGenerateWithAi}
+                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border bg-surface px-2.5 text-xs font-medium text-foreground shadow-subtle transition-colors hover:bg-surface-raised active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 ${
+                  generating ? 'border-foreground/20' : 'border-border'
+                }`}
+              >
+                {generating ? (
+                  <StopIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <SparklesIcon className="h-3.5 w-3.5 text-secondary" />
+                )}
+                <span>
+                  {generating ? i18nService.t('agentRulesAiStop') : aiActionLabel}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {draftError && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {draftError}
+            </p>
+          )}
+        </div>
+
+        {/* 3. Linked Folder (compact single row matching AgentSettingsPanel) */}
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-surface px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                {i18nService.t('agentCreateFolderLabel')}
+              </span>
+              <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[11px] text-secondary">
+                {i18nService.t('agentCreateOptionalTag')}
+              </span>
+            </div>
+            <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+              {i18nService.t('agentCreateFolderHint')}
+            </p>
+          </div>
+          <div className="shrink-0">
+            <AgentWorkingDirectoryField
+              value={workingDirectory}
+              onChange={handleFolderChange}
+              compact
+              bordered
+              placement="top"
+            />
+          </div>
+        </div>
+
+        {/* 4. Collapsible Advanced Options (aligned with AgentSettingsPanel) */}
+        <div className="overflow-hidden rounded-xl border border-border bg-surface">
+          <button
+            type="button"
+            aria-expanded={showAdvanced}
+            onClick={() => setShowAdvanced(prev => !prev)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-raised/50"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              {showAdvanced ? (
+                <ChevronDownIcon className="h-4 w-4 shrink-0 text-secondary" />
+              ) : (
+                <ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />
+              )}
+              <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                {i18nService.t('agentCreateAdvancedToggle')}
+              </span>
+              {hasAdvancedOverrides && (
+                <span className="rounded-full bg-foreground/[0.08] px-2 py-0.5 text-[11px] font-medium text-foreground">
+                  {i18nService.t('agentCreateAdvancedCustomBadge')}
+                </span>
+              )}
+            </div>
+            {!showAdvanced && (
+              <span className="truncate text-xs text-secondary/80">
+                {i18nService.t('agentCreateAdvancedSummary')}
+              </span>
+            )}
+          </button>
+
+          {showAdvanced && (
+            <div className="divide-y divide-border border-t border-border">
+              {/* Default Model */}
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                      {i18nService.t('agentSettingsModelSection')}
+                    </div>
+                    <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                      {i18nService.t('agentSettingsModelSectionHint')}
+                    </p>
+                  </div>
+                  <div className="inline-flex h-8 shrink-0 items-center rounded-lg border border-border bg-surface px-0.5">
+                    <ModelSelector
+                      compact
+                      hideCustomProviderName
+                      triggerMaxWidthClassName="max-w-[216px]"
+                      alignDropdownToTriggerEnd
+                      dropdownDirection="auto"
+                      value={model}
+                      onChange={setModel}
+                      portal
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Capabilities & Tools */}
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                      {i18nService.t('agentSettingsCapabilitiesSection')}
+                    </div>
+                    <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                      {capabilitiesDescription}
+                    </p>
+                  </div>
+
+                  <div className="inline-flex shrink-0 rounded-lg bg-surface-raised p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setRestrictSkills(false)}
+                      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                        !restrictSkills
+                          ? 'bg-surface font-medium text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t('agentSettingsSkillScopeAllShort')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRestrictSkills(true)}
+                      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                        restrictSkills
+                          ? 'bg-surface font-medium text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t('agentSettingsSkillScopeCustomShort')}
+                    </button>
+                  </div>
+                </div>
+
+                {restrictSkills && (
+                  <div className="mt-3 h-[268px] rounded-lg border border-border bg-surface-raised/25 p-3">
+                    <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
+                  </div>
+                )}
+
+                {enabledMcpServers.length > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border-subtle pt-2.5">
+                    <span
+                      className="mr-1 text-xs text-secondary"
+                      title={i18nService.t('agentSettingsMcpSummaryHint')}
+                    >
+                      {i18nService.t('agentSettingsMcpSummaryTitle')}
+                    </span>
+                    {enabledMcpServers.map(server => (
+                      <span
+                        key={server.id}
+                        className="max-w-[160px] truncate rounded-md bg-surface-raised px-2 py-0.5 text-xs text-foreground/85"
+                      >
+                        {server.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* IM Channels */}
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showImSection}
+                  onClick={() => setShowImSection(prev => !prev)}
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-raised/50"
+                >
+                  <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                    {i18nService.t('agentTabIM')}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-secondary">
+                    <span>{imSummaryLabel}</span>
+                    {showImSection ? (
+                      <ChevronDownIcon className="h-4 w-4 text-secondary/70" />
+                    ) : (
+                      <ChevronRightIcon className="h-4 w-4 text-secondary/70" />
+                    )}
+                  </span>
+                </button>
+                {showImSection && (
+                  <div className="border-t border-border-subtle bg-surface-raised/20 px-4 py-3.5">
+                    <AgentImBindingList
+                      platforms={imPlatforms}
+                      boundKeys={boundKeys}
+                      agents={agents}
+                      onToggleBinding={handleToggleIMBinding}
+                      onBeforeOpenImSettings={onClose}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Multi-Agent Collaboration */}
+              <div className="px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                      {i18nService.t('agentSubagentsTitle')}
+                    </div>
+                    <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                      {collabDescription}
+                    </p>
+                  </div>
+
+                  <div
+                    className="inline-flex shrink-0 rounded-lg bg-surface-raised p-0.5"
+                    role="group"
+                    aria-label={i18nService.t('agentSubagentsTitle')}
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={!isRestrictedCollab}
+                      onClick={() => handleSelectCollaborationScope(false)}
+                      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                        !isRestrictedCollab
+                          ? 'bg-surface font-medium text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t('agentSubagentsScopeAllShort')}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={isRestrictedCollab}
+                      onClick={() => handleSelectCollaborationScope(true)}
+                      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                        isRestrictedCollab
+                          ? 'bg-surface font-medium text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t('agentSubagentsScopeCustomShort')}
+                    </button>
+                  </div>
+                </div>
+
+                {isRestrictedCollab && (
+                  <div className="mt-3 max-h-[240px] overflow-y-auto rounded-lg border border-border bg-surface-raised/25 p-2">
+                    <AgentCollaborationSettings
+                      allowAgentIds={displayedAllowAgentIds}
+                      candidates={availableSubagentAgents}
+                      onToggleAllowAgent={handleToggleSubagentAllowAgent}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border/70 px-6 py-3.5">
+        <div className="min-w-0">
           {ENABLE_EXPERT_PLAZA_UI && (
             <button
               type="button"
               onClick={() => {
-                reportAgentCreateAction('open_expert_plaza', {
-                  isDirty: isDirty(),
-                });
+                reportAgentCreateAction('open_expert_plaza', { isDirty: isDirty() });
                 openPlazaOnCloseRef.current = true;
                 handleClose();
               }}
-              className="h-8 rounded-lg border border-border bg-surface px-3 text-sm font-medium text-foreground hover:bg-surface-raised transition-colors"
+              className="group inline-flex items-center gap-1 text-xs text-secondary transition-colors hover:text-foreground"
             >
-              {i18nService.t('expertChooseFromPlaza')}
+              <span>{i18nService.t('agentCreateExplorePlazaHint')}</span>
+              <span className="font-medium text-foreground group-hover:underline underline-offset-2">
+                {i18nService.t('agentCreateExplorePlazaLink')} →
+              </span>
             </button>
           )}
-          <button type="button" onClick={handleClose} className="p-2 rounded-lg hover:bg-surface-raised transition-colors">
-            <XMarkIcon className="h-5 w-5 text-secondary" />
-          </button>
         </div>
-      </div>
-
-      {/* Tab bar */}
-      <div className="flex shrink-0 border-b border-border px-7">
-        {tabs.map((tab) => (
+        <div className="flex shrink-0 items-center gap-2">
           <button
-            key={tab.key}
             type="button"
-            onClick={() => handleTabChange(tab.key)}
-            className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-              activeTab === tab.key
-                ? 'text-foreground'
-                : 'text-secondary hover:text-foreground'
-            }`}
+            onClick={handleClose}
+            className="h-9 rounded-xl border border-border bg-surface px-4 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
           >
-            {tab.label}
-            {activeTab === tab.key && (
-              <div className="absolute bottom-[-1px] left-0 right-0 h-0.5 bg-foreground rounded-full" />
-            )}
+            {i18nService.t('cancel')}
           </button>
-        ))}
-      </div>
-
-      {/* Tab content */}
-      <div className="px-7 py-7 overflow-hidden flex-1 min-h-0">
-        {activeTab === AgentDetailTab.Prompt && renderTextEditor(
-          systemPrompt,
-          setSystemPrompt,
-          i18nService.t('coworkBootstrapPlaceholder'),
-          i18nService.t('coworkBootstrapSoulTitle'),
-          i18nService.t('coworkBootstrapSoulHint'),
-        )}
-
-        {activeTab === AgentDetailTab.Identity && renderTextEditor(
-          identity,
-          setIdentity,
-          i18nService.t('coworkBootstrapPlaceholder'),
-          i18nService.t('coworkBootstrapIdentityTitle'),
-          i18nService.t('coworkBootstrapIdentityHint'),
-        )}
-
-        {activeTab === AgentDetailTab.User && renderTextEditor(
-          userInfo,
-          setUserInfo,
-          i18nService.t('coworkBootstrapPlaceholder'),
-          i18nService.t('coworkBootstrapUserTitle'),
-          i18nService.t('coworkBootstrapUserHint'),
-        )}
-
-        {activeTab === AgentDetailTab.Skills && (
-          <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
-        )}
-
-        {activeTab === AgentDetailTab.Collaboration && renderCollaborationSettings()}
-
-        {activeTab === AgentDetailTab.Im && (
-          <div className="h-full overflow-y-auto">
-            <div className="space-y-1">
-              {PlatformRegistry.platforms
-                .filter((platform) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(platform))
-                .map((platform) => {
-                  const logo = PlatformRegistry.logo(platform);
-
-                  if (isMultiInstancePlatform(platform)) {
-                    const enabledInstances = getEnabledInstances(platform);
-
-                    if (enabledInstances.length === 0) {
-                      return (
-                        <div
-                          key={platform}
-                          className="flex items-center justify-between px-3 py-2.5 rounded-lg opacity-50"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-8 w-8 items-center justify-center">
-                              <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
-                            </div>
-                            <div>
-                              <div className="text-sm font-medium text-foreground">
-                                {i18nService.t(platform)}
-                              </div>
-                              <div className="text-xs text-secondary/50">
-                                {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-xs text-secondary/50">
-                            {i18nService.t('agentIMNotConfigured') || 'Not configured'}
-                          </span>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div key={platform} className="rounded-lg border border-border overflow-hidden">
-                        <div className="flex items-center gap-3 px-3 py-2.5 bg-surface-raised">
-                          <div className="flex h-8 w-8 items-center justify-center">
-                            <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
-                          </div>
-                          <span className="text-sm font-semibold text-foreground">
-                            {i18nService.t(platform)}
-                          </span>
-                        </div>
-                        {enabledInstances.map((inst: MultiInstanceConfig, idx: number) => {
-                          const bindingKey = `${platform}:${inst.instanceId}`;
-                          const isBound = boundKeys.has(bindingKey);
-                          const bindings = imConfig?.settings?.platformAgentBindings || {};
-                          const otherAgentId = bindings[bindingKey];
-                          const boundToOther = Boolean(otherAgentId && !isBound);
-                          const otherAgentName = boundToOther ? getAgentName(otherAgentId) : null;
-                          return (
-                            <div
-                              key={inst.instanceId}
-                              className={`flex items-center justify-between px-3 py-2 pl-14 transition-colors cursor-pointer hover:bg-surface-raised ${
-                                idx < enabledInstances.length - 1 ? 'border-b border-border-subtle' : ''
-                              }`}
-                              onClick={() => handleToggleIMBinding(bindingKey)}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-                                <span className="text-sm text-foreground">
-                                  {inst.instanceName}
-                                </span>
-                                {boundToOther && otherAgentName && (
-                                  <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                                    {(i18nService.t('agentIMBoundToOther') || '-> {agent}').replace('{agent}', otherAgentName)}
-                                  </span>
-                                )}
-                              </div>
-                              {renderToggle(isBound)}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  }
-
-                  // Single-instance platform
-                  const configured = isPlatformConfigured(platform);
-                  const bound = boundKeys.has(platform);
-                  const bindings = imConfig?.settings?.platformAgentBindings || {};
-                  const otherAgentId = bindings[platform];
-                  const boundToOther = Boolean(configured && otherAgentId && !bound);
-                  const otherAgentName = boundToOther ? getAgentName(otherAgentId) : null;
-                  return (
-                    <div
-                      key={platform}
-                      className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors ${
-                        configured
-                          ? 'hover:bg-surface-raised cursor-pointer'
-                          : 'opacity-50'
-                      }`}
-                      onClick={() => configured && handleToggleIMBinding(platform)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 items-center justify-center">
-                          <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium text-foreground">
-                            {i18nService.t(platform)}
-                          </div>
-                          {!configured && (
-                            <div className="text-xs text-secondary/50">
-                              {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
-                            </div>
-                          )}
-                        </div>
-                        {boundToOther && otherAgentName && (
-                          <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                            {(i18nService.t('agentIMBoundToOther') || '-> {agent}').replace('{agent}', otherAgentName)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {configured ? (
-                          renderToggle(bound)
-                        ) : (
-                          <span className="text-xs text-secondary/50">
-                            {i18nService.t('agentIMNotConfigured') || 'Not configured'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Footer */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t border-border">
-        <AgentDetailToolbar
-          model={model}
-          onModelChange={setModel}
-          workingDirectory={workingDirectory}
-          onWorkingDirectoryChange={setWorkingDirectory}
-        />
-        <div className="flex shrink-0 gap-2">
           <button
             type="button"
-            onClick={handleCreate}
-            disabled={!name.trim() || creating}
-            className="h-9 px-5 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            onClick={() => void handleCreate()}
+            disabled={!name.trim() || creating || generating}
+            className="h-9 rounded-xl bg-action px-5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {creating ? i18nService.t('creating') : i18nService.t('create')}
           </button>
@@ -798,15 +1198,15 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   return (
     <>
       {presentation === 'page' ? (
-        <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-sm">
+        <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
           {editorContent}
         </div>
       ) : (
         <Modal
           isOpen={isOpen}
           onClose={handleClose}
-          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/10 dark:bg-black/50"
-          className="w-[calc(100vw-56px)] max-w-[854px] h-[82vh] max-h-[664px] rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.16)] bg-surface border border-surface flex flex-col overflow-hidden"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/15 dark:bg-black/50"
+          className="flex max-h-[86vh] w-[calc(100vw-48px)] max-w-[580px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-[0_16px_48px_rgba(0,0,0,0.16)]"
         >
           {editorContent}
         </Modal>

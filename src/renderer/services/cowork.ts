@@ -15,13 +15,15 @@ import {
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
+  COWORK_TEMP_SESSION_ID_PREFIX,
   CoworkContextUsageRefreshMode,
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
+  type CoworkMemoryStatusFilter,
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
-import { normalizeCoworkGoal } from '../../shared/cowork/goal';
+import { CoworkGoalStatus, normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
   CoworkMessageEditRequest,
@@ -37,8 +39,17 @@ import {
 } from '../../shared/cowork/steer';
 import { MediaProtocol } from '../../shared/media/constants';
 import type { ModelPresetId } from '../../shared/modelPresets/constants';
-import { OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
+import {
+  OpenClawEnginePhase,
+  OpenClawLoopbackRepairOutcome,
+} from '../../shared/openclawEngine/constants';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
+import {
+  getSessionRestoreWindow,
+  sessionViewportStore,
+} from '../components/cowork/conversationSessionScrollState';
+import { clearHeightCache } from '../components/cowork/LazyRenderTurn';
+import { hasPendingConversationSearch } from '../components/cowork/pendingConversationSearch';
 import { store } from '../store';
 import { clearSessionArtifacts } from '../store/slices/artifactSlice';
 import {
@@ -84,6 +95,7 @@ import {
   updateSteerStatus,
   updateToolUseMediaStatus,
 } from '../store/slices/coworkSlice';
+import { clearParentSideChats } from '../store/slices/sideChatSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type {
   CoworkConfigUpdate,
@@ -119,6 +131,7 @@ const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
 interface LoadMessageWindowAroundIndexOptions {
   pageSize?: number;
+  leadingContext?: number;
   expectedMessageId?: string;
   isRequestCurrent?: () => boolean;
 }
@@ -170,8 +183,7 @@ const hasRecentMatchingErrorMessage = (
   });
 };
 
-const CONTEXT_USAGE_REFRESH_DELAY_MS = 800;
-const FINAL_CONTEXT_USAGE_REFRESH_DELAYS_MS = [800, 2500, 6000, 12000] as const;
+const SESSION_ENTRY_CONTEXT_USAGE_REFRESH_COOLDOWN_MS = 1_500;
 const CONTEXT_USAGE_AUTO_SUPPRESSION_MS = 5 * 60 * 1000;
 const CONTEXT_USAGE_REFRESH_BACKOFF_MS = 30_000;
 const MANUAL_CONTEXT_COMPACTION_WATCHDOG_MS = 130_000;
@@ -192,6 +204,7 @@ const restoreCurrentAgentDefaultSkills = (): void => {
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
   private openClawStatus: OpenClawEngineStatus | null = null;
   private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
   private openClawRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
@@ -201,10 +214,14 @@ class CoworkService {
   // Only the current session can request a history window, so one monotonic
   // generation invalidates stale responses without retaining session ids.
   private messageWindowRequestGeneration = 0;
-  private contextUsageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Separate from messageWindowRequestGeneration so pagination jumps never
+  // discard an in-flight full rail index load.
+  private railIndexRequestGeneration = 0;
+  private railIndexInFlightBySessionId = new Map<string, Promise<CoworkMessageRailIndexItem[]>>();
   private contextUsageInFlightBySessionId = new Map<string, Promise<CoworkContextUsage | null>>();
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
   private contextUsageBackoffUntil = new Map<string, number>();
+  private sessionEntryContextUsageRefreshAt = new Map<string, number>();
   private contextCompactionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private newUserWelcomeAnimationTimer: ReturnType<typeof setInterval> | null = null;
   private readonly btwAbortRunIds = new Set<string>();
@@ -260,41 +277,52 @@ class CoworkService {
     store.dispatch(setStreaming(isStreaming));
   }
 
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
   async init(): Promise<void> {
     if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
 
-    // Attach listeners before reads so a slow initial snapshot cannot miss
-    // real-time events. Each snapshot is isolated and bounded: the Cowork view
-    // must never remain on a permanent loading screen because one IPC stalls.
-    this.setupStreamListeners();
-    this.setupOpenClawEngineListeners();
+    this.initPromise = (async () => {
+      // Attach listeners before reads so a slow initial snapshot cannot miss
+      // real-time events. Each snapshot is isolated and bounded: the Cowork view
+      // must never remain on a permanent loading screen because one IPC stalls.
+      this.setupStreamListeners();
+      this.setupOpenClawEngineListeners();
 
-    const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          task(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
-              COWORK_INIT_STAGE_TIMEOUT_MS,
-            );
-          }),
-        ]);
-      } catch (error) {
-        this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    };
+      const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            task(),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
+                COWORK_INIT_STAGE_TIMEOUT_MS,
+              );
+            }),
+          ]);
+        } catch (error) {
+          this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
 
-    await Promise.all([
-      runStage('loadConfig', () => this.loadConfig()),
-      runStage('loadSessions', () => this.loadSessions()),
-      runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
-    ]);
+      await Promise.all([
+        runStage('loadConfig', () => this.loadConfig()),
+        runStage('loadSessions', () => this.loadSessions()),
+        runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
+      ]);
 
-    this.initialized = true;
+      this.initialized = true;
+    })().finally(() => {
+      this.initPromise = null;
+    });
+
+    return this.initPromise;
   }
 
   private setupStreamListeners(): void {
@@ -348,7 +376,7 @@ class CoworkService {
     // Message update listener (for streaming content updates)
     const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content, metadata }) => {
       const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
-      if (metadata?.isFinal !== true && session?.status !== 'completed') {
+      if (metadata?.isFinal !== true && !Object.prototype.hasOwnProperty.call(metadata ?? {}, 'dshDelivery') && session?.status !== 'completed') {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
         this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
       }
@@ -487,7 +515,8 @@ class CoworkService {
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
       this.setCurrentSessionStreaming(sessionId, false, 'stream_complete');
-      this.scheduleFinalContextUsageRefresh(sessionId, true);
+      this.clearAutomaticContextUsageSuppression(sessionId);
+      this.contextUsageBackoffUntil.delete(sessionId);
       this.queuedFollowUpCoordinator.handleSessionCompleted(sessionId);
     });
     this.streamListenerCleanups.push(completeCleanup);
@@ -578,47 +607,11 @@ class CoworkService {
     return /session .* is still running/i.test(error);
   }
 
-  private scheduleContextUsageRefresh(
-    sessionId: string,
-    notifyCompaction: boolean,
-    delayMs = CONTEXT_USAGE_REFRESH_DELAY_MS,
-    mode: CoworkContextUsageRefreshModeType = CoworkContextUsageRefreshMode.Auto,
-  ): void {
-    const backoffUntil = this.contextUsageBackoffUntil.get(sessionId) ?? 0;
-    if (backoffUntil > Date.now()) {
-      return;
-    }
-    const timerKey = `${sessionId}:${delayMs}:${mode}`;
-    const existing = this.contextUsageRefreshTimers.get(timerKey);
-    if (existing) {
-      clearTimeout(existing);
-    }
-    const timer = setTimeout(() => {
-      this.contextUsageRefreshTimers.delete(timerKey);
-      void this.refreshContextUsage(sessionId, { notifyCompaction, mode });
-    }, delayMs);
-    this.contextUsageRefreshTimers.set(timerKey, timer);
-  }
-
-  private clearContextUsageRefreshTimers(sessionId: string): void {
-    for (const [timerKey, timer] of this.contextUsageRefreshTimers.entries()) {
-      if (!timerKey.startsWith(`${sessionId}:`)) {
-        continue;
-      }
-      clearTimeout(timer);
-      this.contextUsageRefreshTimers.delete(timerKey);
-    }
-  }
-
-  private scheduleFinalContextUsageRefresh(sessionId: string, notifyCompaction: boolean): void {
-    for (const delayMs of FINAL_CONTEXT_USAGE_REFRESH_DELAYS_MS) {
-      this.scheduleContextUsageRefresh(sessionId, notifyCompaction, delayMs, CoworkContextUsageRefreshMode.PostRun);
-    }
-  }
-
   private handleContextUsageUpdate(usage: CoworkContextUsage, notifyCompaction: boolean): void {
     const state = store.getState().cowork;
     const previous = state.contextUsageBySessionId[usage.sessionId];
+    this.clearAutomaticContextUsageSuppression(usage.sessionId);
+    this.contextUsageBackoffUntil.delete(usage.sessionId);
     store.dispatch(setContextUsage(usage));
 
     const nextCount = usage.compactionCount;
@@ -652,7 +645,6 @@ class CoworkService {
 
   private enterContextUsageBackoff(sessionId: string): void {
     this.contextUsageBackoffUntil.set(sessionId, Date.now() + CONTEXT_USAGE_REFRESH_BACKOFF_MS);
-    this.clearContextUsageRefreshTimers(sessionId);
   }
 
   async refreshContextUsage(
@@ -732,6 +724,25 @@ class CoworkService {
     return request;
   }
 
+  refreshContextUsageForSessionEntry(sessionId: string): void {
+    if (!sessionId || sessionId.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) return;
+    if (this.openClawStatus && this.openClawStatus.phase !== OpenClawEnginePhase.Running) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastRefreshAt = this.sessionEntryContextUsageRefreshAt.get(sessionId) ?? 0;
+    if (now - lastRefreshAt < SESSION_ENTRY_CONTEXT_USAGE_REFRESH_COOLDOWN_MS) {
+      return;
+    }
+
+    this.sessionEntryContextUsageRefreshAt.set(sessionId, now);
+    void this.refreshContextUsage(sessionId, {
+      notifyCompaction: false,
+      mode: CoworkContextUsageRefreshMode.Auto,
+    });
+  }
+
   async compactContext(sessionId: string): Promise<boolean> {
     const cowork = window.electron?.cowork;
     if (!cowork?.compactContext) {
@@ -756,25 +767,27 @@ class CoworkService {
         } else {
           await this.refreshContextUsage(sessionId);
         }
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `context-compaction-manual-${sessionId}-${Date.now()}`,
-            type: 'system',
-            content: result.compacted
-              ? i18nService.t('coworkContextManualCompacted')
-              : i18nService.t('coworkContextManualCompactNoop'),
-            timestamp: Date.now(),
-            metadata: {
-              kind: CoworkSystemMessageKind.ContextCompaction,
-              mode: ContextCompactionMode.Manual,
-              status: result.compacted
-                ? ContextCompactionStatus.Completed
-                : ContextCompactionStatus.Failed,
-              compacted: result.compacted === true,
+        // When compaction actually ran, main persists and streams the durable
+        // ContextCompaction message via `onStreamMessage`. Only append an
+        // ephemeral notice here for no-op attempts so live chats never show
+        // duplicate compaction dividers.
+        if (!result.compacted) {
+          store.dispatch(addMessage({
+            sessionId,
+            message: {
+              id: `context-compaction-manual-${sessionId}-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkContextManualCompactNoop'),
+              timestamp: Date.now(),
+              metadata: {
+                kind: CoworkSystemMessageKind.ContextCompaction,
+                mode: ContextCompactionMode.Manual,
+                status: ContextCompactionStatus.Failed,
+                compacted: false,
+              },
             },
-          },
-        }));
+          }));
+        }
         return true;
       }
       console.warn(`[CoworkService] manual context compaction failed for session ${sessionId}: ${result.error ?? 'Unknown error'}`);
@@ -819,22 +832,33 @@ class CoworkService {
     // Describes one refused request while the gateway keeps running; broadcasting
     // it as "starting" would pin the global startup overlay until a later event.
     if (isConfigApplyPendingStatus(status)) return;
+    const wasRunning = this.openClawStatus?.phase === OpenClawEnginePhase.Running;
     this.openClawStatus = status;
     this.openClawStatusListeners.forEach((listener) => {
       listener(status);
     });
+    if (!wasRunning && status.phase === OpenClawEnginePhase.Running) {
+      this.contextUsageAutoSuppressedUntilBySessionId.clear();
+      this.contextUsageBackoffUntil.clear();
+      this.sessionEntryContextUsageRefreshAt.clear();
+      const activeSessionId = store.getState().cowork.currentSession?.id;
+      if (activeSessionId && !activeSessionId.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) {
+        this.refreshContextUsageForSessionEntry(activeSessionId);
+      }
+    }
   }
 
   private cleanupListeners(): void {
     this.streamListenerCleanups.forEach(cleanup => cleanup());
     this.streamListenerCleanups = [];
     this.openClawEngineListenerAttached = false;
-    this.contextUsageRefreshTimers.forEach(timer => clearTimeout(timer));
-    this.contextUsageRefreshTimers.clear();
     this.contextUsageInFlightBySessionId.clear();
     this.contextUsageAutoSuppressedUntilBySessionId.clear();
     this.contextUsageBackoffUntil.clear();
+    this.sessionEntryContextUsageRefreshAt.clear();
     this.messageWindowRequestGeneration += 1;
+    this.railIndexRequestGeneration += 1;
+    this.railIndexInFlightBySessionId.clear();
     this.btwAbortRunIds.clear();
   }
 
@@ -994,7 +1018,12 @@ class CoworkService {
     offset: number,
   ): Promise<CoworkSessionListResult> {
     try {
-      const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
+      const result = await window.electron?.cowork?.listSessions({
+        limit,
+        offset,
+        agentId,
+        pinnedFirst: false,
+      });
       const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
       if (!resolved.success) {
         this.logDiagnostic(
@@ -1062,6 +1091,23 @@ class CoworkService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+      };
+    }
+  }
+
+  async listPinnedSessions(): Promise<CoworkSessionListResult> {
+    return this.listFilteredSessions({ pinnedOnly: true });
+  }
+
+  async reorderPinnedSessions(sessionIds: string[]): Promise<CoworkSessionListResult> {
+    try {
+      const result = await window.electron?.cowork?.reorderPinnedSessions({ sessionIds });
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[Cowork] failed to reorder pinned sessions:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to reorder pinned sessions',
       };
     }
   }
@@ -1141,7 +1187,7 @@ class CoworkService {
     const analytics = beginTaskSubmission(options.agentId);
     let result: Awaited<ReturnType<typeof cowork.startSession>>;
     try {
-      result = await cowork.startSession({ ...options, analytics });
+      result = await cowork.startSession({ ...options, analytics, submissionId: crypto.randomUUID() });
     } catch (error) {
       finishTaskSubmission(analytics, undefined, error);
       store.dispatch(setStreaming(false));
@@ -1187,11 +1233,14 @@ class CoworkService {
       return false;
     }
 
+    sessionViewportStore.delete(options.sessionId);
     this.setCurrentSessionStreaming(options.sessionId, true, 'continue_session_requested');
     store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
 
     const analytics = beginTaskSubmission(undefined, options.sessionId);
     const result = await cowork.continueSession({
+      retryMessageId: options.retryMessageId,
+      submissionId: crypto.randomUUID(),
       analytics,
       sessionId: options.sessionId,
       prompt: options.prompt,
@@ -1569,11 +1618,6 @@ class CoworkService {
     const command = options.command.trim();
     const action = command.split(/\s+/, 2)[1] ?? 'status';
     const normalizedAction = action.toLowerCase();
-    const mayStartRun =
-      normalizedAction === 'start'
-      || normalizedAction === 'create'
-      || normalizedAction === 'set'
-      || normalizedAction === 'resume';
     this.logDiagnostic(
       'debug',
       `running goal command for session ${options.sessionId}, action ${action}`,
@@ -1586,6 +1630,16 @@ class CoworkService {
       session => session.id === options.sessionId,
     );
     const previousStatus = currentSessionBeforeGoalCommand?.status ?? listedSessionBeforeGoalCommand?.status;
+    const existingGoal = currentSessionBeforeGoalCommand?.goal ?? listedSessionBeforeGoalCommand?.goal ?? null;
+    const hasNonCompleteGoal = Boolean(existingGoal && existingGoal.status !== CoworkGoalStatus.Complete);
+    const isNonStartingAction =
+      normalizedAction === 'status'
+      || normalizedAction === 'pause'
+      || normalizedAction === 'clear'
+      || normalizedAction === 'edit';
+    const mayStartRun =
+      normalizedAction === 'resume'
+      || (!isNonStartingAction && !hasNonCompleteGoal);
     if (mayStartRun) {
       this.setCurrentSessionStreaming(options.sessionId, true, 'goal_command_requested');
       store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
@@ -1613,6 +1667,19 @@ class CoworkService {
     }
 
     store.dispatch(updateSessionGoal({ sessionId: options.sessionId, goal: result.goal ?? null }));
+    if (mayStartRun && result.isRunning === false) {
+      const latestCoworkState = store.getState().cowork;
+      const latestStatus = latestCoworkState.currentSession?.id === options.sessionId
+        ? latestCoworkState.currentSession.status
+        : latestCoworkState.sessions.find(session => session.id === options.sessionId)?.status;
+      if (latestStatus === 'running') {
+        this.setCurrentSessionStreaming(options.sessionId, false, 'goal_command_no_turn');
+        store.dispatch(updateSessionStatus({
+          sessionId: options.sessionId,
+          status: previousStatus && previousStatus !== 'running' ? previousStatus : 'idle',
+        }));
+      }
+    }
     return true;
   }
 
@@ -1653,6 +1720,9 @@ class CoworkService {
     const result = await cowork.deleteSession(sessionId);
     if (result.success) {
       this.queuedFollowUpCoordinator.clearSession(sessionId);
+      sessionViewportStore.delete(sessionId);
+      clearHeightCache(sessionId);
+      store.dispatch(clearParentSideChats(sessionId));
       store.dispatch(deleteSessionAction(sessionId));
       return true;
     }
@@ -1667,7 +1737,12 @@ class CoworkService {
 
     const result = await cowork.deleteSessions(sessionIds);
     if (result.success) {
-      sessionIds.forEach(sessionId => this.queuedFollowUpCoordinator.clearSession(sessionId));
+      sessionIds.forEach(sessionId => {
+        this.queuedFollowUpCoordinator.clearSession(sessionId);
+        clearHeightCache(sessionId);
+        store.dispatch(clearParentSideChats(sessionId));
+      });
+      sessionViewportStore.deleteMany(sessionIds);
       store.dispatch(deleteSessionsAction(sessionIds));
       return true;
     }
@@ -1732,6 +1807,8 @@ class CoworkService {
     // Fence already-running page refreshes before replacing the history projection.
     this.latestLoadSessionRequestId += 1;
     this.messageWindowRequestGeneration += 1;
+    this.railIndexRequestGeneration += 1;
+    this.railIndexInFlightBySessionId.delete(sessionId);
     try {
       const result = await action();
       if (result.success || result.pending) {
@@ -1740,8 +1817,15 @@ class CoworkService {
         const invalidate = (railIndex?: CoworkMessageRailIndexItem[]) => {
           if (invalidated) return;
           invalidated = true;
+          this.clearAutomaticContextUsageSuppression(sessionId);
+          this.contextUsageBackoffUntil.delete(sessionId);
+          this.sessionEntryContextUsageRefreshAt.delete(sessionId);
           store.dispatch(invalidateEditedHistory(sessionId));
           store.dispatch(clearSessionArtifacts(sessionId));
+          clearHeightCache(sessionId);
+          if (!options.keepLoadedRange) {
+            sessionViewportStore.delete(sessionId);
+          }
           if (railIndex) store.dispatch(setMessageRailIndex({ sessionId, items: railIndex }));
         };
         const isCurrent = store.getState().cowork.currentSessionId === sessionId;
@@ -2002,10 +2086,71 @@ class CoworkService {
               return previouslyLoadedSession;
             }
           }
+        } else if (
+          !options.historyReplaced
+          && previouslyLoadedSession?.id !== sessionId
+          && cowork.getSessionMessages
+          && !hasPendingConversationSearch(sessionId)
+        ) {
+          const savedViewport = sessionViewportStore.get(sessionId);
+          const defaultMessageIds = new Set(session.messages.map(message => message.id));
+          const restoreWindow = getSessionRestoreWindow(
+            savedViewport,
+            session.messagesOffset,
+            session.messages.length,
+            session.totalMessages,
+            defaultMessageIds,
+          );
+          if (restoreWindow) {
+            try {
+              const pageResult = await cowork.getSessionMessages({
+                sessionId,
+                offset: restoreWindow.offset,
+                limit: restoreWindow.limit,
+              });
+              if (requestId !== this.latestLoadSessionRequestId) {
+                this.logDiagnostic('debug', `ignored stale restored window load result for session ${sessionId}.`);
+                return session;
+              }
+              const containsExpected = !restoreWindow.expectedMessageId
+                || Boolean(pageResult?.messages?.some(message => message.id === restoreWindow.expectedMessageId));
+              if (pageResult?.success && pageResult.messages && pageResult.messages.length > 0 && containsExpected) {
+                session = {
+                  ...session,
+                  messages: pageResult.messages,
+                  messagesOffset: pageResult.offset ?? restoreWindow.offset,
+                  totalMessages: pageResult.total ?? session.totalMessages,
+                  leadingTurnStartTimestamp: pageResult.leadingTurnStartTimestamp ?? null,
+                  leadingTurnUsage: pageResult.leadingTurnUsage ?? null,
+                };
+                this.logDiagnostic(
+                  'debug',
+                  `restored saved history window for session ${sessionId}; returned ${session.messages.length} of ${session.totalMessages} messages from offset ${session.messagesOffset}.`,
+                );
+              } else if (pageResult?.success && restoreWindow.expectedMessageId && !containsExpected) {
+                this.logDiagnostic(
+                  'debug',
+                  `saved reading anchor for session ${sessionId} was no longer present in the restored window; falling back to latest page.`,
+                );
+                sessionViewportStore.delete(sessionId);
+              }
+            } catch (error) {
+              this.logDiagnostic(
+                'warn',
+                `failed to pre-fetch saved reading window for session ${sessionId}; falling back to latest page.`,
+                error,
+              );
+            }
+          }
+        }
+        const currentSessionBeforeApply = store.getState().cowork.currentSession;
+        if (currentSessionBeforeApply?.id && currentSessionBeforeApply.id !== sessionId) {
+          sessionViewportStore.captureActiveViewport(currentSessionBeforeApply.id);
         }
         options.beforeApply?.();
         store.dispatch(setCurrentSession(session));
         this.setCurrentSessionStreaming(sessionId, session.status === 'running', 'load_session_completed');
+        this.refreshContextUsageForSessionEntry(sessionId);
         void this.loadSessionMessageRailIndex(sessionId);
         void cowork.markSessionViewed?.(sessionId).catch((error: unknown) => {
           console.warn('[CoworkService] failed to mark session viewed:', error);
@@ -2027,37 +2172,45 @@ class CoworkService {
   }
 
   async loadSessionMessageRailIndex(sessionId: string): Promise<CoworkMessageRailIndexItem[]> {
-    const editGeneration = this.messageWindowRequestGeneration;
-    const cowork = window.electron?.cowork;
-    if (!cowork?.getSessionMessageRailIndex) return [];
+    const getSessionMessageRailIndex = window.electron?.cowork?.getSessionMessageRailIndex;
+    if (!getSessionMessageRailIndex) return [];
 
-    const state = store.getState().cowork;
-    if (state.messageRailIndexLoadingBySessionId[sessionId]) {
-      return state.messageRailIndexBySessionId[sessionId] ?? [];
+    const existingPromise = this.railIndexInFlightBySessionId.get(sessionId);
+    if (existingPromise) {
+      return existingPromise;
     }
 
+    const requestGeneration = this.railIndexRequestGeneration;
     store.dispatch(setMessageRailIndexLoading({ sessionId, loading: true }));
-    try {
-      const result = await cowork.getSessionMessageRailIndex(sessionId);
-      if (editGeneration !== this.messageWindowRequestGeneration) return [];
-      if (result.success && result.items) {
-        store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
+    const loadPromise = (async (): Promise<CoworkMessageRailIndexItem[]> => {
+      try {
+        const result = await getSessionMessageRailIndex(sessionId);
+        if (requestGeneration !== this.railIndexRequestGeneration) return [];
+        if (result.success && result.items) {
+          store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
+          this.logDiagnostic(
+            'info',
+            `loaded message rail index for session ${sessionId}; received ${result.items.length} items.`,
+          );
+          return result.items;
+        }
+        this.logDiagnostic('warn', `failed to load message rail index for session ${sessionId}: ${result.error ?? 'unknown error'}`);
+      } catch (error) {
         this.logDiagnostic(
-          'info',
-          `loaded message rail index for session ${sessionId}; received ${result.items.length} items.`,
+          'warn',
+          `failed to load message rail index for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return result.items;
       }
-      this.logDiagnostic('warn', `failed to load message rail index for session ${sessionId}: ${result.error ?? 'unknown error'}`);
-    } catch (error) {
-      this.logDiagnostic(
-        'warn',
-        `failed to load message rail index for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
+      return [];
+    })().finally(() => {
+      if (this.railIndexInFlightBySessionId.get(sessionId) === loadPromise) {
+        this.railIndexInFlightBySessionId.delete(sessionId);
+      }
       store.dispatch(setMessageRailIndexLoading({ sessionId, loading: false }));
-    }
-    return [];
+    });
+
+    this.railIndexInFlightBySessionId.set(sessionId, loadPromise);
+    return loadPromise;
   }
 
   async loadMessageWindowAroundIndex(
@@ -2080,9 +2233,13 @@ class CoworkService {
     const requestedPageSize = options.pageSize ?? 50;
     const safePageSize = Number.isFinite(requestedPageSize) ? Math.floor(requestedPageSize) : 50;
     const boundedPageSize = Math.max(COWORK_MESSAGE_PAGE_SIZE, Math.min(100, safePageSize));
+    const defaultLeadingContext = Math.floor(boundedPageSize / 2);
+    const resolvedLeadingContext = options.leadingContext !== undefined && Number.isFinite(options.leadingContext)
+      ? Math.max(0, Math.min(boundedPageSize - 1, Math.floor(options.leadingContext)))
+      : defaultLeadingContext;
     const offset = Math.max(0, Math.min(
       Math.max(0, totalMessages - boundedPageSize),
-      safeAbsoluteIndex - Math.floor(boundedPageSize / 2),
+      safeAbsoluteIndex - resolvedLeadingContext,
     ));
 
     this.logDiagnostic(
@@ -2448,65 +2605,101 @@ class CoworkService {
   }
 
   async listMemoryEntries(input: {
+    agentId?: string;
     query?: string;
+    status?: CoworkMemoryStatusFilter;
+    includeDeleted?: boolean;
     limit?: number;
     offset?: number;
-  }): Promise<CoworkUserMemoryEntry[]> {
+  } = {}): Promise<CoworkUserMemoryEntry[]> {
     const api = window.electron?.cowork?.listMemoryEntries;
     if (!api) return [];
     const result = await api(input);
-    if (!result?.success || !result.entries) return [];
+    if (!result?.success || !result.entries) {
+      throw new Error(result?.error || 'Failed to list memory entries');
+    }
     return result.entries;
   }
 
   async createMemoryEntry(input: {
+    agentId?: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+    section?: string;
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.createMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to create memory entry');
+    }
     return result.entry;
   }
 
   async updateMemoryEntry(input: {
+    agentId?: string;
     id: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.updateMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to update memory entry');
+    }
     return result.entry;
   }
 
-  async deleteMemoryEntry(input: { id: string }): Promise<boolean> {
+  async deleteMemoryEntry(input: { agentId?: string; id: string }): Promise<boolean> {
     const api = window.electron?.cowork?.deleteMemoryEntry;
-    if (!api) return false;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    return Boolean(result?.success);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to delete memory entry');
+    }
+    return true;
   }
 
-  async getMemoryStats(): Promise<CoworkMemoryStats | null> {
+  async deleteMemoryEntries(input: { agentId?: string; ids: string[] }): Promise<number> {
+    const api = window.electron?.cowork?.deleteMemoryEntries;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
+    const result = await api(input);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to delete memory entries');
+    }
+    return result.deletedCount ?? 0;
+  }
+
+  async getMemoryStats(options?: { agentId?: string }): Promise<CoworkMemoryStats | null> {
     const api = window.electron?.cowork?.getMemoryStats;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success || !result.stats) return null;
     return result.stats;
   }
 
-  async readMemoryFileRaw(): Promise<string | null> {
+  async readMemoryFileRaw(options?: { agentId?: string }): Promise<string | null> {
     const api = window.electron?.cowork?.readMemoryFileRaw;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success) return null;
     return result.content ?? '';
   }
 
-  async writeMemoryFileRaw(content: string): Promise<{ success: boolean; error?: string }> {
+  async writeMemoryFileRaw(
+    content: string,
+    options?: { agentId?: string },
+  ): Promise<{ success: boolean; error?: string }> {
     const api = window.electron?.cowork?.writeMemoryFileRaw;
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
-    const result = await api({ content });
+    const result = await api({ content, agentId: options?.agentId });
     return result ?? { success: false };
   }
 
@@ -2671,6 +2864,10 @@ class CoworkService {
   }
 
   clearSession(options: { restoreAgentSkills?: boolean } = {}): void {
+    const activeSessionId = store.getState().cowork.currentSession?.id;
+    if (activeSessionId) {
+      sessionViewportStore.captureActiveViewport(activeSessionId);
+    }
     resetDraftAnalytics();
     // Invalidate an in-flight load so an old history/IM session cannot replace
     // the new-task view after the user has explicitly left that session.
@@ -2688,8 +2885,10 @@ class CoworkService {
   destroy(): void {
     this.clearNewUserWelcomeAnimation();
     this.cleanupListeners();
+    this.openClawStatus = null;
     this.openClawStatusListeners.clear();
     this.initialized = false;
+    this.initPromise = null;
   }
 }
 

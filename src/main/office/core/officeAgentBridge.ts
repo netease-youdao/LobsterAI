@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { BrowserWindow, IpcMainEvent } from 'electron';
+import type { IpcMainEvent, WebContents } from 'electron';
 
 import type { OfficeAgentRequest, OfficeAgentResponse, OfficeAgentToolResult } from '../../../shared/office/core/officeFile';
 
@@ -18,7 +18,7 @@ interface PendingCall {
 }
 
 export interface OfficeAgentBridgeOptions {
-  getWindow: () => BrowserWindow | null;
+  getContents: () => WebContents | null;
   tools: readonly string[];
   requestChannel: string;
   timeoutMs: number;
@@ -28,8 +28,8 @@ export interface OfficeAgentBridgeOptions {
 }
 
 /**
- * Forwards agent tool calls to the main window, whose renderer owns the live editor. Only
- * that window's top frame may answer, and every call ends within the timeout.
+ * Forwards agent tool calls to the renderer that owns this format's live editors.
+ * Only its top frame may answer, and every call ends within the timeout.
  */
 export class OfficeAgentBridge {
   private readonly pending = new Map<string, PendingCall>();
@@ -41,7 +41,7 @@ export class OfficeAgentBridge {
 
   /** Accept a reply from the renderer; anything else is ignored. */
   handleResponse = (event: Pick<IpcMainEvent, 'sender' | 'senderFrame'>, response: unknown): void => {
-    const owner = this.options.getWindow()?.webContents;
+    const owner = this.options.getContents();
     if (!owner || event.sender !== owner || event.senderFrame !== owner.mainFrame) return;
     const { requestId, result } = (response ?? {}) as Partial<OfficeAgentResponse>;
     const call = typeof requestId === 'string' ? this.pending.get(requestId) : undefined;
@@ -54,8 +54,8 @@ export class OfficeAgentBridge {
   call(tool: string, args: Record<string, unknown>): Promise<OfficeAgentToolResult> {
     const { editorName } = this.options;
     if (!this.tools.has(tool)) return Promise.resolve(failure(`Unknown ${editorName} tool "${tool}".`));
-    const window = this.options.getWindow();
-    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+    const contents = this.options.getContents();
+    if (!contents || contents.isDestroyed()) {
       return Promise.resolve(failure(`LobsterAI's main window is not open, so the ${editorName} editor is unavailable.`));
     }
     const requestId = randomUUID();
@@ -66,7 +66,7 @@ export class OfficeAgentBridge {
         resolve(failure(`The ${editorName} editor did not answer in time. The file may be large or still opening; try again.`));
       }, this.options.timeoutMs);
       this.pending.set(requestId, { resolve, timer });
-      window.webContents.send(this.options.requestChannel, { requestId, tool, args } satisfies OfficeAgentRequest);
+      contents.send(this.options.requestChannel, { requestId, tool, args } satisfies OfficeAgentRequest);
     });
   }
 

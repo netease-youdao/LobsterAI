@@ -1,5 +1,5 @@
 import { ArrowUpTrayIcon, FolderIcon, PhotoIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { LocalFileThumbnailFit } from '../../../../shared/artifactPreview/localFileThumbnail';
 import { ImageEditOperation } from '../../../../shared/imageEditing/types';
@@ -132,17 +132,26 @@ function ImageTile({ artifact, single, hiddenCount, editable, canShare, onOpen, 
 export default function InlineImageGallery({ artifacts, editable = true }: { artifacts: Artifact[]; editable?: boolean }) {
   const share = useOptionalArtifactFileShare();
   const [expanded, setExpanded] = useState(false);
-  const [preview, setPreview] = useState<ImagePreviewSource | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const previewImages = useMemo<ImagePreviewSource[]>(() => artifacts.map(artifact => {
+    const name = imageName(artifact);
+    return {
+      src: imageSrc(artifact),
+      thumbSrc: getImageArtifactDisplaySrc(artifact, 88, LocalFileThumbnailFit.Cover),
+      name,
+      alt: name,
+    };
+  }), [artifacts]);
   if (!artifacts.length) return null;
   const single = artifacts.length === 1;
   const tiles = expanded ? artifacts : artifacts.slice(0, MAX_COLLAPSED_TILES);
   const hidden = artifacts.length - tiles.length;
-  const open = (artifact: Artifact, operation?: ImageEditOperation) => {
+  const open = (artifact: Artifact, index: number, operation?: ImageEditOperation) => {
     const inStudio = editable && isImageStudioAvailable();
     reportArtifactPreviewAction({ actionType: 'card_open', source: ArtifactPreviewActionSource.ConversationArtifactCard, artifact,
       params: { openTarget: inStudio ? 'image_studio' : 'image_viewer' } });
-    if (inStudio) openImageInStudio(artifact, operation);
-    else setPreview({ src: imageSrc(artifact), name: imageName(artifact) });
+    if (inStudio) openImageInStudio(artifact, operation, undefined, artifacts);
+    else setPreviewIndex(index);
   };
   return <>
     <div className={single ? 'max-w-full' : 'grid max-w-[480px] grid-cols-2 gap-2'}>
@@ -150,13 +159,18 @@ export default function InlineImageGallery({ artifacts, editable = true }: { art
         const hiddenCount = index === tiles.length - 1 ? hidden : 0;
         return <ImageTile key={artifact.id} artifact={artifact} single={single} hiddenCount={hiddenCount} editable={editable}
           canShare={Boolean(share) && isArtifactFileShareable(artifact)}
-          onOpen={() => hiddenCount ? setExpanded(true) : open(artifact)}
-          onEdit={() => open(artifact, ImageEditOperation.Comment)}
+          onOpen={() => hiddenCount ? setExpanded(true) : open(artifact, index)}
+          onEdit={() => open(artifact, index, ImageEditOperation.Comment)}
           onShare={() => void share?.openShare(artifact, {
             source: ArtifactPreviewActionSource.ConversationArtifactCard, entryPoint: ArtifactPublishEntryPoint.PreviewCard,
           })} />;
       })}
     </div>
-    <ImagePreviewModal image={preview} onClose={() => setPreview(null)} />
+    <ImagePreviewModal
+      images={previewImages}
+      currentIndex={previewIndex}
+      onIndexChange={setPreviewIndex}
+      onClose={() => setPreviewIndex(null)}
+    />
   </>;
 }

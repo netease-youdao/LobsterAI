@@ -4,7 +4,15 @@ import os from 'os';
 import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { AgentAvatarSvg, AgentModelSelectionMode, AgentSource, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
+import {
+  AgentAvatarSvg,
+  AgentModelSelectionMode,
+  AgentSource,
+  DefaultAgentAvatarIcon,
+  DefaultAgentProfile,
+  encodeAgentAvatarIcon,
+  SubagentCollaborationMode,
+} from '../shared/agent';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 
@@ -658,4 +666,176 @@ test('restores tool call ids on forked messages once at startup', async () => {
   const thirdStore = await SqliteStore.create(userDataPath);
   expect(getToolUseIds(thirdStore.getDatabase())[0].tool_use_id).toBeNull();
   thirdStore.close();
+});
+
+test('migrates legacy agents to all collaboration mode unless an explicit allowlist exists', async () => {
+  const userDataPath = createTempUserDataPath();
+  const db = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  db.exec(`
+    CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    CREATE TABLE agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      system_prompt TEXT NOT NULL DEFAULT '',
+      identity TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      icon TEXT NOT NULL DEFAULT '',
+      skill_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'custom',
+      preset_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  const insert = db.prepare(`
+    INSERT INTO agents (
+      id, name, description, system_prompt, identity, model, icon, skill_ids,
+      subagent_allow_agent_ids, enabled, is_default, source, preset_id, created_at, updated_at
+    ) VALUES (?, ?, '', '', '', '', '', '[]', ?, 1, ?, 'custom', '', ?, ?)
+  `);
+  insert.run('main', '主 Agent', '[]', 1, now, now);
+  insert.run('translator', '翻译专家', '["translator"]', 0, now, now);
+  insert.run('curated', '精选调度', '["blog-publisher"]', 0, now, now);
+  db.close();
+
+  const migrated = await SqliteStore.create(userDataPath);
+  const coworkStore = new CoworkStore(migrated.getDatabase());
+  expect(coworkStore.getAgent('main')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(coworkStore.getAgent('translator')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(coworkStore.getAgent('curated')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Allowlist);
+  expect(coworkStore.getAgent('curated')?.subagentAllowAgentIds).toEqual(['blog-publisher']);
+
+  // Verify durable subagent agent bindings table was also created.
+  const bindingsTable = migrated.getDatabase()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dsh_subagent_agent_bindings'")
+    .get() as { name: string } | undefined;
+  expect(bindingsTable?.name).toBe('dsh_subagent_agent_bindings');
+  migrated.close();
+});
+
+test('restores legacy selections after a downgrade and preserves explicit DSH modes', async () => {
+  const userDataPath = createTempUserDataPath();
+  const beforeFix = await SqliteStore.create(userDataPath);
+  const agents = new CoworkStore(beforeFix.getDatabase());
+  agents.createAgent({ id: 'owner', name: 'Owner' });
+  agents.createAgent({ id: 'keep-all', name: 'Keep all', subagentAllowAgentIds: ['writer', 'reviewer'] });
+  beforeFix.getDatabase().exec('ALTER TABLE agents DROP COLUMN subagent_allow_agent_ids_snapshot');
+  beforeFix.close();
+
+  const firstDsh = await SqliteStore.create(userDataPath);
+  const firstAgents = new CoworkStore(firstDsh.getDatabase());
+  expect(firstAgents.getAgent('keep-all')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  firstAgents.createAgent({
+    id: 'keep-disabled',
+    name: 'Keep disabled',
+    subagentCollaborationMode: SubagentCollaborationMode.Disabled,
+    subagentAllowAgentIds: ['writer'],
+  });
+  firstAgents.createAgent({ id: 'modern-write', name: 'Modern write' });
+  firstAgents.updateAgent('modern-write', {
+    subagentCollaborationMode: SubagentCollaborationMode.All,
+    subagentAllowAgentIds: ['reviewer'],
+  });
+  firstAgents.createAgent({ id: 'self-only', name: 'Self only' });
+  firstDsh.close();
+
+  const legacy = new Database(path.join(userDataPath, DB_FILENAME));
+  const saveLegacySelection = legacy.prepare('UPDATE agents SET subagent_allow_agent_ids = ? WHERE id = ?');
+  saveLegacySelection.run('["writer"]', 'owner');
+  saveLegacySelection.run('["reviewer", "writer"]', 'keep-all');
+  saveLegacySelection.run('["reviewer"]', 'keep-disabled');
+  saveLegacySelection.run('["self-only", " "]', 'self-only');
+  legacy.prepare(`
+    INSERT INTO agents (id, name, subagent_allow_agent_ids, created_at, updated_at)
+    VALUES ('legacy-created', 'Legacy created', '["reviewer"]', 1, 1)
+  `).run();
+  legacy.close();
+
+  const upgraded = await SqliteStore.create(userDataPath);
+  const upgradedAgents = new CoworkStore(upgraded.getDatabase());
+  expect(upgradedAgents.getAgent('owner')).toMatchObject({
+    subagentCollaborationMode: SubagentCollaborationMode.Allowlist,
+    subagentAllowAgentIds: ['writer'],
+  });
+  expect(upgradedAgents.getAgent('legacy-created')).toMatchObject({
+    subagentCollaborationMode: SubagentCollaborationMode.Allowlist,
+    subagentAllowAgentIds: ['reviewer'],
+  });
+  expect(upgradedAgents.getAgent('keep-all')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(upgradedAgents.getAgent('keep-disabled')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Disabled);
+  expect(upgradedAgents.getAgent('modern-write')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(upgradedAgents.getAgent('self-only')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  upgradedAgents.updateAgent('owner', { subagentCollaborationMode: SubagentCollaborationMode.All });
+  upgraded.close();
+
+  const reopened = await SqliteStore.create(userDataPath);
+  expect(new CoworkStore(reopened.getDatabase()).getAgent('owner')).toMatchObject({
+    subagentCollaborationMode: SubagentCollaborationMode.All,
+    subagentAllowAgentIds: ['writer'],
+  });
+  reopened.close();
+});
+
+test('adds required cowork_sessions.permission_preset column to legacy databases on open', async () => {
+  const userDataPath = createTempUserDataPath();
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  legacyDb.exec(`
+    CREATE TABLE cowork_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      claude_session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      cwd TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      execution_mode TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  legacyDb
+    .prepare(
+      "INSERT INTO cowork_sessions (id, title, cwd, execution_mode, created_at, updated_at) VALUES ('legacy-1', 'Legacy', '/tmp', 'auto', ?, ?)",
+    )
+    .run(now, now);
+  legacyDb.close();
+
+  const migrated = await SqliteStore.create(userDataPath);
+  const cols = migrated.getDatabase().pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+  expect(cols.map((c) => c.name)).toContain('permission_preset');
+
+  const coworkStore = new CoworkStore(migrated.getDatabase());
+  expect(coworkStore.getSession('legacy-1')?.permissionPreset).toBeNull();
+  coworkStore.updateSession('legacy-1', { permissionPreset: 'read-only' });
+  expect(coworkStore.getSession('legacy-1')?.permissionPreset).toBe('read-only');
+  migrated.close();
+});
+
+test('quarantines a corrupted database file and reinitializes a usable store on startup', async () => {
+  const userDataPath = createTempUserDataPath();
+  const dbPath = path.join(userDataPath, DB_FILENAME);
+  fs.writeFileSync(dbPath, 'not-a-valid-sqlite-database', 'utf8');
+  fs.writeFileSync(`${dbPath}-wal`, 'stale-wal', 'utf8');
+  fs.writeFileSync(`${dbPath}-shm`, 'stale-shm', 'utf8');
+
+  const store = await SqliteStore.create(userDataPath);
+  try {
+    store.set('recovered', true);
+    expect(store.get<boolean>('recovered')).toBe(true);
+
+    const quarantineRoot = path.join(userDataPath, 'backups', 'sqlite', 'quarantine');
+    const entries = fs.readdirSync(quarantineRoot);
+    expect(entries).toHaveLength(1);
+    const quarantinedDir = path.join(quarantineRoot, entries[0]);
+    expect(fs.readFileSync(path.join(quarantinedDir, DB_FILENAME), 'utf8')).toBe('not-a-valid-sqlite-database');
+    expect(store.getDatabase().prepare('PRAGMA quick_check').pluck().get()).toBe('ok');
+    expect(store.getDatabase().pragma('journal_mode', { simple: true })).toBe('wal');
+  } finally {
+    store.close();
+  }
 });

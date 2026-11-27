@@ -1,6 +1,7 @@
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import fs from 'fs';
+import http from 'http';
 import https from 'https';
 
 import {
@@ -10,24 +11,19 @@ import {
   McpOAuthState,
   type McpOAuthStatusResult,
 } from '../../../shared/mcp/auth';
-import { McpIpcChannel } from '../../../shared/mcp/constants';
+import { McpIpcChannel, McpMarketplaceSource } from '../../../shared/mcp/constants';
 import {
   McpToolDiscoveryErrorCode,
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
-import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
-import { buildOpenClawMcpServers, safeServerKey } from '../../libs/openclawConfigSync';
+import { NeteaseMail } from '../../../shared/neteaseMail/constants';
+import { createAuthRequiredIpcError } from '../../libs/authAccessPolicy';
 import {
-  clearMcpOAuthCredentialsBestEffort,
-  isMcpOAuthIdentityRemoved,
-  type McpOAuthCliContext,
-  McpOAuthCliError,
-  type McpOAuthCliServer,
-  readMcpOAuthStatuses,
-  runMcpOAuthLogin,
-  runMcpOAuthLogout,
-} from '../../mcp/mcpOAuthCli';
+  DEFAULT_MCP_OAUTH_CLIENT_ID,
+  type McpOAuthClientCredentials,
+  type McpOAuthManager,
+} from '../../mcp/mcpOAuthManager';
 import type { McpRuntime } from '../../mcp/mcpRuntime';
 import type { McpServerFormData, McpServerRecord } from '../../mcp/mcpStore';
 import {
@@ -36,63 +32,54 @@ import {
   McpToolDiscoveryTimeoutMs,
   normalizeMcpToolDiscoveryRequest,
 } from '../../mcp/mcpToolDiscovery';
+import type { NeteaseMailConnection } from '../../mcp/neteaseMailConnection';
+import { NeteaseMailIntegration } from '../../mcp/neteaseMailIntegration';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
+import { registerNeteaseMailHandlers } from './neteaseMail';
 
 export interface McpHandlerDeps {
+  getMainWindow?: () => BrowserWindow | null;
+  mail?: NeteaseMailConnection;
   getMcpRuntime: () => McpRuntime;
-  syncOpenClawConfig: (options: {
-    reason: string;
-    restartGatewayIfRunning?: boolean;
-    expectedImpact?: OpenClawConfigImpact;
-  }) => Promise<{ success: boolean; changed: boolean }>;
-  /** Paths for running `openclaw mcp …`; null when the runtime is not installed. */
-  getOAuthCliContext: () => McpOAuthCliContext | null;
+  getMcpMarketplaceUrl: () => string;
+  fetchMarketplaceText?: (url: string) => Promise<string>;
+  syncDshConfig: (options: { reason: string }) => Promise<{ success: boolean; changed: boolean }>;
+  getMcpOAuthManager: () => McpOAuthManager | null;
+  isAuthGateBlocked?: () => boolean;
 }
 
 function isOAuthRemoteServer(server: McpServerRecord | null): server is McpServerRecord {
   return Boolean(server && server.transportType !== 'stdio' && server.auth === McpAuthMode.OAuth);
 }
 
-/**
- * The server's openclaw.json entry, built the way config sync writes it, for the
- * CLI's own config. Null when the stored URL is not valid (config sync skips it too).
- */
-function toOAuthCliServer(server: McpServerRecord): McpOAuthCliServer | null {
-  const key = safeServerKey(server.name);
-  const entry = buildOpenClawMcpServers([{
-    name: server.name,
-    transportType: server.transportType,
-    url: server.url,
-    headers: server.headers,
-    auth: McpAuthMode.OAuth,
-  }])[key];
-  return entry ? { key, entry } : null;
+function isMcpOAuthIdentityRemoved(
+  existing: McpServerRecord,
+  patch: Partial<McpServerFormData>,
+): boolean {
+  if (patch.auth !== undefined && patch.auth !== McpAuthMode.OAuth) return true;
+  if (patch.transportType !== undefined && patch.transportType === 'stdio') return true;
+  if (patch.url !== undefined && patch.url !== existing.url) return true;
+  return false;
 }
 
 const INVALID_URL_ERROR = 'MCP server URL must be an absolute HTTP or HTTPS URL.';
+const OAUTH_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
-// In-flight sign-ins by server id. Aborting one kills its `openclaw mcp login`,
-// which also frees the loopback callback port.
 const oauthLoginControllers = new Map<string, AbortController>();
 
 function cancelMcpOAuthLogin(id: string): void {
   oauthLoginControllers.get(id)?.abort();
 }
 
-/** Called on app quit so no `openclaw mcp login` outlives the app holding 127.0.0.1:8989. */
 export function cancelAllMcpOAuthLogins(): void {
   for (const controller of oauthLoginControllers.values()) controller.abort();
 }
 
-function toOAuthFailure(error: unknown, fallback: string): McpOAuthActionResult {
-  if (error instanceof McpOAuthCliError) return { success: false, code: error.code, error: error.message };
-  return { success: false, code: McpOAuthErrorCode.Failed, error: error instanceof Error ? error.message : fallback };
-}
-
-// Only http(s) authorization URLs reach the system browser.
 async function openAuthorizationUrl(url: string): Promise<void> {
   const protocol = new URL(url).protocol;
-  if (protocol !== 'https:' && protocol !== 'http:') throw new Error(`Refusing to open ${protocol} URL`);
+  if (protocol !== 'https:' && protocol !== 'http:') {
+    throw new Error(`Refusing to open ${protocol} URL`);
+  }
   await shell.openExternal(url);
 }
 
@@ -120,19 +107,46 @@ function fetchText(url: string): Promise<string> {
   });
 }
 
-function syncMcpConfig(
-  syncOpenClawConfig: McpHandlerDeps['syncOpenClawConfig'],
-  reason: string,
-): void {
-  syncOpenClawConfig({
-    reason,
-    expectedImpact: OpenClawConfigImpact.Sync,
-  }).catch(err =>
-    console.error('[MCP] config sync error:', err),
-  );
+const MCP_SYNC_AWAIT_TIMEOUT_MS = 5_000;
+
+/**
+ * Serialize MCP config sync calls so rapid create/update/delete/toggle actions
+ * never race and overwrite DSH with stale state. Each returned promise settles
+ * cleanly without unhandled rejections and caps UI wait time.
+ */
+export function createSerializedMcpConfigSync(
+  syncDshConfig: McpHandlerDeps['syncDshConfig'],
+  awaitTimeoutMs = MCP_SYNC_AWAIT_TIMEOUT_MS,
+): (reason: string) => Promise<void> {
+  let tail: Promise<void> = Promise.resolve();
+  return async (reason: string): Promise<void> => {
+    const run = tail.then(async () => {
+      try {
+        const result = await syncDshConfig({ reason });
+        if (result && result.success === false) {
+          console.warn(`[MCP] config sync reported failure (reason=${reason})`);
+        }
+      } catch (err) {
+        console.error(`[MCP] config sync error (reason=${reason}):`, err);
+      }
+    });
+    tail = run;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        run,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, awaitTimeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
 }
 
-// Remote MCP probes follow the app's proxy settings, like other main-process fetches.
 const sessionFetch: FetchLike = (url, init) =>
   session.defaultSession.fetch(url instanceof URL ? url.href : url, init);
 
@@ -148,6 +162,113 @@ function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpS
     return { ...data, url: normalized.url };
   }
   return data;
+}
+
+/**
+ * Run a browser-based OAuth 2.1 PKCE login flow via an ephemeral loopback HTTP
+ * callback listener and exchange the authorization code through `McpOAuthManager`.
+ */
+export async function runNativeMcpOAuthLogin(options: {
+  oauthManager: McpOAuthManager;
+  serverId: string;
+  serverUrl: string;
+  signal: AbortSignal;
+  openExternal?: (url: string) => Promise<void>;
+  timeoutMs?: number;
+}): Promise<void> {
+  const { oauthManager, serverId, serverUrl, signal } = options;
+  const openExternal = options.openExternal ?? openAuthorizationUrl;
+  const timeoutMs = options.timeoutMs ?? OAUTH_LOGIN_TIMEOUT_MS;
+
+  let resolveCallback!: (params: { code: string; state: string }) => void;
+  let rejectCallback!: (error: Error) => void;
+  const callbackPromise = new Promise<{ code: string; state: string }>((resolve, reject) => {
+    resolveCallback = resolve;
+    rejectCallback = reject;
+  });
+
+  const server = http.createServer((req, res) => {
+    const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (reqUrl.pathname !== '/oauth/callback') {
+      res.writeHead(404);
+      res.end('Not Found');
+      return;
+    }
+    const errParam = reqUrl.searchParams.get('error');
+    const code = reqUrl.searchParams.get('code');
+    const state = reqUrl.searchParams.get('state');
+    if (errParam) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<html><body><h3>Authorization failed. You may close this tab.</h3></body></html>');
+      rejectCallback(new Error(reqUrl.searchParams.get('error_description') || errParam));
+      return;
+    }
+    if (!code || !state) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<html><body><h3>Missing authorization code or state.</h3></body></html>');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<html><body><h3>Authorization complete. You may close this tab and return to LobsterAI.</h3></body></html>');
+    resolveCallback({ code, state });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+
+  const addr = server.address();
+  const port = addr && typeof addr !== 'string' ? addr.port : 0;
+  const redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
+
+  const onAbort = () => {
+    rejectCallback(new Error('CANCELLED'));
+  };
+  if (signal.aborted) {
+    server.close();
+    throw new Error('CANCELLED');
+  }
+  signal.addEventListener('abort', onAbort, { once: true });
+  const timeout = setTimeout(() => {
+    rejectCallback(new Error('TIMEOUT'));
+  }, timeoutMs);
+
+  try {
+    const metadata = await oauthManager.discoverMetadata(serverUrl);
+    if (signal.aborted) throw new Error('CANCELLED');
+
+    let clientCredentials: McpOAuthClientCredentials = { clientId: DEFAULT_MCP_OAUTH_CLIENT_ID };
+    if (metadata.registrationEndpoint) {
+      clientCredentials = await oauthManager.registerDynamicClient({
+        registrationEndpoint: metadata.registrationEndpoint,
+        redirectUri,
+        scope: metadata.defaultScope,
+      });
+      if (signal.aborted) throw new Error('CANCELLED');
+    }
+
+    const pkce = oauthManager.beginPkceFlow({
+      serverId,
+      metadata,
+      redirectUri,
+      clientId: clientCredentials.clientId,
+      clientSecret: clientCredentials.clientSecret,
+      tokenEndpointAuthMethod: clientCredentials.tokenEndpointAuthMethod,
+      scope: metadata.defaultScope,
+      resource: metadata.resource,
+    });
+    await openExternal(pkce.authorizationUrl);
+    const { code, state } = await callbackPromise;
+    await oauthManager.completePkceFlow(state, code);
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener('abort', onAbort);
+    server.close();
+  }
 }
 
 const QICHACHA_REGISTRY_ID = 'qichacha';
@@ -207,24 +328,25 @@ function buildQichachaServerData(
 }
 
 export function registerMcpHandlers(deps: McpHandlerDeps): void {
-  const { getMcpRuntime, syncOpenClawConfig, getOAuthCliContext } = deps;
+  const {
+    getMcpRuntime,
+    getMcpMarketplaceUrl,
+    fetchMarketplaceText = fetchText,
+    syncDshConfig,
+    getMcpOAuthManager,
+  } = deps;
+  const syncMcpConfig = createSerializedMcpConfigSync(syncDshConfig);
 
-  /**
-   * Signs out before a server's OAuth identity goes away (delete, rename, URL or
-   * auth change), enabled or not, so its tokens neither linger in OpenClaw's
-   * state nor come back when the same server is added again.
-   */
+  if (deps.mail && deps.getMainWindow) registerNeteaseMailHandlers(deps.getMainWindow, new NeteaseMailIntegration(deps.mail));
   const clearOAuthCredentials = async (server: McpServerRecord): Promise<void> => {
+    if (server.registryId === NeteaseMail.RegistryId && deps.mail) await deps.mail.clearCredentials();
     cancelMcpOAuthLogin(server.id);
-    const context = getOAuthCliContext();
-    const cliServer = toOAuthCliServer(server);
-    if (!context || !cliServer) return;
-    await clearMcpOAuthCredentialsBestEffort({ context, server: cliServer });
+    getMcpOAuthManager()?.deleteToken(server.id);
   };
 
   ipcMain.handle(McpIpcChannel.List, () => {
     try {
-      const servers = getMcpRuntime().getStore().listServers();
+      const servers = getMcpRuntime().getDisplayServers();
       return { success: true, servers };
     } catch (error) {
       return {
@@ -256,15 +378,15 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       },
     ) => {
       try {
+        if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
         const mcpRuntime = getMcpRuntime();
         const normalizedData = normalizeMcpServerInput(data as McpServerFormData) as McpServerFormData;
         const server = mcpRuntime.getStore().createServer(normalizedData);
         if (server.enabled) {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-created');
         }
-        const servers = mcpRuntime.getStore().listServers();
-        syncMcpConfig(syncOpenClawConfig, 'mcp-server-created');
-        return { success: true, servers };
+        await syncMcpConfig('mcp-server-created');
+        return { success: true, servers: mcpRuntime.getDisplayServers() };
       } catch (error) {
         return {
           success: false,
@@ -297,6 +419,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       },
     ) => {
       try {
+        if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
         const mcpRuntime = getMcpRuntime();
         const normalizedData = normalizeMcpServerInput(data as Partial<McpServerFormData>);
         const existing = mcpRuntime.getStore().getServer(id);
@@ -307,9 +430,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         if (server?.enabled) {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-updated');
         }
-        const servers = mcpRuntime.getStore().listServers();
-        syncMcpConfig(syncOpenClawConfig, 'mcp-server-updated');
-        return { success: true, servers };
+        await syncMcpConfig('mcp-server-updated');
+        return { success: true, servers: mcpRuntime.getDisplayServers() };
       } catch (error) {
         return {
           success: false,
@@ -320,14 +442,14 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   );
 
   ipcMain.handle(McpIpcChannel.Delete, async (_event, id: string) => {
+    if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const mcpRuntime = getMcpRuntime();
       const existing = mcpRuntime.getStore().getServer(id);
       if (isOAuthRemoteServer(existing)) await clearOAuthCredentials(existing);
       mcpRuntime.getStore().deleteServer(id);
-      const servers = mcpRuntime.getStore().listServers();
-      syncMcpConfig(syncOpenClawConfig, 'mcp-server-deleted');
-      return { success: true, servers };
+      await syncMcpConfig('mcp-server-deleted');
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -337,6 +459,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   });
 
   ipcMain.handle(McpIpcChannel.DeleteByRegistryId, async (_event, registryId: string) => {
+    if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const normalizedRegistryId = registryId.trim();
       if (!normalizedRegistryId) {
@@ -351,9 +474,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         if (isOAuthRemoteServer(server)) await clearOAuthCredentials(server);
         store.deleteServer(server.id);
       }
-      const servers = store.listServers();
-      syncMcpConfig(syncOpenClawConfig, 'mcp-registry-deleted');
-      return { success: true, servers };
+      await syncMcpConfig('mcp-registry-deleted');
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -363,18 +485,18 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   });
 
   ipcMain.handle(McpIpcChannel.SetEnabled, async (_event, options: { id: string; enabled: boolean }) => {
+    if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const mcpRuntime = getMcpRuntime();
       mcpRuntime.getStore().setEnabled(options.id, options.enabled);
       if (options.enabled) {
         mcpRuntime.ensureLaunchResolution(options.id, 'mcp-server-enabled');
       } else {
-        // A disabled server shows no sign-in, so do not leave one waiting on the browser.
         cancelMcpOAuthLogin(options.id);
+        if (mcpRuntime.getStore().getServer(options.id)?.registryId === NeteaseMail.RegistryId) deps.mail?.invalidateConfirmations();
       }
-      const servers = mcpRuntime.getStore().listServers();
-      syncMcpConfig(syncOpenClawConfig, 'mcp-server-toggled');
-      return { success: true, servers };
+      await syncMcpConfig('mcp-server-toggled');
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -386,6 +508,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   ipcMain.handle(
     McpIpcChannel.SetEnabledByRegistryId,
     async (_event, options: { registryId: string; enabled: boolean }) => {
+      if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
       try {
         const normalizedRegistryId = options.registryId.trim();
         if (!normalizedRegistryId) {
@@ -402,11 +525,11 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
             mcpRuntime.ensureLaunchResolution(server.id, 'mcp-registry-enabled');
           } else {
             cancelMcpOAuthLogin(server.id);
+            if (normalizedRegistryId === NeteaseMail.RegistryId) deps.mail?.invalidateConfirmations();
           }
         }
-        const servers = store.listServers();
-        syncMcpConfig(syncOpenClawConfig, 'mcp-registry-toggled');
-        return { success: true, servers };
+        await syncMcpConfig('mcp-registry-toggled');
+        return { success: true, servers: mcpRuntime.getDisplayServers() };
       } catch (error) {
         return {
           success: false,
@@ -420,9 +543,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     try {
       const mcpRuntime = getMcpRuntime();
       await mcpRuntime.getLaunchResolverManager().retry(id);
-      const servers = mcpRuntime.getStore().listServers();
-      syncMcpConfig(syncOpenClawConfig, 'mcp-launch-manual-retry');
-      return { success: true, servers };
+      await syncMcpConfig('mcp-launch-manual-retry');
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -444,6 +566,23 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         : McpToolDiscoveryTimeoutMs.Remote;
       try {
         const launch = await getMcpRuntime().resolveToolDiscoveryLaunch(request);
+        if (launch.transportType !== 'stdio' && request.serverId) {
+          const saved = getMcpRuntime().getStore().getServer(request.serverId);
+          if (isOAuthRemoteServer(saved) && saved.registryId !== NeteaseMail.RegistryId) {
+            const authHeaders = await getMcpOAuthManager()
+              ?.resolveAuthorizationHeaders(saved.id)
+              .catch((): null => null);
+            if (authHeaders) {
+              const mergedHeaders: Record<string, string> = { ...(launch.headers ?? {}) };
+              for (const key of Object.keys(mergedHeaders)) {
+                if (key.toLowerCase() === 'authorization') {
+                  delete mergedHeaders[key];
+                }
+              }
+              launch.headers = { ...mergedHeaders, ...authHeaders };
+            }
+          }
+        }
         const tools = await discoverMcpTools(launch, {
           timeoutMs,
           fetch: sessionFetch,
@@ -459,7 +598,6 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
             McpToolDiscoveryErrorCode.Failed,
             error instanceof Error ? error.message : String(error),
           );
-        // First line only: the rest is the server's stderr, which may echo secrets.
         console.warn(
           `[MCP] tool discovery failed for "${request.name}" (${request.transportType}, ${failure.code}) after ${Date.now() - startedAt}ms: ${failure.message.split('\n')[0].slice(0, 300)}`,
         );
@@ -495,7 +633,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       }
 
       const servers = store.listServers();
-      syncMcpConfig(syncOpenClawConfig, 'qichacha-mcp-connected');
+      await syncMcpConfig('qichacha-mcp-connected');
       return { success: true, servers };
     } catch (error) {
       return {
@@ -507,18 +645,19 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.OAuthLogin, async (_event, id: string): Promise<McpOAuthActionResult> => {
     const server = getMcpRuntime().getStore().getServer(id);
-    if (!isOAuthRemoteServer(server)) {
+    if (!isOAuthRemoteServer(server) || server.registryId === NeteaseMail.RegistryId) {
       return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: 'This MCP server does not use OAuth.' };
     }
     if (!server.enabled) {
       return { success: false, code: McpOAuthErrorCode.Failed, error: 'Enable the MCP server before signing in.' };
     }
-    const context = getOAuthCliContext();
-    if (!context) {
-      return { success: false, code: McpOAuthErrorCode.RuntimeUnavailable, error: 'OpenClaw runtime is not ready.' };
+    if (!server.url) {
+      return { success: false, code: McpOAuthErrorCode.Failed, error: INVALID_URL_ERROR };
     }
-    const cliServer = toOAuthCliServer(server);
-    if (!cliServer) return { success: false, code: McpOAuthErrorCode.Failed, error: INVALID_URL_ERROR };
+    const oauthManager = getMcpOAuthManager();
+    if (!oauthManager) {
+      return { success: false, code: McpOAuthErrorCode.RuntimeUnavailable, error: 'MCP OAuth manager is not initialized.' };
+    }
     if (oauthLoginControllers.has(id)) {
       return {
         success: false,
@@ -529,16 +668,24 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     const controller = new AbortController();
     oauthLoginControllers.set(id, controller);
     try {
-      // The CLI runs against its own config, so this needs neither a configured
-      // model nor the gateway to have loaded the just-saved server yet. The token
-      // is keyed by name + URL, so the gateway uses it once its config lists the server.
-      await runMcpOAuthLogin({ context, server: cliServer, openExternal: openAuthorizationUrl, signal: controller.signal });
+      await runNativeMcpOAuthLogin({
+        oauthManager,
+        serverId: server.id,
+        serverUrl: server.url,
+        signal: controller.signal,
+      });
+      await syncMcpConfig('mcp-oauth-authorized');
       return { success: true, state: McpOAuthState.Authorized };
     } catch (error) {
-      if (!(error instanceof McpOAuthCliError && error.code === McpOAuthErrorCode.Cancelled)) {
-        console.warn('[MCP] OAuth sign-in failed:', error instanceof Error ? error.message : error);
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg === 'CANCELLED') {
+        return { success: false, code: McpOAuthErrorCode.Cancelled, error: 'Sign-in cancelled.' };
       }
-      return toOAuthFailure(error, 'Failed to sign in to the MCP server');
+      if (msg === 'TIMEOUT') {
+        return { success: false, code: McpOAuthErrorCode.Timeout, error: 'OAuth sign-in timed out.' };
+      }
+      console.warn('[MCP] OAuth sign-in failed:', msg);
+      return { success: false, code: McpOAuthErrorCode.Failed, error: msg };
     } finally {
       oauthLoginControllers.delete(id);
     }
@@ -553,80 +700,65 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.OAuthLogout, async (_event, id: string): Promise<McpOAuthActionResult> => {
     const server = getMcpRuntime().getStore().getServer(id);
-    if (!isOAuthRemoteServer(server)) {
+    if (!isOAuthRemoteServer(server) || server.registryId === NeteaseMail.RegistryId) {
       return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: 'This MCP server does not use OAuth.' };
     }
-    const context = getOAuthCliContext();
-    if (!context) {
-      return { success: false, code: McpOAuthErrorCode.RuntimeUnavailable, error: 'OpenClaw runtime is not ready.' };
+    const oauthManager = getMcpOAuthManager();
+    if (!oauthManager) {
+      return { success: false, code: McpOAuthErrorCode.RuntimeUnavailable, error: 'MCP OAuth manager is not initialized.' };
     }
-    // Disabled servers show no OAuth state (see OAuthStatus), so there is nothing to sign out of.
-    if (!server.enabled) {
-      return { success: false, code: McpOAuthErrorCode.ServerNotLoaded, error: 'Enable the MCP server before signing out.' };
-    }
-    const cliServer = toOAuthCliServer(server);
-    if (!cliServer) return { success: false, code: McpOAuthErrorCode.Failed, error: INVALID_URL_ERROR };
-    try {
-      await runMcpOAuthLogout({ context, server: cliServer });
-      return { success: true, state: McpOAuthState.RequiresAuthorization };
-    } catch (error) {
-      return toOAuthFailure(error, 'Failed to sign out of the MCP server');
-    }
+    cancelMcpOAuthLogin(server.id);
+    oauthManager.deleteToken(server.id);
+    await syncMcpConfig('mcp-oauth-logout');
+    return { success: true, state: McpOAuthState.RequiresAuthorization };
   });
 
   ipcMain.handle(McpIpcChannel.OAuthStatus, async (): Promise<McpOAuthStatusResult> => {
-    const servers = getMcpRuntime().getStore().listServers().filter(isOAuthRemoteServer);
+    const servers = getMcpRuntime().getStore().listServers().filter(server => isOAuthRemoteServer(server) && server.registryId !== NeteaseMail.RegistryId);
     if (servers.length === 0) return { success: true, states: {} };
-    // Disabled servers are not loaded by OpenClaw, so they show no OAuth state.
-    const cliServers = servers
-      .filter(server => server.enabled)
-      .map(toOAuthCliServer)
-      .filter((server): server is McpOAuthCliServer => server !== null);
-    let byKey: Record<string, McpOAuthState> = {};
-    if (cliServers.length > 0) {
-      const context = getOAuthCliContext();
-      if (!context) return { success: false, error: 'OpenClaw runtime is not ready.' };
-      try {
-        byKey = await readMcpOAuthStatuses({ context, servers: cliServers });
-      } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : 'Failed to read MCP OAuth status' };
+    const oauthManager = getMcpOAuthManager();
+    const states: Record<string, McpOAuthState> = {};
+    let refreshedAny = false;
+    for (const server of servers) {
+      if (!server.enabled || !oauthManager) {
+        states[server.id] = McpOAuthState.Unknown;
+        continue;
       }
+      const status = await oauthManager.checkAuthorizationStatus(server.id);
+      if (status.refreshed) refreshedAny = true;
+      states[server.id] = status.authorized
+        ? McpOAuthState.Authorized
+        : McpOAuthState.RequiresAuthorization;
     }
-    const states = Object.fromEntries(
-      servers.map(server => [
-        server.id,
-        server.enabled ? byKey[safeServerKey(server.name)] ?? McpOAuthState.Unknown : McpOAuthState.Unknown,
-      ]),
-    );
+    if (refreshedAny) {
+      await syncMcpConfig('mcp-oauth-refreshed');
+    }
     return { success: true, states };
   });
 
   ipcMain.handle(McpIpcChannel.FetchMarketplace, async () => {
-    // Development only: preview catalog edits (e.g. new connectors) from a local
-    // file shaped like the server's data.value, before ops publishes them.
     const localCatalogPath = app.isPackaged ? '' : process.env.LOBSTERAI_MCP_MARKETPLACE_FILE?.trim();
     if (localCatalogPath) {
       try {
         const marketplace = JSON.parse(await fs.promises.readFile(localCatalogPath, 'utf8'));
-        console.log(`[MCP] using local marketplace catalog from LOBSTERAI_MCP_MARKETPLACE_FILE`);
-        return { success: true, data: marketplace };
+        console.log('[MCP] using local marketplace catalog from LOBSTERAI_MCP_MARKETPLACE_FILE');
+        return { success: true, data: marketplace, source: McpMarketplaceSource.LocalFile };
       } catch (error) {
         console.error('[MCP] failed to read LOBSTERAI_MCP_MARKETPLACE_FILE:', error);
         return { success: false, error: error instanceof Error ? error.message : 'Failed to read local marketplace' };
       }
     }
-    const url = app.isPackaged
-      ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
-      : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    const url = getMcpMarketplaceUrl();
+    console.log(`[MCP] fetching marketplace from: ${url}`);
     try {
-      const data = await fetchText(url);
+      const data = await fetchMarketplaceText(url);
       const json = JSON.parse(data);
       const value = json?.data?.value;
       if (!value) {
         return { success: false, error: 'Invalid response: missing data.value' };
       }
       const marketplace = typeof value === 'string' ? JSON.parse(value) : value;
-      return { success: true, data: marketplace };
+      return { success: true, data: marketplace, source: McpMarketplaceSource.Remote };
     } catch (error) {
       return {
         success: false,

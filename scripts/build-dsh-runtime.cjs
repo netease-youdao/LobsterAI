@@ -22,6 +22,7 @@ const { spawnSync } = require('child_process');
 const { resolveTarCommand } = require('./dsh-tar.cjs');
 
 const LOG_TAG = '[build-dsh-runtime]';
+const BUILDER_VERSION = 4;
 
 function log(message) {
   console.log(`${LOG_TAG} ${message}`);
@@ -66,6 +67,17 @@ const PRUNE_FILE_PATTERNS = [
 
 const PRUNE_DIR_NAMES = new Set(['test', 'tests', '__tests__', '__mocks__', '.github', 'example', 'examples', 'coverage']);
 
+// Large optional platform binaries that LobsterAI replaces with native
+// implementations (Office editors/PDF preview, speech). Keep the tiny JS
+// wrapper packages so untouched DSH manifests still resolve if loaded bare;
+// `@lobsterai/dsh-bundle` disables the corresponding Cordis rows.
+const PRUNE_HEAVY_SCOPED_PREFIXES = [
+  { scope: '@deepseek-ai', prefix: 'libreoffice-kit-' },
+];
+const PRUNE_HEAVY_UNSCOPED_PREFIXES = [
+  'sherpa-onnx-',
+];
+
 // `git apply` can report success while a patch lands somewhere unexpected, and
 // an upstream refactor can move the code a patch targets. Each patch therefore
 // declares a string that must exist afterwards, so a silent no-op fails the
@@ -100,13 +112,25 @@ const PATCH_SENTINELS = [
     // internalModules() must reach Node internals via --expose-internals.
     patch: '01-app-boot-expose-internals-fallback.cjs',
     file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
-    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
-    occurrences: 1,
+    expect: '--expose-internals',
+    minOccurrences: 1,
   },
   {
     patch: '01-app-boot-expose-internals-fallback.cjs',
     file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js',
-    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
+    expect: '--expose-internals',
+    minOccurrences: 1,
+  },
+  {
+    patch: '02-app-boot-startup-timings.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
+    expect: 'markBoot("tree-loaded");',
+    occurrences: 1,
+  },
+  {
+    patch: '03-hmr-electron-module-binding.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-hmr/lib/index.js',
+    expect: 'process.versions.electron && requireInternal("internal/test/binding")',
     occurrences: 1,
   },
 ];
@@ -132,6 +156,9 @@ if (!dshMeta || !dshMeta.version || !dshMeta.npm) {
 }
 const dshVersion = dshMeta.version;
 const dshPackage = dshMeta.npm;
+// This release's Cordis plugins require the same exact Zod version. Pin it at
+// the runtime root so the plugins load a single copy during startup.
+const sharedZodVersion = dshVersion === '0.2.2-rc.5' ? '4.6.6' : null;
 // Exact pnpm release bundled for dsh's plugin manager. Keep it on the major the
 // upstream repo pins in its own packageManager field: the manager reads pnpm 11
 // settings (allowBuilds) and output formats.
@@ -194,6 +221,7 @@ function isRuntimeComplete() {
   return (
     fs.existsSync(path.join(outDir, 'lib', 'bin.js')) &&
     fs.existsSync(path.join(outDir, 'node_modules')) &&
+    (!sharedZodVersion || fs.existsSync(path.join(outDir, 'node_modules', 'zod', 'package.json'))) &&
     fs.existsSync(path.join(outDir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'index.html')) &&
     fs.existsSync(path.join(pnpmPackageDir, 'package.json'))
   );
@@ -211,6 +239,7 @@ if (process.env.DSH_FORCE_BUILD !== '1' && fs.existsSync(buildInfoPath)) {
       info.patchHash === patchHash &&
       info.target === targetId &&
       info.pnpmVersion === pnpmVersion &&
+      info.builderVersion === BUILDER_VERSION &&
       isRuntimeComplete()
     ) {
       log(`Runtime ${targetId} for dsh ${dshVersion} (pnpm ${pnpmVersion}) is up to date. Set DSH_FORCE_BUILD=1 to rebuild.`);
@@ -270,6 +299,7 @@ const runtimePkgPath = path.join(outDir, 'package.json');
 const runtimePkg = JSON.parse(fs.readFileSync(runtimePkgPath, 'utf8'));
 delete runtimePkg.devDependencies;
 delete runtimePkg.scripts;
+if (sharedZodVersion) runtimePkg.dependencies.zod = sharedZodVersion;
 fs.writeFileSync(runtimePkgPath, `${JSON.stringify(runtimePkg, null, 2)}\n`);
 
 // [4/7] Install production dependencies scoped to the target platform/arch so
@@ -330,7 +360,7 @@ for (const patchFile of listPatchFiles()) {
 assertPatchesLanded();
 
 // [7/7] Prune and verify.
-pruneRuntime();
+const prunedHeavyPackages = pruneRuntime();
 verifyRuntimeLayout();
 
 fs.writeFileSync(
@@ -345,7 +375,8 @@ fs.writeFileSync(
       dshVersion,
       pnpmVersion,
       patchHash,
-      builderVersion: 2,
+      prunedHeavyPackages,
+      builderVersion: BUILDER_VERSION,
     },
     null,
     2
@@ -458,15 +489,51 @@ function assertPatchesLanded() {
     }
     const contents = fs.readFileSync(filePath, 'utf8');
     const found = contents.split(sentinel.expect).length - 1;
-    if (found !== sentinel.occurrences) {
+    if (typeof sentinel.minOccurrences === 'number') {
+      if (found < sentinel.minOccurrences) {
+        fail(`Patch ${sentinel.patch} did not land: expected >= ${sentinel.minOccurrences} × "${sentinel.expect}", found ${found}`);
+      }
+    } else if (found !== sentinel.occurrences) {
       fail(`Patch ${sentinel.patch} did not land: expected ${sentinel.occurrences} × "${sentinel.expect}", found ${found}`);
     }
     log(`Verified ${sentinel.patch} (${found} sites)`);
   }
 }
 
+function pruneHeavyOptionalPackages(nodeModules) {
+  const removed = [];
+  let removedBytes = 0;
+
+  for (const { scope, prefix } of PRUNE_HEAVY_SCOPED_PREFIXES) {
+    const scopeDir = path.join(nodeModules, scope);
+    if (!fs.existsSync(scopeDir)) continue;
+    for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+      const entryPath = path.join(scopeDir, entry.name);
+      removedBytes += directorySize(entryPath);
+      fs.rmSync(entryPath, { recursive: true, force: true });
+      removed.push(`${scope}/${entry.name}`);
+    }
+  }
+
+  for (const entry of fs.readdirSync(nodeModules, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (!PRUNE_HEAVY_UNSCOPED_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue;
+    const entryPath = path.join(nodeModules, entry.name);
+    removedBytes += directorySize(entryPath);
+    fs.rmSync(entryPath, { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    log(`Pruned heavy optional platform binaries (${Math.round(removedBytes / 1024 / 1024)} MB): ${removed.join(', ')}`);
+  }
+  return removed.sort();
+}
+
 function pruneRuntime() {
   const nodeModules = path.join(outDir, 'node_modules');
+  const prunedHeavyPackages = pruneHeavyOptionalPackages(nodeModules);
 
   // node-pty ships every platform's prebuilt binary inside one package, so a
   // mac runtime otherwise carries ~58 MB of Windows PTY binaries.
@@ -514,6 +581,7 @@ function pruneRuntime() {
       }
     }
   }
+  return prunedHeavyPackages;
 }
 
 function verifyRuntimeLayout() {
@@ -529,6 +597,25 @@ function verifyRuntimeLayout() {
     if (!fs.existsSync(path.join(outDir, relPath))) {
       fail(`Runtime layout check failed: missing ${label} (${relPath})`);
     }
+  }
+
+  if (sharedZodVersion) {
+    // npm ls checks dependency and peer ranges and prints each installed location once.
+    const result = spawnSync('npm', ['ls', 'zod', '--all', '--omit=dev', '--parseable'], {
+      cwd: outDir,
+      env: installEnv,
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    });
+    if (result.status !== 0) {
+      fail(`Could not validate zod@${sharedZodVersion}: ${result.error?.message || result.stderr || result.stdout}`);
+    }
+    const locations = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    const expectedDir = path.join(outDir, 'node_modules', 'zod');
+    if (locations.length !== 1 || path.relative(expectedDir, locations[0]) !== '') {
+      fail(`Expected one shared zod@${sharedZodVersion} at ${expectedDir}, found: ${locations.join(', ') || '(none)'}`);
+    }
+    log(`Verified a single shared zod@${sharedZodVersion} in the runtime`);
   }
 
   // Platform binaries selected by npm_config_platform/arch. Warn-only until a

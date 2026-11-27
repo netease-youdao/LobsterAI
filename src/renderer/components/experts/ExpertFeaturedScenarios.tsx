@@ -50,7 +50,10 @@ const ExpertFeaturedScenarios: React.FC<{ presets: PresetAgent[]; scenarios: Exp
               onFocus={event => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })}
               className="group -mx-2 flex min-h-11 w-[calc(100%+1rem)] items-center gap-2 rounded-xl px-2 py-2 text-left text-foreground transition-colors hover:bg-surface/70 focus-visible:bg-surface/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50">
               <AgentAvatarIcon value={preset.icon} expertFallback className="h-6 w-6" />
-              <span title={name} className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} leading-6`}>{name}</span>
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span title={name} className={`min-w-0 truncate ${MANAGEMENT_TITLE_TEXT} leading-6`}>{name}</span>
+                {preset.isNew && <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-[#ff4f6d] px-1.5 text-[10px] font-semibold leading-none text-white">{t('newFeatureBadge')}</span>}
+              </span>
               <ChevronRightIcon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted opacity-50 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
             </button>;
           })}</div>

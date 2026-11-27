@@ -7,7 +7,12 @@ import { randomUUID } from 'node:crypto';
 
 import Database from 'better-sqlite3';
 
+import { RetainedImPlatform } from '../../shared/dshEngine/hostConstants';
 import { PlatformRegistry } from '../../shared/platform';
+import { t } from '../i18n';
+import { type FeishuGroupSessionRoute, findLegacyFeishuGroupSession } from './feishuGroupSessionMapping';
+import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
+import { canReuseQQGroupSession, findQQGroupSession, hasConflictingQQGroupPeer, resolveQQGroupPeer } from './qqGroupSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
   DEFAULT_DINGTALK_OPENCLAW_CONFIG,
@@ -63,6 +68,7 @@ import {
   WecomOpenClawConfig,
   WeixinOpenClawConfig,
 } from './types';
+import { activeWecomBotId } from './wecomConnections';
 
 interface StoredConversationReplyRoute {
   channel: string;
@@ -70,7 +76,7 @@ interface StoredConversationReplyRoute {
   accountId?: string;
 }
 
-interface SessionMappingRow {
+export interface SessionMappingRow {
   im_conversation_id: string;
   platform: string;
   cowork_session_id: string;
@@ -169,6 +175,16 @@ export class IMStore {
         .run();
     }
     this.ensureAgentScopedSessionMappingPrimaryKey(mappingCols);
+    this.db.prepare(`
+      CREATE TABLE IF NOT EXISTS im_qq_group_peers (
+        bot_platform TEXT NOT NULL,
+        group_peer TEXT NOT NULL,
+        union_id TEXT NOT NULL,
+        PRIMARY KEY (bot_platform, group_peer)
+      )
+    `).run();
+    this.db.prepare('CREATE INDEX IF NOT EXISTS idx_im_qq_group_union ON im_qq_group_peers(union_id)').run();
+    this.db.prepare('CREATE INDEX IF NOT EXISTS idx_im_qq_group_peer ON im_qq_group_peers(group_peer)').run();
     this.db
       .prepare(
         'CREATE INDEX IF NOT EXISTS idx_im_session_mappings_openclaw_session_key ON im_session_mappings(openclaw_session_key) WHERE openclaw_session_key IS NOT NULL',
@@ -936,6 +952,9 @@ export class IMStore {
   }
 
   setConfig(config: Partial<IMGatewayConfig>): void {
+    if (config.wecom) {
+      this.setWecomMultiInstanceConfig(config.wecom);
+    }
     if (config.dingtalk) {
       this.setDingTalkMultiInstanceConfig(config.dingtalk);
     }
@@ -956,9 +975,6 @@ export class IMStore {
     }
     if (config.qq) {
       this.setQQMultiInstanceConfig(config.qq);
-    }
-    if (config.wecom) {
-      this.setWecomMultiInstanceConfig(config.wecom);
     }
     if (config.popo) {
       this.setPopoMultiInstanceConfig(config.popo);
@@ -1434,11 +1450,12 @@ export class IMStore {
   }
 
   deleteQQInstance(instanceId: string): void {
-    const now = Date.now();
-    this.db.prepare('DELETE FROM im_config WHERE key = ?').run(`qq:${instanceId}`);
-    // Clean up session mappings for this instance
-    this.db.prepare('DELETE FROM im_session_mappings WHERE platform = ?').run(`qq:${instanceId}`);
-    void now;
+    const botPlatform = `qq:${instanceId}`;
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM im_config WHERE key = ?').run(botPlatform);
+      this.db.prepare('DELETE FROM im_session_mappings WHERE platform = ?').run(botPlatform);
+      this.db.prepare('DELETE FROM im_qq_group_peers WHERE bot_platform = ?').run(botPlatform);
+    })();
   }
 
   getQQMultiInstanceConfig(): QQMultiInstanceConfig {
@@ -1470,7 +1487,7 @@ export class IMStore {
 
   getWecomInstances(): WecomInstanceConfig[] {
     const rows = this.db
-      .prepare('SELECT key, value FROM im_config WHERE key LIKE ?')
+      .prepare('SELECT key, value FROM im_config WHERE key LIKE ? ORDER BY rowid')
       .all('wecom:%') as Array<{ key: string; value: string }>;
     if (!rows.length) return [];
     const instances: WecomInstanceConfig[] = [];
@@ -1492,17 +1509,7 @@ export class IMStore {
   }
 
   setWecomInstanceConfig(instanceId: string, config: Partial<WecomInstanceConfig>): void {
-    const current = this.getWecomInstanceConfig(instanceId);
-    if (current) {
-      this.setConfigValue(`wecom:${instanceId}`, { ...current, ...config });
-    } else {
-      this.setConfigValue(`wecom:${instanceId}`, {
-        ...DEFAULT_WECOM_CONFIG,
-        instanceId,
-        instanceName: config.instanceName || `WeCom Bot`,
-        ...config,
-      });
-    }
+    this.saveWecomInstances([{ ...config, instanceId }]);
   }
 
   deleteWecomInstance(instanceId: string): void {
@@ -1518,10 +1525,29 @@ export class IMStore {
   }
 
   setWecomMultiInstanceConfig(config: WecomMultiInstanceConfig): void {
-    // Write each instance individually
-    for (const inst of config.instances) {
-      this.setWecomInstanceConfig(inst.instanceId, inst);
-    }
+    this.saveWecomInstances(config.instances);
+  }
+
+  private saveWecomInstances(updates: (Partial<WecomInstanceConfig> & { instanceId: string })[]): void {
+    this.db.transaction(() => {
+      const current = this.getWecomInstances();
+      const byId = new Map(current.map(instance => [instance.instanceId, instance]));
+      const previous = new Map(byId);
+      for (const update of updates) {
+        const existing = byId.get(update.instanceId) ?? { ...DEFAULT_WECOM_CONFIG, instanceName: 'WeCom Bot' };
+        byId.set(update.instanceId, { ...existing, ...update });
+      }
+      for (const { instanceId } of updates) {
+        const instance = byId.get(instanceId)!;
+        const botId = activeWecomBotId(instance);
+        // Existing duplicates may be edited or disabled without disturbing the current owner.
+        if (botId && botId !== activeWecomBotId(previous.get(instanceId))) {
+          const owner = [...byId.values()].find(other => other.instanceId !== instanceId && activeWecomBotId(other) === botId);
+          if (owner) throw new Error(t('imWecomDuplicateBot', { name: owner.instanceName || owner.instanceId }));
+        }
+        this.setConfigValue(`wecom:${instanceId}`, instance);
+      }
+    })();
   }
 
   // ==================== POPO ====================
@@ -1605,7 +1631,13 @@ export class IMStore {
 
   setWeixinConfig(config: Partial<WeixinOpenClawConfig>): void {
     const current = this.getWeixinConfig();
-    this.setConfigValue('weixin', { ...current, ...config });
+    const next: WeixinOpenClawConfig = { ...current };
+    for (const [key, value] of Object.entries(config) as Array<[keyof WeixinOpenClawConfig, unknown]>) {
+      if (value !== undefined) {
+        (next as unknown as Record<string, unknown>)[key] = value;
+      }
+    }
+    this.setConfigValue('weixin', next);
   }
 
   // ==================== IM Settings ====================
@@ -1796,6 +1828,64 @@ export class IMStore {
     return row ? mapSessionMappingRow(row) : null;
   }
 
+  findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null {
+    const row = findLegacyDirectSession(this.db, route);
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
+  resolveQQGroupPeer(botPlatform: Platform, groupPeer: string, unionId?: string): string {
+    return resolveQQGroupPeer(this.db, botPlatform, groupPeer, unionId);
+  }
+
+  canReuseQQGroupSession(botPlatform: Platform, groupPeer: string, sessionId: string): boolean {
+    return canReuseQQGroupSession(this.db, botPlatform, groupPeer, sessionId);
+  }
+
+  /** Ordinary groups share a Cowork task across accounts bound to the same agent. */
+  findSharedGroupMapping(
+    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string, botPlatform?: Platform,
+  ): IMSessionMapping | null {
+    let accountOnly: Platform | null = null;
+    if (platform === RetainedImPlatform.QQ && botPlatform) {
+      const linked = findQQGroupSession(this.db, botPlatform, groupId, agentId);
+      if (linked) return mapSessionMappingRow(linked);
+      if (hasConflictingQQGroupPeer(this.db, botPlatform, groupId)) accountOnly = botPlatform;
+    }
+    // OpenClaw lowercased its group keys. DSH peer IDs are case-sensitive.
+    // Older DSH rows stored an untyped chat ID: only reuse another bot's row
+    // when the desktop task also identifies this group. Keep split transcripts intact.
+    const row = this.db.prepare(`
+      SELECT m.* FROM im_session_mappings m JOIN cowork_sessions s ON s.id = m.cowork_session_id
+      WHERE m.agent_id = @agentId AND COALESCE(NULLIF(s.agent_id, ''), 'main') = m.agent_id
+        AND (m.platform = @platform OR m.platform GLOB @instances)
+        AND (@accountOnly IS NULL OR m.platform = @accountOnly)
+        AND (m.im_conversation_id = @groupId
+          OR (m.openclaw_session_key IS NOT NULL AND m.im_conversation_id = lower(@groupId))
+          OR (m.openclaw_session_key IS NULL AND m.im_conversation_id = @chatId AND s.title = @groupTitle
+            AND NOT EXISTS (SELECT 1 FROM im_config c WHERE @platform = 'dingtalk' AND c.key = m.platform
+              AND json_valid(c.value) AND (json_extract(c.value, '$.groupSessionScope') = 'group_sender'
+                OR json_extract(c.value, '$.separateSessionByConversation') = 0
+                OR json_extract(c.value, '$.sharedMemoryAcrossConversations') = 1))))
+      ORDER BY (m.openclaw_session_key IS NOT NULL) DESC, (m.im_conversation_id = @groupId) DESC,
+        m.last_active_at DESC, m.rowid DESC LIMIT 1
+    `).get({ platform, instances: `${platform}:*`, groupId, chatId, agentId, groupTitle, accountOnly }) as SessionMappingRow | undefined;
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
+  recordGroupSessionRoute(groupId: string, botPlatform: Platform, taskId: string, agentId: string): void {
+    this.db.prepare(`
+      INSERT INTO im_session_mappings (im_conversation_id, platform, cowork_session_id, agent_id, created_at, last_active_at)
+      VALUES (@groupId, @botPlatform, @taskId, @agentId, @now, @now)
+      ON CONFLICT (im_conversation_id, platform, agent_id) DO UPDATE SET
+        cowork_session_id = excluded.cowork_session_id, last_active_at = excluded.last_active_at
+    `).run({ groupId, botPlatform, taskId, agentId, now: Date.now() });
+  }
+
+  findLegacyFeishuGroupSessionMapping(route: FeishuGroupSessionRoute): IMSessionMapping | null {
+    const row = findLegacyFeishuGroupSession(this.db, route, this.getIMSettings().platformAgentBindings);
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
   /**
    * Find the IM mapping that owns a real OpenClaw channel session key.
    */
@@ -1817,7 +1907,7 @@ export class IMStore {
   getSessionMappingByCoworkSessionId(coworkSessionId: string): IMSessionMapping | null {
     const row = this.db
       .prepare(
-        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE cowork_session_id = ? LIMIT 1',
+        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE cowork_session_id = ? ORDER BY last_active_at DESC, rowid DESC LIMIT 1',
       )
       .get(coworkSessionId) as SessionMappingRow | undefined;
     return row ? mapSessionMappingRow(row) : null;
@@ -1990,11 +2080,8 @@ export class IMStore {
   /**
    * List all session mappings for a platform, optionally filtered by IM bot accountId.
    *
-   * The accountId is encoded as the first segment of im_conversation_id before
-   * the peer subtype suffix (for example "c9c41984:direct:ou_xxx" or the legacy
-   * NIM form "appKey-account:direct:peer"). Filtering by accountId therefore
-   * requires no schema migration. NIM additionally accepts the current stable
-   * instance key and matches legacy runtime-derived prefixes for compatibility.
+   * OpenClaw stored the account in the conversation ID. DSH stores it in the
+   * platform column as `platform:instanceId`. Both formats can coexist.
    */
   listSessionMappings(platform?: Platform, accountId?: string): IMSessionMapping[] {
     let query: string;
@@ -2002,6 +2089,27 @@ export class IMStore {
 
     if (platform && accountId) {
       const directPrefixes = new Set<string>([accountId]);
+      const platformPrefix = `${platform}:`;
+      const requestedScope = platformPrefix + accountId;
+      const scopes = this.db.prepare('SELECT key FROM im_config WHERE key GLOB ?')
+        .all(`${platformPrefix}*`) as Array<{ key: string }>;
+      const matchingScopes = scopes.filter(({ key }) => key.startsWith(requestedScope));
+      const exactScope = matchingScopes.find(({ key }) => key === requestedScope);
+      const accountScope = exactScope ?? (matchingScopes.length === 1 ? matchingScopes[0] : undefined);
+      const scopedPlatforms = new Set<string>();
+      if (accountScope) {
+        const shortScope = accountScope.key.slice(0, platformPrefix.length + 8);
+        scopedPlatforms.add(accountScope.key);
+        directPrefixes.add(accountScope.key.slice(platformPrefix.length));
+        if (scopes.filter(({ key }) => key.startsWith(shortScope)).length === 1) {
+          scopedPlatforms.add(shortScope);
+          directPrefixes.add(shortScope.slice(platformPrefix.length));
+        }
+      } else if (matchingScopes.length === 0) {
+        scopedPlatforms.add(requestedScope);
+      } else {
+        return [];
+      }
       if (platform === 'nim') {
         for (const inst of this.getNimInstances()) {
           const instanceKey = inst.instanceId?.slice(0, 8);
@@ -2013,21 +2121,20 @@ export class IMStore {
         }
       }
 
-      // Include direct conversations owned by this bot instance (prefix matches accountId)
-      // and all group conversations for the platform, since group membership per-bot
-      // is not yet stored — group: prefix is a temporary heuristic until im_account_id
-      // column is introduced.
-      const directClauses = Array.from(directPrefixes).map(() => 'im_conversation_id LIKE ?');
+      // Legacy account-less groups are filtered by the caller using the agent
+      // binding. DSH rows already identify their bot in the platform column.
+      const directClauses = Array.from(directPrefixes).map(() => 'instr(lower(im_conversation_id), lower(?)) = 1');
+      const scopePlaceholders = Array.from(scopedPlatforms).map(() => '?');
       query = `SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at
         FROM im_session_mappings
-        WHERE platform = ?
-          AND (${directClauses.join(' OR ')} OR im_conversation_id LIKE 'group:%')
+        WHERE (platform = ? AND (${directClauses.join(' OR ')} OR im_conversation_id LIKE 'group:%'))
+          OR platform IN (${scopePlaceholders.join(', ')})
         ORDER BY last_active_at DESC`;
-      params = [platform, ...Array.from(directPrefixes).map((prefix) => `${prefix}:%`)];
+      params = [platform, ...Array.from(directPrefixes).map((prefix) => `${prefix}:`), ...scopedPlatforms];
     } else if (platform) {
       query =
-        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE platform = ? ORDER BY last_active_at DESC';
-      params = [platform];
+        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE platform = ? OR platform GLOB ? ORDER BY last_active_at DESC';
+      params = [platform, `${platform}:*`];
     } else {
       query =
         'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings ORDER BY last_active_at DESC';

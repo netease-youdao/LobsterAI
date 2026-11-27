@@ -1,6 +1,13 @@
 import type Database from 'better-sqlite3';
 
-import { parseManagedSessionKey } from './openclawChannelSessionSync';
+function parseManagedSessionKey(sessionKey: string): { agentId: string; sessionId: string } | null {
+  const trimmed = sessionKey.trim();
+  const match = /^agent:([^:]+):lobsterai:(.+)$/.exec(trimmed);
+  if (match) {
+    return { agentId: match[1], sessionId: match[2] };
+  }
+  return null;
+}
 
 const MAX_PARENT_LOOKUP_DEPTH = 16;
 

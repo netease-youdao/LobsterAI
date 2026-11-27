@@ -1,4 +1,3 @@
-import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useMemo, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -14,7 +13,6 @@ import {
   getConsolidatedItemKey,
   getLiveActivityWindow,
   isActivityItemLive,
-  isToolGroupSettled,
 } from './messageDisplayUtils';
 
 /**
@@ -28,7 +26,7 @@ import {
  * A finished run — one followed by reply text, or any run once the turn is
  * done — folds into a single summary line ("运行了 3 个命令、读取了 2 个
  * 文件") that opens back onto its step lines; a lone step keeps its own
- * line. File changes have a visible detail action; failed file changes
+ * line. File changes carry a visible fold arrow; failed file changes
  * also surface in the summary so they cannot read as successful edits.
  */
 const ActivityGroupBlock: React.FC<{
@@ -54,12 +52,6 @@ const ActivityGroupBlock: React.FC<{
   const fileSteps = foldedItems.filter((item) => getActivityStepKind(item) === ActivityStepKind.Edit);
   const hasFileError = fileSteps.some((item) => item.type === 'tool_group'
     && Boolean(item.group.toolResult?.metadata?.isError || item.group.toolResult?.metadata?.error));
-  const hasCompletedFileChange = fileSteps.some((item) => item.type === 'tool_group'
-    && isToolGroupSettled(item.group)
-    && !item.group.toolResult?.metadata?.isError && !item.group.toolResult?.metadata?.error);
-  const detailLabel = isExpanded ? 'coworkActivityHideDetails'
-    : hasFileError ? (hasCompletedFileChange ? 'coworkActivityViewDetails' : 'coworkActivityViewError')
-      : hasCompletedFileChange ? 'coworkActivityViewChanges' : 'coworkActivityViewDetails';
 
   const lastEntry = entries[entries.length - 1];
   // Only the running turn's tail run has live steps; its last step stops
@@ -117,14 +109,7 @@ const ActivityGroupBlock: React.FC<{
               label={i18nService.t(earlierLabelKey).replace('{count}', String(earlierStepCount))}
               isExpanded={isEarlierExpanded}
               onToggle={handleEarlierToggle}
-              trailing={(
-                <ChevronRightIcon
-                  className={`h-[0.9em] w-[0.9em] flex-shrink-0 transition-transform duration-200 ${
-                    isEarlierExpanded ? 'rotate-90' : ''
-                  }`}
-                  aria-hidden="true"
-                />
-              )}
+              trailing={<ActivityDetailDisclosure isExpanded={isEarlierExpanded} />}
             />
             {isEarlierExpanded && (
               <div className="ml-[0.5em] mt-1 space-y-1 border-l border-border pl-3 text-sm" data-activity-folded-steps>
@@ -149,7 +134,7 @@ const ActivityGroupBlock: React.FC<{
             isExpanded={isExpanded}
             onToggle={handleToggle}
             trailing={fileSteps.length > 0 && (
-              <ActivityDetailDisclosure label={i18nService.t(detailLabel)} isExpanded={isExpanded} />
+              <ActivityDetailDisclosure isExpanded={isExpanded} />
             )}
           />
           {isExpanded && (

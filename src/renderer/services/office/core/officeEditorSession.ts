@@ -19,6 +19,9 @@ export interface OfficeSessionOptions {
   logTag: string;
 }
 
+/** A freshly initialized session does not need an immediate redundant disk refresh on first mount. */
+const INITIAL_MOUNT_REFRESH_GRACE_MS = 2000;
+
 /**
  * One open file. The live editor sits in a host element that moves between the visible panel and
  * an offscreen parking area, so switching views never reloads it or loses its undo history.
@@ -30,6 +33,8 @@ export abstract class OfficeEditorSession<TInfo extends OfficePackageInfo> imple
   readonly aliases = new Set<string>();
   mounted = false;
   private initialization?: Promise<void>;
+  private initializedAt = 0;
+  private mountCount = 0;
 
   protected constructor(file: OfficeOpenResult<TInfo>, protected readonly context: OfficeSessionContext<TInfo>, options: OfficeSessionOptions) {
     this.host.className = options.hostClassName;
@@ -51,12 +56,20 @@ export abstract class OfficeEditorSession<TInfo extends OfficePackageInfo> imple
   }
 
   initialize(): Promise<void> {
-    this.initialization ??= this.document.initialize();
+    this.initialization ??= this.document.initialize().then(() => {
+      this.initializedAt = Date.now();
+    });
     return this.initialization;
+  }
+
+  /** Whether mounting the session should re-read disk (skipped once right after initial open). */
+  shouldRefreshOnMount(): boolean {
+    return this.mountCount > 0 || this.initializedAt === 0 || Date.now() - this.initializedAt >= INITIAL_MOUNT_REFRESH_GRACE_MS;
   }
 
   /** Shows the editor in `container`; the returned function parks it again and saves. */
   mount(container: HTMLElement): () => void {
+    this.mountCount += 1;
     this.mounted = true;
     container.appendChild(this.host);
     this.context.scheduleEviction();

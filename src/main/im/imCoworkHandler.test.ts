@@ -2,6 +2,10 @@ import EventEmitter from 'node:events';
 
 import { expect, test, vi } from 'vitest';
 
+import {
+  DSH_APPROVAL_REQUEST_ID_PREFIX,
+  DSH_QUESTION_REQUEST_ID_PREFIX,
+} from '../../shared/dshEngine/hostConstants';
 import { IMCoworkHandler } from './imCoworkHandler';
 
 class FakeRuntime extends EventEmitter {
@@ -304,6 +308,52 @@ test('denies IM session permission requests when superseded or after 60s', () =>
       { requestId: 'request-2', result: { behavior: 'deny', message: 'Permission request timed out after 60s' } },
     ]);
 
+    handler.destroy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('ignores DSH approval and question requests so they do not time out at 60s', () => {
+  vi.useFakeTimers();
+  try {
+    const { runtime, handler, sessionId } = createRelayFixture();
+
+    runtime.emit('permissionRequest', sessionId, {
+      requestId: `${DSH_APPROVAL_REQUEST_ID_PREFIX}req-1`,
+      toolName: 'bash',
+      toolInput: { command: 'rm -rf ./tmp' },
+    });
+    runtime.emit('permissionRequest', sessionId, {
+      requestId: `${DSH_QUESTION_REQUEST_ID_PREFIX}q-1`,
+      toolName: 'AskUserQuestion',
+      toolInput: {},
+    });
+
+    vi.advanceTimersByTime(5 * 60_000);
+
+    expect(runtime.permissionResponses).toEqual([]);
+    handler.destroy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('cancels legacy permission timeout when permissionResolved is emitted', () => {
+  vi.useFakeTimers();
+  try {
+    const { runtime, handler, sessionId } = createRelayFixture();
+
+    runtime.emit('permissionRequest', sessionId, {
+      requestId: 'legacy-request-1',
+      toolName: 'plugin',
+      toolInput: {},
+    });
+    runtime.emit('permissionResolved', sessionId, 'legacy-request-1');
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(runtime.permissionResponses).toEqual([]);
     handler.destroy();
   } finally {
     vi.useRealTimers();

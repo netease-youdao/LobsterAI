@@ -155,8 +155,22 @@ describe('custom provider OpenAI API mode', () => {
   test('omits the default mode so older strict importers still accept the file', async () => {
     const source = providers();
     source.custom_0 = { ...source.custom_0, openaiApiMode: OpenAIApiMode.ChatCompletions };
+    source[ProviderName.OpenAI] = { ...source[ProviderName.OpenAI], openaiApiMode: OpenAIApiMode.Responses };
     const json = await buildProvidersExport(source);
     expect(JSON.parse(json).providers.custom_0).not.toHaveProperty('openaiApiMode');
+    expect(JSON.parse(json).providers[ProviderName.OpenAI]).not.toHaveProperty('openaiApiMode');
+  });
+
+  test('exports non-default Chat Completions mode for built-in OpenAI and restores it on import', async () => {
+    const source = providers();
+    source[ProviderName.OpenAI] = {
+      ...source[ProviderName.OpenAI],
+      openaiApiMode: OpenAIApiMode.ChatCompletions,
+    };
+    const json = await buildProvidersExport(source);
+    expect(JSON.parse(json).providers[ProviderName.OpenAI].openaiApiMode).toBe(OpenAIApiMode.ChatCompletions);
+    const restored = await importProviders(parseProvidersImport(json), {});
+    expect(restored[ProviderName.OpenAI].openaiApiMode).toBe(OpenAIApiMode.ChatCompletions);
   });
 
   test('importing a Chat Completions export clears an existing Responses mode', async () => {

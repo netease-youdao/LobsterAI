@@ -665,22 +665,23 @@ const baseTheme = EditorView.theme({
   '.cm-search-custom': {
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: '4px',
     padding: '5px 10px',
     borderBottom: '1px solid var(--lobster-border)',
     background: 'var(--lobster-surface-raised)',
     fontFamily: "'SF Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace",
-    fontSize: 'var(--lobster-code-font-size)',
+    fontSize: 'var(--lobster-text-xs)',
   },
   '.cm-search-input': {
     flex: '0 0 160px',
-    height: '26px',
-    padding: '0 8px',
+    minHeight: '26px',
+    padding: '3px 8px',
     borderRadius: '5px',
     border: '1px solid var(--lobster-border)',
     background: 'var(--lobster-surface)',
     color: 'var(--lobster-foreground)',
-    fontSize: 'var(--lobster-code-font-size)',
+    fontSize: 'var(--lobster-text-xs)',
     outline: 'none',
   },
   '.cm-search-input:focus': {
@@ -689,7 +690,7 @@ const baseTheme = EditorView.theme({
   '.cm-search-count': {
     flex: '0 0 auto',
     minWidth: '36px',
-    fontSize: 'calc(var(--lobster-code-font-size) - 1px)',
+    fontSize: 'var(--lobster-text-xs)',
     color: 'var(--lobster-text-secondary)',
     textAlign: 'center',
     fontVariantNumeric: 'tabular-nums',
@@ -726,12 +727,12 @@ const baseTheme = EditorView.theme({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '4px',
-    height: '26px',
-    padding: '0 6px',
+    minHeight: '26px',
+    padding: '3px 6px',
     borderRadius: '5px',
     border: '1px solid transparent',
-    fontSize: 'var(--lobster-code-font-size)',
-    lineHeight: '1',
+    fontSize: 'var(--lobster-text-xs)',
+    lineHeight: '1.2',
     color: 'var(--lobster-text-secondary)',
     cursor: 'pointer',
     userSelect: 'none',
@@ -1579,6 +1580,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, inline
       <div
         className="flex h-9 items-center justify-between gap-2 pl-3.5 pr-1.5 text-xs"
         data-cowork-search-exclude="true"
+        data-copy-exclude="true"
       >
         <span className="min-w-0 truncate font-mono text-muted">{displayLang}</span>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -1668,6 +1670,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, inline
         ) : (
           <div className="m-0 overflow-x-auto text-code">
             <code
+              data-code-block="true"
               className={`block px-3.5 pb-3 pt-0.5 font-mono text-foreground/90 ${
                 wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre w-max min-w-full'
               }`}

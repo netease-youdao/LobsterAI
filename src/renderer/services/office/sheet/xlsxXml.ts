@@ -129,6 +129,29 @@ export function setXmlAttributes(open: string, changes: Record<string, string | 
   return `${head}${rewritten.replace(/\s+$/, '')}${selfClosing ? '/>' : '>'}`;
 }
 
+/** Namespace prefix bound to `uri` on an opening tag, e.g. `r` for `xmlns:r="…"`. */
+export function namespacePrefixFor(open: string, uri: string): string | undefined {
+  for (const [key, value] of xmlAttributes(open)) {
+    if (key.startsWith('xmlns:') && value === uri) return key.slice(6);
+  }
+  return undefined;
+}
+
+/**
+ * Ensure `prefix` is bound to `uri` on the first `<local>` element of `xml`.
+ * Leaves `xml` unchanged when `prefix` is already bound to `uri` there, and
+ * refuses to overwrite when `prefix` is bound to a different URI.
+ */
+export function ensureXmlNamespace(xml: string, local: string, prefix: string, uri: string): { xml: string; bound: boolean } {
+  const root = firstXmlElement(xml, local);
+  if (!root) return { xml, bound: false };
+  const existing = xmlAttributes(root.open).get(`xmlns:${prefix}`);
+  if (existing === uri) return { xml, bound: true };
+  if (existing !== undefined) return { xml, bound: false };
+  const updated = setXmlAttributes(root.open, { [`xmlns:${prefix}`]: uri });
+  return { xml: xml.slice(0, root.start) + updated + xml.slice(root.start + root.open.length), bound: true };
+}
+
 /** Any tag, comment, CDATA section or processing instruction: group 1 is `/` for closing tags. */
 const TAG = new RegExp(`<!--[\\s\\S]*?-->|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>|<\\?[\\s\\S]*?\\?>|<(\\/?)(${NAME}([A-Za-z_][\\w.-]*))${ATTRIBUTES}(\\/?)>`, 'g');
 

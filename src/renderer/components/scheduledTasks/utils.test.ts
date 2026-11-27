@@ -14,6 +14,14 @@ import {
   TaskDisplayStatus,
 } from './utils';
 
+test('matches saved Feishu topics by exact native identity even if the reply anchor changes', () => {
+  const a = 'oc_Chat#__feishu_reply_to=om_First&__feishu_thread_id=omt_A';
+  expect(conversationOptionMatchesValue('feishu', a, 'chat:oc_Chat#__feishu_reply_to=om_Next&__feishu_thread_id=omt_A')).toBe(true);
+  expect(conversationOptionMatchesValue('feishu', a, 'group:oc_Chat:thread:om_First')).toBe(true);
+  expect(conversationOptionMatchesValue('feishu', a, 'group:oc_Chat:thread:omt_a')).toBe(false);
+  expect(conversationOptionMatchesValue('feishu', a, 'oc_Chat')).toBe(false);
+});
+
 function makeTask(overrides: {
   enabled?: boolean;
   runningAtMs?: number | null;

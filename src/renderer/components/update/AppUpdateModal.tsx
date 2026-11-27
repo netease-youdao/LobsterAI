@@ -1,4 +1,5 @@
-import React from 'react';
+import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useId } from 'react';
 
 import { type AppUpdateRuntimeState, AppUpdateStatus, isManualDownloadUrl } from '../../../shared/appUpdate/constants';
 import { i18nService } from '../../services/i18n';
@@ -13,6 +14,11 @@ interface AppUpdateModalProps {
   onRetry: () => void;
 }
 
+const SECONDARY_BUTTON_CLASS_NAME =
+  'rounded-xl border border-foreground/15 bg-surface px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
+const PRIMARY_BUTTON_CLASS_NAME =
+  'rounded-xl bg-action px-4 py-2 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
+
 /**
  * Release-notes dialog. Confirming from "available" starts a silent background
  * download; confirming from "ready" installs and restarts. A download that is
@@ -24,12 +30,15 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   onCancel,
   onRetry,
 }) => {
+  const titleId = useId();
   const updateInfo = updateState.info;
   if (!updateInfo) return null;
 
   const { latestVersion, date, changeLog, url } = updateInfo;
   const lang = i18nService.getLanguage();
   const currentLog = changeLog?.[lang] ?? { title: '', content: [] };
+  const releaseNotes = currentLog.content.filter((item) => item.trim().length > 0);
+  const hasReleaseNotesSection = Boolean(currentLog.title.trim()) || releaseNotes.length > 0;
   const isManualUrl = isManualDownloadUrl(url);
   const isInstalling = updateState.status === AppUpdateStatus.Installing;
   const canDismiss = !isInstalling;
@@ -38,6 +47,7 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   // A failed install keeps the verified file and returns to Ready with an
   // error message, so retrying installs the existing file without re-downloading.
   const isInstallError = canInstall && updateState.errorMessage != null;
+  const hasFailure = isError || isInstallError;
   const isDownloading = updateState.status === AppUpdateStatus.Downloading || updateState.status === AppUpdateStatus.Checking;
   const showInfoFooter = updateState.status === AppUpdateStatus.Available;
   const rawPercent = updateState.progress?.percent;
@@ -63,158 +73,198 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         ? i18nService.t('updateRetry')
         : i18nService.t('updateAvailableConfirm');
 
+  const statusDotTone = hasFailure
+    ? 'bg-destructive ring-destructive/15'
+    : canInstall || isInstalling
+      ? 'bg-emerald-500 ring-emerald-500/15'
+      : 'bg-primary ring-primary/15';
+
   return (
     <Modal
       onClose={canDismiss ? onCancel : () => {}}
       onEscape={canDismiss ? onCancel : undefined}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
-      className="modal-content w-full max-w-md mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop px-4"
+      className="modal-content w-full max-w-[440px] overflow-hidden rounded-2xl border border-border bg-surface shadow-modal"
     >
-      <div className="px-5 pt-5 pb-4">
-        <h3 className={`text-base font-semibold ${isError || isInstallError ? 'text-red-500 dark:text-red-400' : 'text-foreground'}`}>
-          {title}
-        </h3>
-        <p className="mt-1.5 text-xs text-secondary">
-          v{latestVersion}{date ? ` · ${date}` : ''}
-        </p>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="px-6 pt-5 pb-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                {hasFailure ? (
+                  <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+                ) : (
+                  <span
+                    className={`inline-flex h-2 w-2 shrink-0 rounded-full ring-[3px] ${statusDotTone}`}
+                    aria-hidden="true"
+                  />
+                )}
+                <h3 id={titleId} className="text-base font-semibold leading-6 text-foreground">
+                  {title}
+                </h3>
+              </div>
+              <p className="mt-1 text-xs tabular-nums text-secondary">
+                v{latestVersion}{date ? ` · ${date}` : ''}
+              </p>
+            </div>
+            {canDismiss && (
+              <button
+                type="button"
+                onClick={onCancel}
+                aria-label={i18nService.t('close')}
+                title={i18nService.t('close')}
+                className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
+                <XMarkIcon className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+          </div>
 
-        {currentLog.title && (
-          <p className="mt-3 text-sm font-medium text-foreground">
-            {currentLog.title}
-          </p>
-        )}
-
-        {currentLog.content.length > 0 && (
-          <ul className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pl-2">
-            {currentLog.content.map((item, index) => (
-              <li key={index} className="flex items-start gap-2 text-sm text-secondary">
-                <span className="mt-2 h-1 w-1 flex-shrink-0 rounded-full bg-gray-400 dark:bg-gray-500" />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {isDownloading && (
-          <div className="mt-4">
-            <div className="h-2 rounded-full bg-primary/20 overflow-hidden">
-              {percent != null ? (
-                <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
-                  style={{ width: `${percent}%` }}
-                />
-              ) : (
-                <div className="h-full bg-primary/60 rounded-full animate-pulse" style={{ width: '100%' }} />
+          {hasReleaseNotesSection && (
+            <div className="mt-4 rounded-xl border border-border/70 bg-surface-raised/60 px-4 py-3">
+              {currentLog.title.trim() && (
+                <p className="text-xs font-medium text-foreground">
+                  {currentLog.title}
+                </p>
+              )}
+              {releaseNotes.length > 0 && (
+                <ul className={`${currentLog.title.trim() ? 'mt-2' : ''} max-h-44 space-y-1.5 overflow-y-auto pr-1`}>
+                  {releaseNotes.map((item, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm leading-relaxed text-secondary">
+                      <span className="mt-[9px] h-1 w-1 shrink-0 rounded-full bg-muted" aria-hidden="true" />
+                      <span className="min-w-0 break-words">{item}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
+          )}
 
-            <div className="mt-2 flex items-center justify-between gap-3 text-xs text-secondary tabular-nums">
-              <span className="min-w-0 truncate">
-                {formatTransferProgress(updateState.progress) ?? i18nService.t('updateDownloadingPill')}
-              </span>
-              {percent != null && <span className="shrink-0">{percent}%</span>}
+          {isDownloading && (
+            <div className="mt-4">
+              <div className="h-1.5 overflow-hidden rounded-full bg-surface-raised">
+                {percent != null ? (
+                  <div
+                    className="h-full rounded-full bg-foreground transition-all duration-300"
+                    style={{ width: `${percent}%` }}
+                  />
+                ) : (
+                  <div
+                    className="h-full rounded-full bg-foreground/60 animate-pulse motion-reduce:animate-none"
+                    style={{ width: '100%' }}
+                  />
+                )}
+              </div>
+
+              <div className="mt-2 flex items-center justify-between gap-3 text-xs tabular-nums text-secondary">
+                <span className="min-w-0 truncate">
+                  {formatTransferProgress(updateState.progress) ?? i18nService.t('updateDownloadingPill')}
+                </span>
+                {percent != null && <span className="shrink-0">{percent}%</span>}
+              </div>
             </div>
+          )}
+
+          {updateState.installIncomplete && canInstall && (
+            <p className="mt-3.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3.5 py-2.5 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+              {i18nService.t('updateInstallIncomplete')}
+            </p>
+          )}
+
+          {updateState.errorMessage && (
+            <p className="mt-3.5 break-words rounded-xl border border-destructive/25 bg-destructive/[0.06] px-3.5 py-2.5 text-xs leading-relaxed text-foreground">
+              {formatAppUpdateError(updateState.errorMessage)}
+            </p>
+          )}
+        </div>
+
+        {showInfoFooter && (
+          <div className="flex items-center justify-end gap-2.5 px-6 pb-5 pt-0.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className={SECONDARY_BUTTON_CLASS_NAME}
+            >
+              {i18nService.t('updateAvailableCancel')}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className={PRIMARY_BUTTON_CLASS_NAME}
+            >
+              {confirmLabel}
+            </button>
           </div>
         )}
 
-        {updateState.installIncomplete && canInstall && (
-          <p className="mt-4 text-sm text-amber-600 dark:text-amber-400">
-            {i18nService.t('updateInstallIncomplete')}
-          </p>
+        {isDownloading && (
+          <div className="flex items-center justify-end px-6 pb-5 pt-0.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className={SECONDARY_BUTTON_CLASS_NAME}
+            >
+              {i18nService.t('updateDownloadingDismiss')}
+            </button>
+          </div>
         )}
 
-        {updateState.errorMessage && (
-          <p className="mt-4 text-sm text-secondary break-words">
-            {formatAppUpdateError(updateState.errorMessage)}
-          </p>
+        {canInstall && (
+          <div className="flex items-center justify-end gap-2.5 px-6 pb-5 pt-0.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className={SECONDARY_BUTTON_CLASS_NAME}
+            >
+              {i18nService.t('updateReadyLater')}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className={PRIMARY_BUTTON_CLASS_NAME}
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        )}
+
+        {isInstalling && (
+          <div className="flex flex-col items-center gap-3 px-6 pb-5 pt-1">
+            <svg
+              className="h-7 w-7 animate-spin text-foreground motion-reduce:animate-none"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3.5" />
+              <path className="opacity-85" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <p className="text-center text-sm text-secondary">
+              {i18nService.t('updateInstallingHint')}
+            </p>
+          </div>
+        )}
+
+        {isError && (
+          <div className="flex items-center justify-end gap-2.5 px-6 pb-5 pt-0.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className={SECONDARY_BUTTON_CLASS_NAME}
+            >
+              {i18nService.t('updateAvailableCancel')}
+            </button>
+            <button
+              type="button"
+              onClick={onRetry}
+              className={PRIMARY_BUTTON_CLASS_NAME}
+            >
+              {confirmLabel}
+            </button>
+          </div>
         )}
       </div>
-
-      {showInfoFooter && (
-        <div className="px-5 pb-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-          >
-            {i18nService.t('updateAvailableCancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="px-3 py-1.5 text-sm rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      )}
-
-      {isDownloading && (
-        <div className="px-5 pb-5 flex items-center justify-end">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-          >
-            {i18nService.t('updateDownloadingDismiss')}
-          </button>
-        </div>
-      )}
-
-      {canInstall && (
-        <div className="px-5 pb-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-          >
-            {i18nService.t('updateReadyLater')}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="px-3 py-1.5 text-sm rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      )}
-
-      {isInstalling && (
-        <div className="px-5 pb-5 flex flex-col items-center gap-3">
-          <svg
-            className="animate-spin h-8 w-8 text-primary"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <p className="text-sm text-secondary text-center">
-            {i18nService.t('updateInstallingHint')}
-          </p>
-        </div>
-      )}
-
-      {isError && (
-        <div className="px-5 pb-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-          >
-            {i18nService.t('updateAvailableCancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onRetry}
-            className="px-3 py-1.5 text-sm rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      )}
     </Modal>
   );
 };

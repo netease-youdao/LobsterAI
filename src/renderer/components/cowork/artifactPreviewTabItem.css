@@ -7,28 +7,28 @@
    2. Once a tab is too narrow for a readable label (container query) it collapses to its
       icon, and the close button takes the icon's place on hover, so every tab stays
       closable without scrolling. */
-.artifact-preview-tab:is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__activate {
+.artifact-preview-tab:not([data-artifact-preview-renaming="true"]):is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__activate {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent calc(100% - 22px));
   mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent calc(100% - 22px));
 }
 
 @container (max-width: 63px) {
-  .artifact-preview-tab .artifact-preview-tab__label {
+  .artifact-preview-tab:not([data-artifact-preview-renaming="true"]) .artifact-preview-tab__label {
     display: none;
   }
-  .artifact-preview-tab .artifact-preview-tab__activate,
-  .artifact-preview-tab:is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__activate {
+  .artifact-preview-tab:not([data-artifact-preview-renaming="true"]) .artifact-preview-tab__activate,
+  .artifact-preview-tab:not([data-artifact-preview-renaming="true"]):is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__activate {
     justify-content: center;
     padding-inline: 0;
     -webkit-mask-image: none;
     mask-image: none;
   }
-  .artifact-preview-tab .artifact-preview-tab__close {
+  .artifact-preview-tab:not([data-artifact-preview-renaming="true"]) .artifact-preview-tab__close {
     inset: 0;
     margin: auto;
     transform: none;
   }
-  .artifact-preview-tab:is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__icon {
+  .artifact-preview-tab:not([data-artifact-preview-renaming="true"]):is(:hover, :has(.artifact-preview-tab__close:focus-visible)) .artifact-preview-tab__icon {
     visibility: hidden;
   }
 }

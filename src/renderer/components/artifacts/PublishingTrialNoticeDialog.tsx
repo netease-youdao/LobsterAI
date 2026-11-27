@@ -188,7 +188,7 @@ const PublishingTrialNoticeDialog: React.FC<PublishingTrialNoticeDialogProps> = 
             }}
             disabled={isTrialPolicyLoading}
             aria-busy={isTrialPolicyLoading}
-            className="h-11 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-60"
+            className="h-11 rounded-lg bg-action px-5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-wait disabled:opacity-60"
           >
             {t(isShare ? 'publishingTrialContinueShare' : 'publishingTrialContinueSite')}
           </button>

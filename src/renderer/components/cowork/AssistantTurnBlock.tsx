@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -31,18 +31,23 @@ import type { RootState } from '../../store';
 import type { LowCreditPurchaseOffer } from '../../store/slices/authSlice';
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
-import { revealLocalPathWithToast } from '../../utils/localFileActions';
-import { ArtifactPreviewCard } from '../artifacts';
+import { ArtifactPreviewCard, InlineVideoGallery } from '../artifacts';
 import InlineImageGallery from '../artifacts/imageEditor/InlineImageGallery';
+import { partitionTurnMediaForDisplay } from '../artifacts/inlineVideoLayout';
 import AbnormalIcon from '../icons/AbnormalIcon';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
+import NeteaseMailToolResult, { buildNeteaseMailPresentations } from '../mail/NeteaseMailToolResult';
 import MarkdownContent from '../MarkdownContent';
 import PurchaseOfferCountdown from '../PurchaseOfferCountdown';
 import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
-import AssistantMessageItem from './AssistantMessageItem';
+import AssistantMessageItem, {
+  AssistantMessageMeta,
+  getAssistantMessageCopyContent,
+  getGoalCompletionLabel,
+} from './AssistantMessageItem';
 import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
@@ -82,6 +87,7 @@ import {
   getTurnEndTimestamp,
   getTurnReplyMessageIds,
   getTurnStartTimestamp,
+  getTurnTrailingReplyMessageIds,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
@@ -92,8 +98,8 @@ import {
   isDuplicateGeneratedVideoAssistantMessage,
   isModelChangeMessage,
   isModelReconnectMessage,
+  resolveTurnModelMetadata,
   type ToolGroupItem,
-  withTurnModelPreset,
 } from './messageDisplayUtils';
 import ModelChangeDivider from './ModelChangeDivider';
 import ModelReconnectStatusLine from './ModelReconnectStatusLine';
@@ -425,7 +431,7 @@ const CreditQuotaExhaustedBanner: React.FC<{ offer: LowCreditPurchaseOffer | nul
         <button
           type="button"
           onClick={handlePurchase}
-          className="ml-2 inline-flex h-8 shrink-0 items-center justify-center rounded-full bg-foreground px-5 text-xs font-medium text-background transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="ml-2 inline-flex h-8 shrink-0 items-center justify-center rounded-full bg-action px-5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           {i18nService.t('coworkCreditQuotaBannerAction')}
         </button>
@@ -504,37 +510,6 @@ const SystemErrorTechnicalDetail: React.FC<{ detail: CoworkErrorDetail }> = ({ d
   );
 };
 
-// ── VideoArtifactPathList ────────────────────────────────────────────────────
-
-const VideoArtifactPathList: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) => {
-  if (artifacts.length === 0) return null;
-
-  const getDisplayPath = (filePath: string): string => {
-    const lastSlash = filePath.lastIndexOf('/');
-    return lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
-  };
-
-  return (
-    <div className="space-y-1">
-      {artifacts.map(artifact => (
-        <div
-          key={artifact.id}
-          className="flex items-center gap-2 text-xs text-secondary"
-        >
-          <span className="truncate">{getDisplayPath(artifact.filePath!)}</span>
-          <button
-            className="flex items-center gap-1 text-primary hover:underline flex-shrink-0"
-            onClick={() => void revealLocalPathWithToast(artifact.filePath!)}
-          >
-            <FolderIcon className="h-3.5 w-3.5" />
-            <span>{i18nService.t('showInFolder')}</span>
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 // ── AssistantTurnBlock ───────────────────────────────────────────────────────
 
 const AssistantTurnBlock: React.FC<{
@@ -560,10 +535,10 @@ const AssistantTurnBlock: React.FC<{
   awaitingRunStart?: boolean;
   showCopyButtons?: boolean;
   enableMessageSpeech?: boolean;
+  /** Keep the reply meta row minimal (copy + speech + overflow popover for time/model/credits). */
+  compactMeta?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
-  modelSwitchNoticeMessageId?: string | null;
-  onDismissModelSwitchNotice?: () => void;
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
@@ -593,10 +568,9 @@ const AssistantTurnBlock: React.FC<{
   awaitingRunStart = false,
   showCopyButtons = true,
   enableMessageSpeech = false,
+  compactMeta = false,
   completedGoal,
   hiddenSystemMessageId,
-  modelSwitchNoticeMessageId,
-  onDismissModelSwitchNotice,
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
@@ -623,19 +597,25 @@ const AssistantTurnBlock: React.FC<{
     () => consolidateMediaPolling(visibleAssistantItems, taskPresentations),
     [visibleAssistantItems, taskPresentations],
   );
+  const mailPresentations = useMemo(() => buildNeteaseMailPresentations(consolidatedItems), [consolidatedItems]);
   const toolGroupOverrides = useMemo(() => {
     const overrides = new Map<string, React.ReactNode>();
-    if (!renderToolGroupOverride) return overrides;
     for (const item of consolidatedItems) {
       if (item.type !== 'tool_group') continue;
-      const override = renderToolGroupOverride(item.group);
+      const mail = mailPresentations.get(item.group.toolUse.id);
+      const override = renderToolGroupOverride?.(item.group)
+        ?? (mail ? <NeteaseMailToolResult group={item.group} presentation={mail} /> : null);
       if (override) overrides.set(item.group.toolUse.id, override);
     }
     return overrides;
-  }, [consolidatedItems, renderToolGroupOverride]);
+  }, [consolidatedItems, renderToolGroupOverride, mailPresentations]);
   const videoPathArtifacts = useMemo(
     () => getVideoPathArtifacts(artifacts),
     [artifacts],
+  );
+  const trailingReplyMessageIds = useMemo(
+    () => getTurnTrailingReplyMessageIds(turn),
+    [turn],
   );
   const artifactCards = useMemo(
     () => artifacts
@@ -650,13 +630,29 @@ const AssistantTurnBlock: React.FC<{
       : [],
     [artifacts, localServiceDirectory, turn],
   );
-  // Raster images are shown in the conversation itself; the remaining artifacts keep their file cards.
+  // Raster images and videos show inline in the conversation; the remaining artifacts keep their file cards.
   const imageArtifacts = useMemo(
     () => artifactCards.filter(artifact => artifact.type === ArtifactTypeValue.Image),
     [artifactCards],
   );
+  const videoArtifacts = useMemo(
+    () => artifactCards.filter(artifact => artifact.type === ArtifactTypeValue.Video),
+    [artifactCards],
+  );
+  const mediaPartition = useMemo(
+    () => partitionTurnMediaForDisplay({
+      videoArtifacts,
+      imageArtifacts,
+      rawArtifacts: artifacts ?? [],
+      turnItems: turn.assistantItems,
+      trailingReplyMessageIds,
+    }),
+    [artifacts, imageArtifacts, trailingReplyMessageIds, turn.assistantItems, videoArtifacts],
+  );
   const fileArtifactCards = useMemo(
-    () => artifactCards.filter(artifact => artifact.type !== ArtifactTypeValue.Image),
+    () => artifactCards.filter(artifact => (
+      artifact.type !== ArtifactTypeValue.Image && artifact.type !== ArtifactTypeValue.Video
+    )),
     [artifactCards],
   );
   const visibleArtifactCards = useMemo(() => {
@@ -700,31 +696,47 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
+  const hasTurnArtifacts = videoArtifacts.length > 0
+    || imageArtifacts.length > 0
+    || fileArtifactCards.length > 0;
+  const isRenderedAssistantReply = (message: CoworkMessage): boolean => {
+    if (message.metadata?.isThinking) return false;
+    if (isDuplicateGeneratedVideoAssistantMessage(message, videoPathArtifacts)) return false;
+    // A message that only carries MEDIA tokens has nothing to say: its images show in the turn's gallery.
+    const hasInlineImage = artifacts?.some(artifact => (
+      artifact.type === ArtifactTypeValue.Image && artifact.messageId === message.id
+    ));
+    if (hasInlineImage && !message.content.replace(/\s*MEDIA\s*/gi, '').trim()) return false;
+    return true;
+  };
   // Prefer the final visible text reply; interrupted turns may need a footer.
+  let finalTrailingReplyMessage: CoworkMessage | null = null;
   let turnUsageReplyId: string | null = null;
   for (let index = consolidatedItems.length - 1; index >= 0; index--) {
     const item = consolidatedItems[index];
     if (item.type === 'tool_group' || item.type === 'media_polling_group') break;
-    if (item.type !== 'assistant' || item.message.metadata?.isThinking
-      || isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) continue;
-    const hasInlineImage = artifacts?.some(artifact => artifact.type === 'image' && artifact.messageId === item.message.id);
-    if (hasInlineImage && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) continue;
-    const content = mapDisplayText ? mapDisplayText(item.message.content) : item.message.content;
-    if (hasText(getAssistantMessageDisplayText(content))) {
-      turnUsageReplyId = item.message.id;
-      break;
+    if (item.type !== 'assistant' || !isRenderedAssistantReply(item.message)) continue;
+    if (!finalTrailingReplyMessage) {
+      finalTrailingReplyMessage = item.message;
     }
+    if (turnUsageReplyId === null) {
+      const content = mapDisplayText ? mapDisplayText(item.message.content) : item.message.content;
+      if (hasText(getAssistantMessageDisplayText(content))) {
+        turnUsageReplyId = item.message.id;
+      }
+    }
+    if (finalTrailingReplyMessage && turnUsageReplyId !== null) break;
   }
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+  // Place result deliverables (files, images, videos) above the final reply's time/model/credits row.
+  const deferredReplyMetaMessage = showCopyButtons && hasTurnArtifacts && !trailingTurnUsageSlot
+    ? finalTrailingReplyMessage
+    : null;
 
   const renderSystemMessage = (message: CoworkMessage) => {
     if (isModelChangeMessage(message) && message.metadata?.modelChange) {
-      return (
-        <ModelChangeDivider
-          change={message.metadata.modelChange}
-          showNotice={message.id === modelSwitchNoticeMessageId}
-          onDismissNotice={onDismissModelSwitchNotice}
-        />
-      );
+      return <ModelChangeDivider change={message.metadata.modelChange} />;
     }
     if (message.id === hiddenSystemMessageId) {
       return null;
@@ -920,24 +932,18 @@ const AssistantTurnBlock: React.FC<{
         );
       }
 
+      if (!isRenderedAssistantReply(item.message)) {
+        return null;
+      }
+
       const hasToolGroupAfter = consolidatedItems
         .slice(index + 1)
         .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
       const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
+      const showInlineMeta = isLastAssistant && deferredReplyMetaMessage?.id !== item.message.id;
       const hasAssistantAfter = consolidatedItems
         .slice(index + 1)
         .some(laterItem => laterItem.type === 'assistant');
-      if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
-        return null;
-      }
-
-      // A message that only carries MEDIA tokens has nothing to say: its images show in the turn's gallery.
-      const hasMessageImages = artifacts?.some(a =>
-        a.type === ArtifactTypeValue.Image && a.messageId === item.message.id,
-      );
-      if (hasMessageImages && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
-        return null;
-      }
 
       return (
         <AssistantMessageItem
@@ -945,17 +951,19 @@ const AssistantTurnBlock: React.FC<{
           message={item.message}
           resolveLocalFilePath={resolveLocalFilePath}
           mapDisplayText={mapDisplayText}
-          showCopyButton={isLastAssistant}
-          enableMessageSpeech={enableMessageSpeech && isLastAssistant && planConfirmationMessageId !== item.message.id}
-          onFork={isLastAssistant ? onForkMessage : undefined}
-          turnMetadata={isLastAssistant
-            ? withTurnModelPreset(
+          showCopyButton={showInlineMeta}
+          enableMessageSpeech={enableMessageSpeech && showInlineMeta && planConfirmationMessageId !== item.message.id}
+          compactMeta={compactMeta}
+          onFork={showInlineMeta ? onForkMessage : undefined}
+          turnMetadata={showInlineMeta
+            ? resolveTurnModelMetadata(
               item.message.metadata as CoworkMessageMetadata,
               turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+              turnUsage,
             )
             : undefined}
-          completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
-          turnUsageSlot={item.message.id === turnUsageReplyId ? turnUsageSlot : null}
+          completedGoal={showInlineMeta && !hasAssistantAfter ? completedGoal : null}
+          turnUsageSlot={showInlineMeta && item.message.id === turnUsageReplyId ? turnUsageSlot : null}
           planConfirmationMessageId={planConfirmationMessageId}
           onConfirmPlan={onConfirmPlan}
           onAdjustPlan={onAdjustPlan}
@@ -1107,10 +1115,7 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
-  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
-
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
+  if (renderChunks.length === 0 && !showActivityIndicator && !hasTurnArtifacts && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1137,6 +1142,10 @@ const AssistantTurnBlock: React.FC<{
                   )}
                 />
                 {isProcessExpanded && processChunks.map((chunk, index) => renderChunk(chunk, index))}
+                {/* Mail cards and quota notices remain visible when the process is folded. */}
+                {!isProcessExpanded && processChunks.map((chunk, index) => chunk.kind === 'item'
+                  && chunk.item.type === 'tool_group' && mailPresentations.has(chunk.item.group.toolUse.id)
+                  ? renderChunk(chunk, index) : null)}
                 {answerChunks.map((chunk, index) => renderChunk(chunk, answerStartIndex + index))}
               </>
             ) : (
@@ -1152,10 +1161,16 @@ const AssistantTurnBlock: React.FC<{
                 awaitingRunStart={awaitingRunStart}
               />
             )}
-            {artifacts && artifacts.length > 0 && (
+            {hasTurnArtifacts && (
               <div className="space-y-2 pt-1">
-                <VideoArtifactPathList artifacts={videoPathArtifacts} />
-                <InlineImageGallery artifacts={imageArtifacts} editable={!onOpenArtifactPreview} />
+                <InlineVideoGallery
+                  key={turn.id}
+                  videos={mediaPartition.primaryVideos}
+                  processVideos={mediaPartition.secondaryVideos}
+                  processImages={mediaPartition.secondaryImages}
+                  editable={!onOpenArtifactPreview}
+                />
+                <InlineImageGallery artifacts={mediaPartition.primaryImages} editable={!onOpenArtifactPreview} />
                 {fileArtifactCards.length > 0 && (
                   <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
                     <div className="divide-y divide-border">
@@ -1198,12 +1213,33 @@ const AssistantTurnBlock: React.FC<{
                 )}
               </div>
             )}
+            {deferredReplyMetaMessage && (
+              <AssistantMessageMeta
+                message={deferredReplyMetaMessage}
+                copyContent={getAssistantMessageCopyContent(
+                  mapDisplayText
+                    ? mapDisplayText(deferredReplyMetaMessage.content)
+                    : deferredReplyMetaMessage.content,
+                )}
+                turnMetadata={resolveTurnModelMetadata(
+                  deferredReplyMetaMessage.metadata as CoworkMessageMetadata,
+                  turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+                  turnUsage,
+                )}
+                turnUsageSlot={deferredReplyMetaMessage.id === turnUsageReplyId ? turnUsageSlot : null}
+                onFork={onForkMessage}
+                enableMessageSpeech={enableMessageSpeech && planConfirmationMessageId !== deferredReplyMetaMessage.id}
+                compactMeta={compactMeta}
+                goalCompletionLabel={getGoalCompletionLabel(completedGoal)}
+              />
+            )}
             {trailingTurnUsageSlot && (
               <AssistantTurnFooter
                 turn={turn}
                 turnUsageSlot={trailingTurnUsageSlot}
                 mapDisplayText={mapDisplayText}
                 onForkMessage={onForkMessage}
+                compactMeta={compactMeta}
               />
             )}
           </div>

@@ -6,9 +6,12 @@ import path from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const tar = require('tar');
-const { createSkillsPayloadFilter, listSkillDevOnlyPackages } = require('../scripts/skill-payload.cjs');
-const { packMultipleSources } = require('../scripts/pack-openclaw-tar.cjs');
+const { getFileMatchers, copyFiles } = require('app-builder-lib/out/fileMatcher');
+const builderConfig = require('../electron-builder.json');
+const {
+  configureWindowsSkillsPayload,
+  listSkillDevOnlyPackages,
+} = require('../scripts/skill-payload.cjs');
 
 const tempDirs: string[] = [];
 
@@ -64,14 +67,41 @@ test('lists only the packages a skill lockfile marks dev-only', () => {
   ]);
 });
 
-test('the Windows tar keeps skill runtime code and drops dev-only packages', () => {
+test('the Windows extraResources filter keeps skill runtime code and drops dev-only packages', async () => {
   const skills = fixture();
-  const output = path.join(tempDir(), 'win-resources.tar');
-  packMultipleSources([{ dir: skills, prefix: 'SKILLs', filter: createSkillsPayloadFilter(skills) }], output);
+  const winSkillsEntry = builderConfig.win.extraResources.find(
+    (entry: { to?: string }) => entry.to === 'SKILLs',
+  );
+  expect(winSkillsEntry).toBeDefined();
+
+  const context = {
+    packager: {
+      platformSpecificBuildOptions: {
+        extraResources: [{ ...winSkillsEntry, from: skills }],
+      },
+    },
+  };
+  configureWindowsSkillsPayload(context, skills);
+
+  const out = path.join(tempDir(), 'resources');
+  const matchers = getFileMatchers({}, 'extraResources', out, {
+    defaultSrc: tempDir(),
+    globalOutDir: out,
+    customBuildOptions: context.packager.platformSpecificBuildOptions,
+    macroExpander: (value: string) => value,
+  });
+  await copyFiles(matchers);
+
   const entries: string[] = [];
-  tar.list({ file: output, sync: true, onReadEntry: (entry: { path: string; type: string }) => {
-    if (entry.type === 'File') entries.push(entry.path);
-  } });
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else entries.push(path.relative(out, full).replace(/\\/g, '/'));
+    }
+  };
+  walk(out);
+
   expect(entries.sort()).toEqual([
     'SKILLs/email/node_modules/.package-lock.json',
     'SKILLs/email/node_modules/imap/lib/Connection.js',

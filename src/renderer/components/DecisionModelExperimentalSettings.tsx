@@ -3,14 +3,21 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   type DecisionModelApiKeys,
-  type DecisionModelConfigUpdate,
   type DecisionModelConfigView,
   DecisionModelErrorCode,
   DecisionModelProvider,
   type DecisionModelTestResult,
 } from '../../shared/decisionModel/constants';
+import { canSaveDecisionModelEndpoint } from '../../shared/decisionModel/endpoint';
 import { i18nService } from '../services/i18n';
 import TypeSafeIcon from './icons/providers/TypeSafeIcon';
+import {
+  type RegisterSettingsDirtyGuard,
+  SETTINGS_FORM_SAVED_RESET_MS,
+  SettingsFormFooterMode,
+  SettingsFormStatus,
+} from './settings/settingsDirtyGuard';
+import { SettingsFormFooter } from './settings/SettingsFormFooter';
 import {
   SETTINGS_ACTION_BUTTON_CLASS,
   SettingsCard,
@@ -52,7 +59,7 @@ const EXAMPLE_KEYS = ['decisionModelExample1', 'decisionModelExample2', 'decisio
 const LABEL_CLASS = 'block text-xs font-medium text-foreground';
 const FIELD_CLASS =
   'block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs';
-const ICON_BUTTON_CLASS = 'p-0.5 rounded text-secondary hover:text-primary transition-colors';
+const ICON_BUTTON_CLASS = 'p-0.5 rounded text-secondary hover:text-foreground transition-colors';
 
 interface DecisionModelDraft {
   enabled: boolean;
@@ -62,11 +69,7 @@ interface DecisionModelDraft {
 }
 
 interface DecisionModelExperimentalSettingsProps {
-  /**
-   * Unsaved edits. The Settings dialog owns them, so its Save button writes
-   * them in one go (restarting the engine at most once) and Cancel drops them.
-   */
-  draftRef: React.MutableRefObject<DecisionModelConfigUpdate | null>;
+  onRegisterDirtyGuard?: RegisterSettingsDirtyGuard;
 }
 
 const draftFromView = (view: DecisionModelConfigView): DecisionModelDraft => ({
@@ -78,11 +81,14 @@ const draftFromView = (view: DecisionModelConfigView): DecisionModelDraft => ({
 
 const draftApiKey = (draft: DecisionModelDraft): string => draft.apiKeys[draft.provider] ?? '';
 
-const isDraftDirty = (draft: DecisionModelDraft, saved: DecisionModelConfigView): boolean => (
-  draft.enabled !== saved.enabled
-  || draft.provider !== saved.provider
+const isConnectionDirty = (draft: DecisionModelDraft, saved: DecisionModelConfigView): boolean => (
+  draft.provider !== saved.provider
   || draft.endpoint.trim() !== saved.endpoint
   || PROVIDER_OPTIONS.some(({ value }) => (draft.apiKeys[value] ?? '').trim() !== (saved.apiKeys[value] ?? ''))
+);
+
+const isDraftDirty = (draft: DecisionModelDraft, saved: DecisionModelConfigView): boolean => (
+  draft.enabled !== saved.enabled || isConnectionDirty(draft, saved)
 );
 
 function describeTestResult(result: DecisionModelTestResult): string {
@@ -97,48 +103,103 @@ function describeTestResult(result: DecisionModelTestResult): string {
   return i18nService.t('decisionModelTestFailed').replace('{error}', reason);
 }
 
-export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperimentalSettingsProps> = ({ draftRef }) => {
+export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperimentalSettingsProps> = ({
+  onRegisterDirtyGuard,
+}) => {
   const [saved, setSaved] = useState<DecisionModelConfigView | null>(null);
   const [draft, setDraft] = useState<DecisionModelDraft | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<DecisionModelTestResult | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
+  const [formStatus, setFormStatus] = useState<SettingsFormStatus>(SettingsFormStatus.Idle);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const savedTimerRef = useRef<number | null>(null);
+
+  const clearSavedTimer = useCallback(() => {
+    if (savedTimerRef.current !== null) {
+      window.clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     void window.electron.decisionModel.getConfig()
       .then((view) => {
         if (!mountedRef.current) return;
+        const initialDraft = draftFromView(view);
         setSaved(view);
-        // Edits made before switching tabs survive until the dialog closes.
-        const restored = { ...draftFromView(view), ...draftRef.current };
-        setDraft(restored);
+        setDraft(initialDraft);
         // A working setup stays folded; one that still needs input opens.
-        setConfigOpen(Boolean(draftRef.current) || !draftApiKey(restored).trim());
+        setConfigOpen(!draftApiKey(initialDraft).trim() || !canSaveDecisionModelEndpoint(initialDraft, view.endpoint));
       })
       .catch(() => {
         // Bridge unavailable (old main process) — keep the card hidden.
       });
     return () => {
       mountedRef.current = false;
+      clearSavedTimer();
     };
-  }, [draftRef]);
+  }, [clearSavedTimer]);
+
+  const persistConfig = useCallback(async (candidate: DecisionModelDraft): Promise<boolean> => {
+    if (!saved || !canSaveDecisionModelEndpoint(candidate, saved.endpoint)) return false;
+    clearSavedTimer();
+    setFormStatus(SettingsFormStatus.Saving);
+    setSaveError(null);
+    try {
+      const nextView = await window.electron.decisionModel.saveConfig(candidate);
+      if (!mountedRef.current) return true;
+      setSaved(nextView);
+      setDraft(draftFromView(nextView));
+      setFormStatus(SettingsFormStatus.Saved);
+      savedTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) {
+          setFormStatus(SettingsFormStatus.Idle);
+        }
+        savedTimerRef.current = null;
+      }, SETTINGS_FORM_SAVED_RESET_MS);
+      return true;
+    } catch (error) {
+      if (mountedRef.current) {
+        setFormStatus(SettingsFormStatus.Error);
+        setSaveError(error instanceof Error ? error.message : i18nService.t('failedToSaveSettings'));
+      }
+      return false;
+    }
+  }, [clearSavedTimer, saved]);
 
   const updateDraft = useCallback((patch: Partial<DecisionModelDraft>) => {
     if (!draft) return;
+    clearSavedTimer();
     const next = { ...draft, ...patch };
-    draftRef.current = next;
     setDraft(next);
     setTestResult(null);
-  }, [draft, draftRef]);
+    setSaveError(null);
+    setFormStatus(saved && isDraftDirty(next, saved) ? SettingsFormStatus.Dirty : SettingsFormStatus.Idle);
+  }, [clearSavedTimer, draft, saved]);
 
   // Each provider keeps its own key, so switching providers never overwrites another one.
   const updateApiKey = useCallback((apiKey: string) => {
     if (!draft) return;
     updateDraft({ apiKeys: { ...draft.apiKeys, [draft.provider]: apiKey } });
   }, [draft, updateDraft]);
+
+  const handleDiscard = useCallback(() => {
+    if (!saved) return;
+    clearSavedTimer();
+    setDraft(draftFromView(saved));
+    setTestResult(null);
+    setSaveError(null);
+    setFormStatus(SettingsFormStatus.Idle);
+  }, [clearSavedTimer, saved]);
+
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (!draft) return true;
+    return persistConfig(draft);
+  }, [draft, persistConfig]);
 
   const handleTest = useCallback(async () => {
     if (!draft) return;
@@ -160,50 +221,115 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
     }
   }, [draft]);
 
+  const dirty = Boolean(saved && draft && isDraftDirty(draft, saved));
+  const invalidEndpoint = Boolean(saved && draft && !canSaveDecisionModelEndpoint(draft, saved.endpoint));
+
+  useEffect(() => {
+    if (!onRegisterDirtyGuard) return;
+    if (dirty) {
+      onRegisterDirtyGuard({
+        isDirty: true,
+        canSave: !invalidEndpoint,
+        save: handleSave,
+        discard: handleDiscard,
+      });
+    } else {
+      onRegisterDirtyGuard(null);
+    }
+    return () => {
+      onRegisterDirtyGuard(null);
+    };
+  }, [dirty, handleDiscard, handleSave, invalidEndpoint, onRegisterDirtyGuard]);
+
   if (!saved || !draft) return null;
 
   const apiKeyUrl = API_KEY_URLS[draft.provider];
   const apiKey = draftApiKey(draft);
   const needsApiKey = draft.enabled && !apiKey.trim();
-  const dirty = isDraftDirty(draft, saved);
+  const isSaving = formStatus === SettingsFormStatus.Saving;
   const providerLabelKey = PROVIDER_OPTIONS.find(option => option.value === draft.provider)?.labelKey;
   const connectionSummary = [
     providerLabelKey ? i18nService.t(providerLabelKey) : draft.provider,
     i18nService.t(apiKey.trim() ? 'decisionModelApiKeySet' : 'decisionModelErrorMissingApiKey'),
   ].join(' · ');
 
-  // Same precedence the old inline notes used: setup gaps first, then unsaved edits.
-  const statusBadge = needsApiKey
+  const resolvedFormStatus: SettingsFormStatus = isSaving
+    ? SettingsFormStatus.Saving
+    : formStatus === SettingsFormStatus.Error
+      ? SettingsFormStatus.Error
+      : dirty
+        ? SettingsFormStatus.Dirty
+        : formStatus === SettingsFormStatus.Saved
+          ? SettingsFormStatus.Saved
+          : SettingsFormStatus.Idle;
+
+  const statusBadge = isSaving
     ? (
       <SettingsStatusBadge
-        tone={SettingsStatusTone.Warning}
-        label={i18nService.t('decisionModelBadgeNeedsSetup')}
-        title={i18nService.t('decisionModelNeedsSetup')}
+        tone={SettingsStatusTone.Progress}
+        label={i18nService.t('saving')}
       />
     )
-    : dirty
+    : formStatus === SettingsFormStatus.Error
       ? (
         <SettingsStatusBadge
-          tone={SettingsStatusTone.Warning}
-          label={i18nService.t('decisionModelBadgeUnsaved')}
-          title={i18nService.t('decisionModelUnsavedHint')}
+          tone={SettingsStatusTone.Danger}
+          label={i18nService.t('settingsSaveFailedBadge')}
         />
       )
-      : saved.active
+      : needsApiKey
         ? (
           <SettingsStatusBadge
-            tone={SettingsStatusTone.Success}
-            label={i18nService.t('decisionModelBadgeActive')}
-            title={i18nService.t('decisionModelActiveNote')}
+            tone={SettingsStatusTone.Warning}
+            label={i18nService.t('decisionModelBadgeNeedsSetup')}
+            title={i18nService.t('decisionModelNeedsSetup')}
           />
         )
-        : null;
+        : dirty
+          ? (
+            <SettingsStatusBadge
+              tone={SettingsStatusTone.Warning}
+              label={i18nService.t('decisionModelBadgeUnsaved')}
+              title={i18nService.t('decisionModelUnsavedHint')}
+            />
+          )
+          : formStatus === SettingsFormStatus.Saved
+            ? (
+              <SettingsStatusBadge
+                tone={SettingsStatusTone.Success}
+                label={i18nService.t('settingsSavedBadge')}
+              />
+            )
+            : saved.active
+              ? (
+                <SettingsStatusBadge
+                  tone={SettingsStatusTone.Success}
+                  label={i18nService.t('decisionModelBadgeActive')}
+                  title={i18nService.t('decisionModelActiveNote')}
+                />
+              )
+              : null;
 
   const handleToggleEnabled = () => {
+    if (isSaving) return;
     const enabled = !draft.enabled;
+    const nextDraft: DecisionModelDraft = { ...draft, enabled };
+    const connectionHasUnsavedChanges = isConnectionDirty(draft, saved);
+    const readyToEnable = Boolean(apiKey.trim()) && canSaveDecisionModelEndpoint(nextDraft, saved.endpoint);
+
+    // If disabling, or enabling when an API key is already saved and no connection
+    // fields are dirty, save immediately so toggling feels instant.
+    if (!connectionHasUnsavedChanges && (!enabled || readyToEnable)) {
+      setDraft(nextDraft);
+      void persistConfig(nextDraft);
+      return;
+    }
+
     updateDraft({ enabled });
-    if (enabled && !apiKey.trim()) setConfigOpen(true);
+    if (enabled && !readyToEnable) setConfigOpen(true);
   };
+
+  const showFooter = dirty || formStatus === SettingsFormStatus.Saving || formStatus === SettingsFormStatus.Error;
 
   return (
     <SettingsSection
@@ -221,8 +347,9 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
               role="switch"
               aria-checked={draft.enabled}
               aria-label={i18nService.t('decisionModelEnableLabel')}
+              disabled={isSaving}
               onClick={handleToggleEnabled}
-              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
                 draft.enabled ? 'bg-primary' : 'bg-muted'
               }`}
             >
@@ -264,6 +391,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
               <select
                 id="decision-model-provider"
                 value={draft.provider}
+                disabled={isSaving}
                 onChange={(event) => updateDraft({ provider: event.target.value as DecisionModelProvider })}
                 className={`${FIELD_CLASS} max-w-56`}
               >
@@ -281,6 +409,8 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                 <input
                   id="decision-model-endpoint"
                   type="text"
+                  aria-invalid={invalidEndpoint}
+                  disabled={isSaving}
                   value={draft.endpoint}
                   onChange={(event) => updateDraft({ endpoint: event.target.value })}
                   placeholder="https://example.com/v1/systemone"
@@ -299,7 +429,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                   <button
                     type="button"
                     onClick={() => void window.electron.shell.openExternal(apiKeyUrl)}
-                    className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
+                    className={`${SETTINGS_META_TEXT} text-secondary hover:text-foreground underline underline-offset-2 transition-colors`}
                   >
                     {i18nService.t('getApiKey')} →
                   </button>
@@ -310,6 +440,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                   id="decision-model-api-key"
                   type={showApiKey ? 'text' : 'password'}
                   autoComplete="off"
+                  disabled={isSaving}
                   value={apiKey}
                   onChange={(event) => updateApiKey(event.target.value)}
                   placeholder={i18nService.t('apiKeyPlaceholder')}
@@ -319,6 +450,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                   {apiKey && (
                     <button
                       type="button"
+                      disabled={isSaving}
                       onClick={() => updateApiKey('')}
                       className={ICON_BUTTON_CLASS}
                       title={i18nService.t('clear') || 'Clear'}
@@ -350,12 +482,25 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
               <button
                 type="button"
                 onClick={() => void handleTest()}
-                disabled={testing}
+                disabled={testing || isSaving}
                 className={`ml-auto ${SETTINGS_ACTION_BUTTON_CLASS}`}
               >
                 {testing ? i18nService.t('decisionModelTesting') : i18nService.t('decisionModelTest')}
               </button>
             </div>
+          </div>
+        )}
+
+        {showFooter && (
+          <div className="px-4 py-3">
+            <SettingsFormFooter
+              status={resolvedFormStatus}
+              mode={SettingsFormFooterMode.DirtyBar}
+              canSave={dirty && !invalidEndpoint}
+              errorMessage={invalidEndpoint ? i18nService.t('decisionModelErrorInvalidEndpoint') : saveError}
+              onSave={handleSave}
+              onDiscard={handleDiscard}
+            />
           </div>
         )}
       </SettingsCard>

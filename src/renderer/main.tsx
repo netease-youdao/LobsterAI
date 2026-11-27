@@ -5,9 +5,11 @@ import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 
 import App from './App';
-import EngineRepairOverlay from './components/cowork/EngineRepairOverlay';
 import WindowZoomIndicator from './components/window/WindowZoomIndicator';
+import { installCleanRichTextCopy } from './services/clipboardRichText';
 import { store } from './store';
+
+installCleanRichTextCopy(document);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -19,7 +21,6 @@ try {
     <React.StrictMode>
       <Provider store={store}>
         <App />
-        <EngineRepairOverlay />
         <WindowZoomIndicator />
       </Provider>
     </React.StrictMode>

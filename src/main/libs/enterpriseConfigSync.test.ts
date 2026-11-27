@@ -225,7 +225,7 @@ describe('enterpriseConfigSync', () => {
 
     expect(coworkUpdates).toEqual([
       {
-        agentEngine: 'openclaw',
+        agentEngine: 'dsh',
         executionMode: 'local',
         workingDirectory: '/projects/user-selected',
       },

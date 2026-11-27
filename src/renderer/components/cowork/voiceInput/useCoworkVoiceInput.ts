@@ -36,10 +36,25 @@ interface UseCoworkVoiceInputOptions {
   isLoggedIn: boolean;
   disabled: boolean;
   onQuotaExhausted?: () => void;
+  /** Optional custom persistence callback; defaults to coworkSlice `setDraftPrompt`. */
+  onPersistDraft?: (targetDraftKey: string, nextValue: string) => void;
 }
 
 const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+};
+
+const describeVoiceInputError = (error: unknown): string => {
+  if (error instanceof AsrClientError) {
+    return `AsrClientError(code=${error.code ?? 'none'})`;
+  }
+  if (error instanceof DOMException) {
+    return `DOMException(${error.name})`;
+  }
+  if (error instanceof Error) {
+    return error.name || 'Error';
+  }
+  return 'unknown';
 };
 
 const logVoiceInputDiagnostic = (level: 'debug' | 'info' | 'warn', message: string): void => {
@@ -59,6 +74,7 @@ export const useCoworkVoiceInput = ({
   isLoggedIn,
   disabled,
   onQuotaExhausted,
+  onPersistDraft,
 }: UseCoworkVoiceInputOptions) => {
   const dispatch = useDispatch();
   const [voiceInputState, setVoiceInputState] = useState<VoiceInputState>(VoiceInputState.Idle);
@@ -76,7 +92,11 @@ export const useCoworkVoiceInput = ({
   latestDraftKeyRef.current = draftKey;
 
   const setPromptValue = useCallback((targetDraftKey: string, nextValue: string) => {
-    dispatch(setDraftPrompt({ sessionId: targetDraftKey, draft: nextValue }));
+    if (onPersistDraft) {
+      onPersistDraft(targetDraftKey, nextValue);
+    } else {
+      dispatch(setDraftPrompt({ sessionId: targetDraftKey, draft: nextValue }));
+    }
     if (targetDraftKey !== latestDraftKeyRef.current) {
       return;
     }
@@ -91,7 +111,7 @@ export const useCoworkVoiceInput = ({
       textarea.selectionStart = nextValue.length;
       textarea.selectionEnd = nextValue.length;
     });
-  }, [dispatch, setValue, textareaRef]);
+  }, [dispatch, onPersistDraft, setValue, textareaRef]);
 
   const markQuotaExhaustedIfNeeded = useCallback((error: unknown) => {
     if (!(error instanceof AsrClientError)) return false;
@@ -186,7 +206,7 @@ export const useCoworkVoiceInput = ({
     } catch (error) {
       if (generation !== voiceInputGenerationRef.current) return null;
       console.warn('[VoiceInput] voice input recognition failed:', error);
-      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `voice input recognition failed for draft ${targetDraftKey}.`);
+      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `voice input recognition failed for draft ${targetDraftKey} (${describeVoiceInputError(error)}).`);
       const quotaExhausted = markQuotaExhaustedIfNeeded(error)
         || updateQuotaAfterRecording(activeRecording);
       if (!quotaExhausted) {
@@ -236,7 +256,7 @@ export const useCoworkVoiceInput = ({
           if (generation !== voiceInputGenerationRef.current) return;
           if (!voiceRecordingRef.current) return;
           console.warn('[VoiceInput] realtime voice input session reported an error:', error);
-          window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `realtime voice input session reported an error for draft ${draftKey}.`);
+          window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `realtime voice input session reported an error for draft ${draftKey} (${describeVoiceInputError(error)}).`);
           const quotaExhausted = markQuotaExhaustedIfNeeded(error);
           voiceInputStartingRef.current = false;
           clearVoiceAutoStopTimer();
@@ -273,7 +293,7 @@ export const useCoworkVoiceInput = ({
     } catch (error) {
       if (generation !== voiceInputGenerationRef.current) return;
       console.warn('[VoiceInput] failed to start voice input:', error);
-      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `failed to start voice input for draft ${draftKey}.`);
+      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `failed to start voice input for draft ${draftKey} (${describeVoiceInputError(error)}).`);
       const quotaExhausted = markQuotaExhaustedIfNeeded(error);
       voiceInputStartingRef.current = false;
       voiceRecordingRef.current?.cancel();

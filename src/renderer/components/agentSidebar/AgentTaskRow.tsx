@@ -1,6 +1,7 @@
 import { ShareIcon } from '@heroicons/react/20/solid';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
@@ -17,11 +18,19 @@ import ListChecksIcon from '../icons/ListChecksIcon';
 import LoadingIcon from '../icons/LoadingIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
-import { AgentSidebarIndicator } from './constants';
+import AgentTaskHoverCard, {
+  type AgentTaskHoverCardMeta,
+  getTaskHoverCardDelayMs,
+  notifyTaskHoverCardClosed,
+  notifyTaskHoverCardOpened,
+  subscribeOtherTaskHoverCardOpen,
+} from './AgentTaskHoverCard';
+import { AgentSidebarIndicator, AgentTaskRowVariant } from './constants';
 import {
   getScheduledTaskDisplayTitle,
   hasLegacyScheduledTaskTitle,
 } from './scheduledTaskSession';
+import type { TaskHoverCardAnchor } from './taskHoverCard';
 import { formatAgentTaskRelativeTime } from './time';
 import type { AgentSidebarTaskNode } from './types';
 
@@ -29,8 +38,10 @@ interface AgentTaskRowProps {
   task: AgentSidebarTaskNode;
   isBatchMode: boolean;
   isSelected: boolean;
+  variant?: AgentTaskRowVariant;
   contextLabel?: string;
   contextIcon?: React.ReactNode;
+  hoverMeta?: AgentTaskHoverCardMeta;
   isSelectionDisabled?: boolean;
   showBatchOption?: boolean;
   hasActiveSubagent?: boolean;
@@ -68,8 +79,10 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   task,
   isBatchMode,
   isSelected,
+  variant,
   contextLabel,
   contextIcon,
+  hoverMeta,
   isSelectionDisabled = false,
   showBatchOption = false,
   hasActiveSubagent = false,
@@ -97,14 +110,71 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     ? task.title
     : displayTitle;
   const [menuPosition, setMenuPosition] = useState<{ right: number; top: number } | null>(null);
+  const [hoverAnchor, setHoverAnchor] = useState<TaskHoverCardAnchor | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
-  const [suppressPinHover, setSuppressPinHover] = useState(false);
   const [renameValue, setRenameValue] = useState(editableTitle);
+  const rowRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+  const isHoveringActionsRef = useRef(false);
+  const hoverCardId = useId();
   const isMenuOpen = menuPosition !== null;
+  const resolvedVariant: AgentTaskRowVariant = variant
+    ?? (contextLabel ? AgentTaskRowVariant.Activity : AgentTaskRowVariant.Nested);
+  const isActivityRow = resolvedVariant === AgentTaskRowVariant.Activity;
+  const isPinnedRow = resolvedVariant === AgentTaskRowVariant.Pinned;
+  const canShowHoverCard = Boolean(hoverMeta)
+    && !isBatchMode
+    && !isRenaming
+    && !isSelectionDisabled
+    && !isMenuOpen
+    && !showConfirmDelete;
+
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const hideHoverCard = useCallback(() => {
+    clearHoverTimer();
+    setHoverAnchor((previous) => {
+      if (previous !== null) {
+        notifyTaskHoverCardClosed(hoverCardId);
+      }
+      return null;
+    });
+  }, [clearHoverTimer, hoverCardId]);
+
+  const readHoverAnchor = useCallback((): TaskHoverCardAnchor | null => {
+    const rowElement = rowRef.current;
+    if (!rowElement) return null;
+    const rowRect = rowElement.getBoundingClientRect();
+    const sidebarRect = rowElement.closest('aside')?.getBoundingClientRect();
+    return {
+      rowTop: rowRect.top,
+      rowHeight: rowRect.height,
+      sidebarRight: sidebarRect ? sidebarRect.right : rowRect.right,
+    };
+  }, []);
+
+  const scheduleHoverCard = useCallback(() => {
+    if (!canShowHoverCard || isHoveringActionsRef.current) return;
+    clearHoverTimer();
+    const delayMs = getTaskHoverCardDelayMs();
+    hoverTimerRef.current = window.setTimeout(() => {
+      hoverTimerRef.current = null;
+      if (isHoveringActionsRef.current) return;
+      const anchor = readHoverAnchor();
+      if (!anchor) return;
+      notifyTaskHoverCardOpened(hoverCardId);
+      setHoverAnchor(anchor);
+    }, delayMs);
+  }, [canShowHoverCard, clearHoverTimer, hoverCardId, readHoverAnchor]);
 
   const calculateMenuPosition = useCallback(() => {
     const rect = actionButtonRef.current?.getBoundingClientRect();
@@ -129,6 +199,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   const toggleMenu = (event: React.MouseEvent) => {
     event.stopPropagation();
+    hideHoverCard();
     if (isMenuOpen) {
       closeMenu();
       return;
@@ -146,6 +217,42 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       setRenameValue(editableTitle);
     }
   }, [editableTitle, isRenaming]);
+
+  useEffect(() => {
+    if (!canShowHoverCard) {
+      hideHoverCard();
+    }
+  }, [canShowHoverCard, hideHoverCard]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeOtherTaskHoverCardOpen(hoverCardId, () => {
+      clearHoverTimer();
+      setHoverAnchor(null);
+    });
+    return () => {
+      unsubscribe();
+      clearHoverTimer();
+      notifyTaskHoverCardClosed(hoverCardId);
+    };
+  }, [clearHoverTimer, hoverCardId]);
+
+  useEffect(() => {
+    if (!hoverAnchor) return;
+    const handleDismiss = () => hideHoverCard();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        hideHoverCard();
+      }
+    };
+    window.addEventListener('scroll', handleDismiss, true);
+    window.addEventListener('resize', handleDismiss);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('scroll', handleDismiss, true);
+      window.removeEventListener('resize', handleDismiss);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [hideHoverCard, hoverAnchor]);
 
   useEffect(() => {
     if (!isMenuOpen) return;
@@ -201,6 +308,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
   const handleRowClick = () => {
     if (isRenaming || isSelectionDisabled) return;
+    hideHoverCard();
     if (isBatchMode) {
       onToggleSelection();
       return;
@@ -244,6 +352,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   };
 
   const startRename = (actionType: 'task_rename_start' | 'task_rename_double_click') => {
+    hideHoverCard();
     onSidebarAction?.(actionType, analyticsParams);
     setIsRenaming(true);
   };
@@ -277,68 +386,135 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       ? i18nService.t('myAgentSidebarRunning')
       : i18nService.t('myAgentSidebarUnreadResult');
   const menuItemClassName =
-    'flex w-full items-center gap-2 whitespace-nowrap px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+    'flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-surface-raised';
+  const dangerMenuItemClassName =
+    'flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10';
   const menuIconClassName = 'h-3.5 w-3.5';
-  const relativeTime = formatAgentTaskRelativeTime(task.updatedAt || task.createdAt);
-  const showRelativeTime = !contextLabel && task.indicator === AgentSidebarIndicator.None;
+  const taskTimestamp = task.updatedAt || task.createdAt;
+  const relativeTime = formatAgentTaskRelativeTime(taskTimestamp);
+  const showRelativeTime = !isActivityRow && task.indicator === AgentSidebarIndicator.None;
+  const showStatusOrTime = task.indicator !== AgentSidebarIndicator.None || showRelativeTime;
+  const showRowActions = !isBatchMode && !isRenaming && !isSelectionDisabled;
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
-  const isActivityRow = !!contextLabel;
   const scheduledTaskLabel = i18nService.t('myAgentSidebarScheduledTask');
-  // Rows nested under an agent are a level below it: denser, one font step smaller
-  // and muted until hovered or selected. Activity rows stand on their own.
+  // Nested and pinned tasks keep full 14px legibility; hierarchy comes from indentation,
+  // icon-less alignment on the agent text rail, and a slightly softer ink step.
   const textSizeClassName = isActivityRow
     ? 'text-[length:var(--lobster-text-sidebarCompact)]'
     : 'text-[length:var(--lobster-text-sidebarTask)]';
+  const leftPaddingClassName = isBatchMode
+    ? 'pl-2'
+    : isActivityRow || isPinnedRow
+      ? 'pl-2.5'
+      : 'pl-[38px]';
 
-  return (
+  const contextMenu = menuPosition ? (
     <div
-      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-[18px] ${
-        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
-      } ${
-        isBatchMode ? 'pl-2' : isActivityRow ? 'pl-1.5' : 'pl-9'
-      } pr-2.5 ${textSizeClassName} font-normal transition-colors ${
-        isSelectionDisabled
-          ? 'cursor-default text-foreground/30'
-          : task.isSelected && !hasActiveSubagent
-          ? 'cursor-pointer bg-black/[0.05] text-foreground dark:bg-white/[0.07]'
-          : `cursor-pointer hover:bg-black/[0.03] hover:text-foreground dark:hover:bg-white/[0.04] ${
-            isActivityRow ? 'text-foreground' : 'text-foreground/75'
-          }`
-      }`}
-      onClick={handleRowMouseClick}
-      onKeyDown={handleRowKeyDown}
-      onMouseMove={() => setSuppressPinHover(false)}
-      onMouseLeave={() => setSuppressPinHover(false)}
-      role="treeitem"
-      tabIndex={isSelectionDisabled ? -1 : 0}
-      aria-level={isActivityRow ? 1 : 2}
-      aria-selected={task.isSelected}
-      aria-disabled={isSelectionDisabled || undefined}
+      ref={menuRef}
+      className="fixed z-[60] w-max min-w-[136px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-popover"
+      style={{ top: menuPosition.top, right: menuPosition.right }}
+      role="menu"
+      onKeyDown={handleMenuKeyDown}
     >
-      {!isActivityRow && !isBatchMode && !isRenaming && !isSelectionDisabled && (
+      {showBatchOption && (
         <button
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            const nextPinned = !task.pinned;
-            setSuppressPinHover(true);
-            event.currentTarget.blur();
-            void onTogglePin(nextPinned);
+            closeMenu();
+            onEnterBatchMode();
           }}
-          className={`absolute left-[7px] top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-foreground transition-opacity hover:opacity-[0.46] focus:outline-none ${
-            suppressPinHover
-              ? 'pointer-events-none opacity-0'
-              : task.pinned
-                ? 'opacity-[0.46]'
-                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-[0.3] focus-visible:pointer-events-auto focus-visible:opacity-[0.46]'
-          }`}
-          aria-label={pinLabel}
-          title={pinLabel}
+          className={menuItemClassName}
+          role="menuitem"
         >
-          <PushPinIcon className="h-3.5 w-3.5" />
+          <ListChecksIcon className={menuIconClassName} />
+          {i18nService.t('batchOperations')}
         </button>
       )}
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          closeMenu();
+          startRename('task_rename_start');
+        }}
+        className={menuItemClassName}
+        role="menuitem"
+      >
+        <EditIcon className={menuIconClassName} />
+        {i18nService.t('renameConversation')}
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          closeMenu();
+          void onTogglePin(!task.pinned);
+        }}
+        className={menuItemClassName}
+        role="menuitem"
+      >
+        <PushPinIcon slashed={task.pinned} className={menuIconClassName} />
+        {pinLabel}
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          closeMenu();
+          void onShare();
+        }}
+        className={menuItemClassName}
+        role="menuitem"
+      >
+        <ShareIcon className={menuIconClassName} />
+        {i18nService.t('coworkShareSession')}
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          closeMenu();
+          onSidebarAction?.('task_delete_confirm_open', analyticsParams);
+          setShowConfirmDelete(true);
+        }}
+        className={dangerMenuItemClassName}
+        role="menuitem"
+      >
+        <TrashIcon className={menuIconClassName} />
+        {i18nService.t('deleteSession')}
+      </button>
+    </div>
+  ) : null;
 
+  return (
+    <div
+      ref={rowRef}
+      className={`group relative flex w-full items-center gap-2 rounded-[9px] ${
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'min-h-[32px] py-1'
+      } ${leftPaddingClassName} pr-2 ${textSizeClassName} transition-all duration-150 ${
+        isSelectionDisabled
+          ? 'cursor-default font-normal text-foreground/30'
+          : task.isSelected && !hasActiveSubagent
+            ? 'cursor-pointer bg-[var(--lobster-sidebar-item-hover)] font-medium text-foreground'
+            : `cursor-pointer font-normal hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${
+              isActivityRow ? 'text-foreground' : 'text-foreground/85'
+            }`
+      }`}
+      onClick={handleRowMouseClick}
+      onKeyDown={handleRowKeyDown}
+      onMouseEnter={scheduleHoverCard}
+      onMouseLeave={() => {
+        isHoveringActionsRef.current = false;
+        hideHoverCard();
+      }}
+      onPointerDown={hideHoverCard}
+      role="treeitem"
+      tabIndex={isSelectionDisabled ? -1 : 0}
+      aria-level={isActivityRow || isPinnedRow ? 1 : 2}
+      aria-selected={task.isSelected}
+      aria-disabled={isSelectionDisabled || undefined}
+    >
       {isBatchMode && (
         <input
           type="checkbox"
@@ -404,9 +580,9 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           >
             <span className="truncate">{displayTitle}</span>
             {contextLabel && (
-              <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal leading-4 text-secondary">
+              <span className="flex min-w-0 items-center gap-1.5 text-[length:var(--lobster-text-sidebarMeta)] font-normal leading-4 text-secondary">
                 {contextIcon && (
-                  <span className="flex h-3 w-3 shrink-0 items-center justify-center" aria-hidden="true">
+                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
                     {contextIcon}
                   </span>
                 )}
@@ -414,143 +590,134 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               </span>
             )}
           </span>
-          {task.indicator === AgentSidebarIndicator.PendingPermission && (
-            <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-primary transition-opacity group-hover:opacity-0"
-              title={indicatorLabel}
-              aria-label={indicatorLabel}
-            >
-              <span className="h-1 w-1 shrink-0 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-              {indicatorLabel}
-            </span>
-          )}
-          {task.indicator === AgentSidebarIndicator.Running && (
-            <span
-              className="inline-flex h-3 w-3 shrink-0 items-center justify-center transition-opacity group-hover:opacity-0"
-              title={indicatorLabel}
-              aria-label={indicatorLabel}
-            >
-              <LoadingIcon className="h-3 w-3 animate-spin text-secondary" aria-hidden="true" />
-            </span>
-          )}
-          {task.indicator === AgentSidebarIndicator.CompletedUnread && (
-            <span
-              className="h-[7px] w-[7px] shrink-0 rounded-full bg-blue-500 transition-opacity group-hover:opacity-0"
-              title={indicatorLabel}
-              aria-label={indicatorLabel}
-            />
-          )}
-          {showRelativeTime && (
-            <span
-              className="shrink-0 whitespace-nowrap text-[12px] font-normal text-foreground/45 transition-opacity group-hover:opacity-0"
-              title={relativeTime.full}
-            >
-              {relativeTime.compact}
-            </span>
+
+          {(showStatusOrTime || showRowActions) && (
+            <div className="flex shrink-0 items-center">
+              {showStatusOrTime && (
+                <div
+                  className={`flex items-center ${
+                    showRowActions
+                      ? isMenuOpen
+                        ? 'w-0 overflow-hidden opacity-0'
+                        : 'group-hover:w-0 group-hover:overflow-hidden group-hover:opacity-0 group-has-[:focus-visible]:w-0 group-has-[:focus-visible]:overflow-hidden group-has-[:focus-visible]:opacity-0'
+                      : ''
+                  }`}
+                >
+                  {task.indicator === AgentSidebarIndicator.PendingPermission && (
+                    <span
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-primary"
+                      title={indicatorLabel}
+                      aria-label={indicatorLabel}
+                    >
+                      <span className="h-1 w-1 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+                      {indicatorLabel}
+                    </span>
+                  )}
+                  {task.indicator === AgentSidebarIndicator.Running && (
+                    <span
+                      className="inline-flex h-3 w-3 shrink-0 items-center justify-center"
+                      title={indicatorLabel}
+                      aria-label={indicatorLabel}
+                    >
+                      <LoadingIcon className="h-3 w-3 animate-spin text-secondary" aria-hidden="true" />
+                    </span>
+                  )}
+                  {task.indicator === AgentSidebarIndicator.CompletedUnread && (
+                    <span
+                      className="h-[7px] w-[7px] shrink-0 rounded-full bg-primary"
+                      title={indicatorLabel}
+                      aria-label={indicatorLabel}
+                    />
+                  )}
+                  {showRelativeTime && (
+                    <span
+                      className="shrink-0 whitespace-nowrap pr-0.5 text-[length:var(--lobster-text-sidebarMeta)] font-normal tabular-nums text-secondary/90"
+                      title={relativeTime.full}
+                    >
+                      {relativeTime.compact}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {showRowActions && (
+                <div
+                  className={`flex items-center gap-0.5 ${
+                    isMenuOpen
+                      ? 'pointer-events-auto w-auto overflow-visible opacity-100'
+                      : 'pointer-events-none w-0 overflow-hidden opacity-0 group-hover:pointer-events-auto group-hover:w-auto group-hover:overflow-visible group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:w-auto group-has-[:focus-visible]:overflow-visible group-has-[:focus-visible]:opacity-100'
+                  }`}
+                  onMouseEnter={() => {
+                    isHoveringActionsRef.current = true;
+                    hideHoverCard();
+                  }}
+                  onMouseLeave={() => {
+                    isHoveringActionsRef.current = false;
+                    scheduleHoverCard();
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      hideHoverCard();
+                      event.currentTarget.blur();
+                      void onTogglePin(!task.pinned);
+                    }}
+                    className={`inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] focus:outline-none focus-visible:opacity-100 ${
+                      task.pinned
+                        ? 'text-foreground/85 hover:text-foreground'
+                        : 'text-secondary hover:text-foreground'
+                    }`}
+                    aria-label={pinLabel}
+                    aria-pressed={task.pinned}
+                    title={pinLabel}
+                  >
+                    <PushPinIcon filled={task.pinned} className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    ref={actionButtonRef}
+                    type="button"
+                    onClick={toggleMenu}
+                    className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground focus-visible:opacity-100 ${
+                      isMenuOpen
+                        ? 'bg-[var(--lobster-sidebar-item-hover)] text-foreground opacity-100'
+                        : ''
+                    }`}
+                    aria-label={i18nService.t('coworkSessionActions')}
+                  >
+                    <EllipsisHorizontalIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </>
       )}
 
-      {!isBatchMode && !isRenaming && !isSelectionDisabled && (
-        <button
-          ref={actionButtonRef}
-          type="button"
-          onClick={toggleMenu}
-          className={`absolute right-1 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-foreground transition-opacity hover:opacity-[0.46] ${
-            isMenuOpen ? 'opacity-[0.46]' : 'opacity-0 group-hover:opacity-[0.3] focus-visible:opacity-[0.46]'
-          }`}
-          aria-label={i18nService.t('coworkSessionActions')}
-        >
-          <EllipsisHorizontalIcon className="h-4 w-4" />
-        </button>
-      )}
+      {contextMenu && (typeof document !== 'undefined' ? createPortal(contextMenu, document.body) : contextMenu)}
 
-      {menuPosition && (
-        <div
-          ref={menuRef}
-          className="fixed z-[60] w-max min-w-[124px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
-          style={{ top: menuPosition.top, right: menuPosition.right }}
-          role="menu"
-          onKeyDown={handleMenuKeyDown}
-        >
-          {showBatchOption && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                closeMenu();
-                onEnterBatchMode();
-              }}
-              className={menuItemClassName}
-              role="menuitem"
-            >
-              <ListChecksIcon className={menuIconClassName} />
-              {i18nService.t('batchOperations')}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              closeMenu();
-              startRename('task_rename_start');
-            }}
-            className={menuItemClassName}
-            role="menuitem"
-          >
-            <EditIcon className={menuIconClassName} />
-            {i18nService.t('renameConversation')}
-          </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              closeMenu();
-              void onTogglePin(!task.pinned);
-            }}
-            className={menuItemClassName}
-            role="menuitem"
-          >
-            <PushPinIcon slashed={task.pinned} className={menuIconClassName} />
-            {task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession')}
-          </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              closeMenu();
-              void onShare();
-            }}
-            className={menuItemClassName}
-            role="menuitem"
-          >
-            <ShareIcon className={menuIconClassName} />
-            {i18nService.t('coworkShareSession')}
-          </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              closeMenu();
-              onSidebarAction?.('task_delete_confirm_open', analyticsParams);
-              setShowConfirmDelete(true);
-            }}
-            className={menuItemClassName}
-            role="menuitem"
-          >
-            <TrashIcon className={menuIconClassName} />
-            {i18nService.t('deleteSession')}
-          </button>
-        </div>
+      {hoverAnchor && hoverMeta && (
+        <AgentTaskHoverCard
+          anchor={hoverAnchor}
+          title={displayTitle}
+          timestamp={taskTimestamp}
+          cwd={task.cwd}
+          forkGitBranch={task.forkGitBranch}
+          indicator={task.indicator}
+          isScheduledTask={task.isScheduledTask}
+          imPlatformLabel={imPlatformLabel}
+          meta={hoverMeta}
+        />
       )}
 
       {showConfirmDelete && (
         <Modal
           onClose={() => setShowConfirmDelete(false)}
-          className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden"
+          className="mx-4 w-full max-w-sm overflow-hidden rounded-2xl bg-surface shadow-xl"
         >
           <div className="flex items-center gap-3 px-5 py-4">
-            <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
+            <div className="rounded-full bg-red-100 p-2 dark:bg-red-900/30">
               <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
             </div>
             <h2 className="text-base font-semibold text-foreground">
@@ -562,14 +729,14 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               {i18nService.t('deleteTaskConfirmMessage')}
             </p>
           </div>
-          <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
+          <div className="flex items-center justify-end gap-3 border-t border-border px-5 py-4">
             <button
               type="button"
               onClick={() => {
                 onSidebarAction?.('task_delete_cancel', analyticsParams);
                 setShowConfirmDelete(false);
               }}
-              className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+              className="rounded-lg px-4 py-2 text-sm font-medium text-secondary transition-colors hover:bg-surface-raised"
             >
               {i18nService.t('cancel')}
             </button>
@@ -580,7 +747,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
                 setShowConfirmDelete(false);
                 void onDelete();
               }}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500 text-white transition-colors hover:bg-red-600"
+              className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600"
             >
               {i18nService.t('deleteSession')}
             </button>

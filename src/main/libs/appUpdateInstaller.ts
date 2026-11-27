@@ -9,6 +9,7 @@ import {
   APP_UPDATE_ELEVATION_DECLINED_ERROR,
   type AppUpdateSource,
 } from '../../shared/appUpdate/constants';
+import { APP_UPDATE_DOWNLOAD_DIR_NAME } from '../appConstants';
 import { quitAppWithoutConfirmation } from './appQuitConfirmation';
 import {
   AppUpdateUrlUntrustedError,
@@ -114,7 +115,7 @@ export async function downloadUpdate(
   }
 
   const ext = path.extname(parsedUrl.pathname) || (process.platform === 'darwin' ? '.dmg' : '.exe');
-  const updateDir = path.join(app.getPath('userData'), 'updates');
+  const updateDir = path.join(app.getPath('userData'), APP_UPDATE_DOWNLOAD_DIR_NAME);
   const ts = Date.now();
   const downloadPath = path.join(updateDir, `lobsterai-update-${source}-${ts}${ext}.download`);
   const finalPath = path.join(updateDir, `lobsterai-update-${source}-${ts}${ext}`);
@@ -809,7 +810,7 @@ async function installMacDmg(dmgPath: string): Promise<void> {
 
       explicitMountDir = path.join(
         app.getPath('userData'),
-        'updates',
+        APP_UPDATE_DOWNLOAD_DIR_NAME,
         `${MAC_UPDATE_MOUNT_DIR_PREFIX}${Date.now()}`,
       );
       await fs.promises.mkdir(explicitMountDir, { recursive: true });
@@ -1022,14 +1023,13 @@ export function resolveWindowsPowerShellPath(
 }
 
 /**
- * The installer's manifest requests administrator (customHeader in
- * scripts/nsis-installer.nsh), so CreateProcess-based spawns fail with
- * ERROR_ELEVATION_REQUIRED instead of showing the UAC prompt; only
- * ShellExecute semantics can elevate, and shell.openPath cannot pass the
- * update-mode arguments. PowerShell's Start-Process goes through
- * ShellExecute and reports a declined prompt as Win32Exception 1223, which
- * this script turns into a distinct exit code — the exception *message* is
- * localized by the OS, so the native error code is the only stable signal.
+ * Launch the Windows NSIS installer via PowerShell Start-Process (ShellExecute
+ * semantics) so update-mode arguments can be passed reliably — `shell.openPath`
+ * cannot pass arguments, and if a legacy per-machine install or custom policy
+ * triggers UAC, ShellExecute handles elevation and reports a declined prompt as
+ * Win32Exception 1223, which this script turns into a distinct exit code (the
+ * exception message is localized by the OS, so the native code is the only
+ * stable signal).
  */
 export function buildWindowsInstallerLaunchScript(
   extraArgs: readonly string[] = [],
@@ -1089,13 +1089,13 @@ async function installWindowsNsis(
   exePath: string,
   options?: InstallUpdateOptions,
 ): Promise<void> {
-  // Launch the installer while the app still owns the foreground so the UAC
-  // elevation prompt (the installer requests admin) appears in front of the
-  // user. The install runs in update mode: no questions asked, existing
-  // install directory, a progress-bar-only window for the minutes-long
-  // extraction, then an automatic relaunch.
+  // Launch the installer while the app still owns the foreground so the update
+  // progress window (and any on-demand UAC prompt for legacy per-machine
+  // installs) appears in front of the user. The install runs in update mode: no
+  // questions asked, existing install directory, a progress-bar-only window,
+  // then an automatic relaunch.
   //
-  // The app quits only after the elevated process actually started: a declined
+  // The app quits only after the installer process actually started: a declined
   // prompt keeps this instance running so the coordinator returns to Ready and
   // offers a retry instead of quitting into nothing.
   //

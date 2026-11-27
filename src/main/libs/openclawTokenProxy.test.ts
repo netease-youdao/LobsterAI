@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 
 import http from 'http';
-import { beforeEach, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { AuthRefreshOutcome } from '../../shared/auth/constants';
 import { DSH_INSTANCE_HEADER } from '../../shared/dshEngine/analytics';
@@ -1210,5 +1210,192 @@ test('the running proxy logs where a new turn breaks the cached prompt prefix', 
     stopOpenClawTokenProxy();
     logSpy.mockRestore();
     debugSpy.mockRestore();
+  }
+});
+
+describe('scoped lobsterai-server proxy path rewriting', () => {
+  test('avoids doubling /v1 when Anthropic SDK requests /v1/messages under a scoped provider route', () => {
+    expect(testUtils.normalizeScopedLobsterPlanPath('/chat/completions')).toBe('/v1/chat/completions');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/v1/messages')).toBe('/v1/messages');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/v1/messages?beta=true')).toBe('/v1/messages?beta=true');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/messages')).toBe('/v1/messages');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/v1')).toBe('/v1');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/')).toBe('/v1/');
+  });
+
+  test('forwards /v1/lobsterai-server/v1/messages to /api/proxy/v1/messages and chat/completions to /api/proxy/v1/chat/completions', async () => {
+    vi.mocked(net.fetch).mockReset();
+    vi.mocked(net.fetch)
+      .mockResolvedValueOnce(new Response('{"id":"msg_1"}', { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response('{"id":"chat_1"}', { headers: { 'content-type': 'application/json' } }));
+
+    const { port } = await startOpenClawTokenProxy({
+      getAuthTokens: () => ({ accessToken: 'plan-token', refreshToken: 'refresh' }),
+      refreshToken: vi.fn(),
+      getServerBaseUrl: () => 'https://server.example',
+      getClientVersion: () => 'test',
+      getInboundAuthToken: () => 'proxy-secret',
+    });
+
+    try {
+      const anthropicRes = await fetch(`http://127.0.0.1:${port}/v1/lobsterai-server/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'x-api-key': 'proxy-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-5-5-hc-YoudaoInner', messages: [] }),
+      });
+      expect(anthropicRes.status).toBe(200);
+
+      const openaiRes = await fetch(`http://127.0.0.1:${port}/v1/lobsterai-server/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer proxy-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'glm-5.3-flash-YoudaoInner', messages: [] }),
+      });
+      expect(openaiRes.status).toBe(200);
+
+      expect(vi.mocked(net.fetch).mock.calls[0]?.[0]).toBe('https://server.example/api/proxy/v1/messages?beta=true');
+      expect(vi.mocked(net.fetch).mock.calls[1]?.[0]).toBe('https://server.example/api/proxy/v1/chat/completions');
+    } finally {
+      stopOpenClawTokenProxy();
+    }
+  });
+});
+
+test('normalizes /v1/lobsterai-server/v1/messages without duplicating /v1 and returns 503 for unavailable OAuth upstreams', async () => {
+  vi.mocked(net.fetch).mockReset();
+  vi.mocked(net.fetch).mockImplementation(async () => new Response('{"ok":true}', {
+    headers: { 'content-type': 'application/json' },
+  }));
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'account-jwt', refreshToken: 'account-refresh' }),
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getAccountContextHeaders: () => ({
+      'X-LobsterAI-Account-Mode': 'enterprise',
+      'X-LobsterAI-Enterprise-Id': 'ent-42',
+    }),
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => 'loopback-secret',
+    resolveOAuthProviderUpstream: () => null,
+  });
+  try {
+    const anthropicRes = await fetch(`http://127.0.0.1:${port}/v1/lobsterai-server/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': 'loopback-secret',
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [] }),
+    });
+    expect(anthropicRes.status).toBe(200);
+    expect(vi.mocked(net.fetch)).toHaveBeenCalledTimes(1);
+    const [upstreamUrl, upstreamInit] = vi.mocked(net.fetch).mock.calls[0];
+    expect(upstreamUrl).toBe('https://server.example/api/proxy/v1/messages');
+    const upstreamHeaders = new Headers(upstreamInit?.headers);
+    expect(upstreamHeaders.get('authorization')).toBe('Bearer account-jwt');
+    expect(upstreamHeaders.get('x-lobsterai-account-mode')).toBe('enterprise');
+    expect(upstreamHeaders.get('x-lobsterai-enterprise-id')).toBe('ent-42');
+
+    const copilotRes = await fetch(`http://127.0.0.1:${port}/v1/github-copilot/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer loopback-secret',
+      },
+      body: JSON.stringify({ model: 'gpt-4o', messages: [] }),
+    });
+    expect(copilotRes.status).toBe(503);
+    expect(await copilotRes.json()).toMatchObject({
+      error: { code: 'oauth_upstream_unavailable' },
+    });
+    expect(vi.mocked(net.fetch)).toHaveBeenCalledTimes(1);
+  } finally {
+    stopOpenClawTokenProxy();
+  }
+});
+
+test('notifies onServerRequestFinished for active-account 2xx responses only', async () => {
+  const token = 'd'.repeat(48);
+  let owner = 'account-a:1';
+  const onServerRequestFinished = vi.fn();
+
+  let switchedStreamController!: ReadableStreamDefaultController<Uint8Array>;
+  const switchedBody = new ReadableStream<Uint8Array>({
+    start: controller => { switchedStreamController = controller; },
+  });
+
+  vi.mocked(net.fetch)
+    .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'ok' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'boom' } }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(switchedBody, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'access', refreshToken: 'refresh' }),
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+    getSessionKey: () => owner,
+    onServerRequestFinished,
+  });
+
+  try {
+    const okRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-flash', messages: [] }),
+    });
+    expect(okRes.status).toBe(200);
+    await okRes.text();
+    expect(onServerRequestFinished).toHaveBeenCalledTimes(1);
+    expect(onServerRequestFinished).toHaveBeenLastCalledWith({
+      owner: 'account-a:1',
+      completed: true,
+      status: 200,
+    });
+
+    const errRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-flash', messages: [] }),
+    });
+    expect(errRes.status).toBe(500);
+    await errRes.text();
+    expect(onServerRequestFinished).toHaveBeenCalledTimes(1);
+
+    switchedStreamController.enqueue(Buffer.from('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+    await new Promise<void>((resolve, reject) => {
+      let flipped = false;
+      const req = http.request({
+        host: '127.0.0.1',
+        port,
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      }, res => {
+        res.on('data', () => {
+          if (flipped) return;
+          flipped = true;
+          owner = 'account-b:2';
+          switchedStreamController.enqueue(Buffer.from('data: [DONE]\n\n'));
+          switchedStreamController.close();
+        });
+        res.on('end', resolve);
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ model: 'deepseek-flash', messages: [] }));
+    });
+    expect(onServerRequestFinished).toHaveBeenCalledTimes(1);
+  } finally {
+    stopOpenClawTokenProxy();
   }
 });

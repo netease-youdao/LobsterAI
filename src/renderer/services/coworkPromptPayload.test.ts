@@ -23,6 +23,23 @@ describe('prepareCoworkPromptPayload', () => {
     expect(result.payload.mediaReferences?.[0]).toMatchObject({ localPath: '/snapshots/frozen.png', imageEdit: edit });
     expect(result.payload.imageAttachments).toBeUndefined();
   });
+  test('the designer can reuse an attached image without a mention and respects an explicit choice', async () => {
+    const options = {
+      basePrompt: 'Create my new skin from the original artwork',
+      attachments: [
+        { path: '/old/coast.png', name: 'coast.png' },
+        { path: '/old/lamp.png', name: 'lamp.png' },
+      ],
+      selectedTextSnippets: [], modelSupportsImage: false, fileLabel: 'File', folderLabel: 'Folder',
+    };
+    const regular = await prepareCoworkPromptPayload(options);
+    const skin = await prepareCoworkPromptPayload({ ...options, useAttachedImagesAsReferences: true });
+    const choice = await prepareCoworkPromptPayload({ ...options, basePrompt: 'Use @图片2', useAttachedImagesAsReferences: true });
+    expect(regular.success && regular.payload.mediaReferences).toBeUndefined();
+    expect(skin.success && skin.payload.mediaReferences?.map(ref => ref.localPath)).toEqual(['/old/coast.png', '/old/lamp.png']);
+    expect(choice.success && choice.payload.mediaReferences?.map(ref => ref.localPath)).toEqual(['/old/lamp.png']);
+  });
+
   test('preserves file and folder labels in the final prompt', async () => {
     const result = await prepareCoworkPromptPayload({
       basePrompt: 'continue',

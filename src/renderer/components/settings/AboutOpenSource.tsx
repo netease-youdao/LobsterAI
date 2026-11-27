@@ -2,6 +2,8 @@ import { StarIcon } from '@heroicons/react/24/solid';
 import React from 'react';
 
 import {
+  DSH_ENGINE_NAME,
+  DSH_OPEN_SOURCE_REPO_URL,
   OPEN_SOURCE_FORK_URL,
   OPEN_SOURCE_LICENSE_URL,
   OPEN_SOURCE_REPO_URL,
@@ -14,6 +16,7 @@ import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT } from './settingsT
 export const AboutOpenSourceAction = {
   OpenRepo: 'open_source_repo',
   OpenLicense: 'open_source_license',
+  OpenEngineRepo: 'open_source_engine_repo',
   StarPromptStar: 'star_prompt_star',
   StarPromptFork: 'star_prompt_fork',
 } as const;
@@ -24,8 +27,8 @@ interface AboutOpenSourceProps {
 }
 
 const infoRowClassName = 'flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3';
-const infoRowLinkClassName = `min-w-0 break-all text-right ${SETTINGS_DESCRIPTION_TEXT} text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors`;
-const promptButtonClassName = 'inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary dark:hover:border-primary dark:hover:text-primary';
+const infoRowLinkClassName = `min-w-0 break-all text-right ${SETTINGS_DESCRIPTION_TEXT} text-secondary hover:text-foreground bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors`;
+const promptButtonClassName = 'inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised';
 
 const openExternalLink = (url: string): void => {
   void window.electron.shell.openExternal(url);
@@ -67,7 +70,7 @@ export const AboutOpenSourceRows: React.FC<AboutOpenSourceProps> = ({ onAction }
 
 /** Permanent invitation to star or fork the repository, shown below the About card. */
 export const AboutOpenSourceStarPrompt: React.FC<AboutOpenSourceProps> = ({ onAction }) => (
-  <div className="mt-4 flex w-full flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-4 py-3">
+  <div className="mt-4 flex w-full flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-surface-raised/60 px-4 py-3">
     <div className="flex min-w-0 grow basis-72 items-center gap-3">
       <GitHubMarkIcon className="h-6 w-6 shrink-0 text-foreground" />
       <div className="min-w-0">
@@ -107,3 +110,26 @@ export const AboutOpenSourceStarPrompt: React.FC<AboutOpenSourceProps> = ({ onAc
     </div>
   </div>
 );
+
+/** Footer acknowledgement for the bundled DeepSeek Harness engine. */
+export const AboutEngineAcknowledgement: React.FC<AboutOpenSourceProps> = ({ onAction }) => {
+  const [before, after = ''] = i18nService.t('aboutEngineAcknowledgement').split('{link}');
+
+  return (
+    <p className="mt-4 text-center text-xs text-secondary">
+      {before}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAction(AboutOpenSourceAction.OpenEngineRepo);
+          openExternalLink(DSH_OPEN_SOURCE_REPO_URL);
+        }}
+        className="inline bg-transparent border-none appearance-none p-0 text-inherit underline decoration-secondary/40 underline-offset-2 cursor-pointer hover:text-foreground hover:decoration-foreground/60 focus:outline-none focus-visible:underline transition-colors"
+      >
+        {DSH_ENGINE_NAME}
+      </button>
+      {after}
+    </p>
+  );
+};

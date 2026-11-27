@@ -18,10 +18,18 @@ interface Props {
   onUse: (prompt: string, reference?: ImageExampleReference) => Promise<boolean>;
 }
 
+const IMAGE_RATIO_CHOICES = [
+  { id: 'default', labelKey: 'imageRatioDefault', value: '' },
+  { id: '16:9', labelKey: '', value: '16:9' },
+  { id: '3:4', labelKey: '', value: '3:4' },
+  { id: '1:1', labelKey: '', value: '1:1' },
+] as const;
+
 export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
   const t = (key: string) => i18nService.t(key);
   const language = i18nService.getLanguage();
   const [prompt, setPrompt] = useState(example.prompt[language]);
+  const [aspectRatio, setAspectRatio] = useState<string>('');
   const { scrollRef: promptRef, canScrollUp, canScrollDown, scrollNext } = useScrollAffordance<HTMLTextAreaElement>(prompt);
   const [reference, setReference] = useState<ImageExampleReference>();
   const [busy, setBusy] = useState(false);
@@ -50,7 +58,11 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
       if (!mounted.current) return;
       if (example.referenceImageUrl && !selectedReference) throw new Error('Reference required');
       const label = selectedReference && computeMediaLabels([{ name: selectedReference.name, path: selectedReference.name, isImage: true }])[0]?.label;
-      const draftPrompt = label ? `@${label}\n\n${prompt.trim()}` : prompt.trim();
+      const ratioSuffix = aspectRatio
+        ? (language === 'zh' ? `\n\n画幅比例要求：${aspectRatio}` : `\n\nAspect ratio: ${aspectRatio}`)
+        : '';
+      const finalPrompt = `${prompt.trim()}${ratioSuffix}`;
+      const draftPrompt = label ? `@${label}\n\n${finalPrompt}` : finalPrompt;
       const applied = await onUse(draftPrompt, selectedReference);
       if (mounted.current) {
         if (applied) onClose();
@@ -107,6 +119,28 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
           {canScrollUp && <div aria-hidden="true" className="image-creation-prompt-fade image-creation-prompt-fade-top" />}
           {canScrollDown && <div aria-hidden="true" className="image-creation-prompt-fade image-creation-prompt-fade-bottom" />}
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs font-medium text-secondary">{t('imageRatioLabel')}</span>
+          {IMAGE_RATIO_CHOICES.map(choice => {
+            const active = aspectRatio === choice.value;
+            return (
+              <button
+                key={choice.id}
+                type="button"
+                disabled={busy}
+                aria-pressed={active}
+                onClick={() => setAspectRatio(choice.value)}
+                className={`rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors ${
+                  active
+                    ? 'border-primary/45 bg-primary-muted/75 text-primary'
+                    : 'border-border/80 bg-background text-secondary hover:border-border hover:text-foreground'
+                }`}
+              >
+                {choice.labelKey ? t(choice.labelKey) : choice.value}
+              </button>
+            );
+          })}
+        </div>
         {example.referenceImageUrl && <div className="mt-4 rounded-xl border border-border p-3">
           <p className="mb-2 text-xs font-medium text-foreground">{t('imageCreationReferenceNeeded')}</p>
           <div className="flex items-center gap-3">
@@ -121,9 +155,9 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
         {error && <p role="alert" className="mt-3 text-xs text-red-500">{error}</p>}
         <div className="mt-5 flex flex-wrap gap-2">
           {example.referenceImageUrl && !reference ? <>
-            <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(true)} className="flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationUseDemo')}<ArrowRightIcon className="h-4 w-4" /></button>
+            <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(true)} className="flex items-center justify-center gap-2 rounded-xl bg-action px-5 py-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationUseDemo')}<ArrowRightIcon className="h-4 w-4" /></button>
             <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="rounded-xl border border-border px-4 py-3 text-sm text-foreground hover:bg-surface-raised">{t('imageCreationUseOwn')}</button>
-          </> : <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(false)} className="flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationRemix')}<ArrowRightIcon className="h-4 w-4" /></button>}
+          </> : <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(false)} className="flex items-center justify-center gap-2 rounded-xl bg-action px-5 py-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationRemix')}<ArrowRightIcon className="h-4 w-4" /></button>}
         </div>
         <p className="mt-3 text-xs leading-5 text-muted">{t('imageCreationDraftHint')}</p>
         <p className="mt-auto pt-5 text-[11px] text-muted">{t('imageCreationModelLabel')} {example.modelName}</p>

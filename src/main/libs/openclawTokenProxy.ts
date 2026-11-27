@@ -19,6 +19,7 @@ import {
 } from '../../shared/cowork/llmTurnUsage';
 import { DSH_INSTANCE_HEADER } from '../../shared/dshEngine/analytics';
 import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
+import { OpenClawProviderId, ProviderName } from '../../shared/providers/constants';
 import {
   LOBSTERAI_CLIENT_CAPABILITIES,
   LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
@@ -60,6 +61,17 @@ const PROXY_UPSTREAM_NETWORK_ERROR_TYPE = 'upstream_network_error';
 const CHROMIUM_NET_ERROR_PATTERN = /\bnet::(ERR_[A-Z0-9_]+)\b/;
 // Chat-style model requests whose prompt prefix is compared for cache diagnostics.
 const PROMPT_PREFIX_PATH_PATTERN = /\/(chat\/completions|messages)$/;
+const LOBSTER_SCOPED_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  OpenClawProviderId.Lobster,
+  'lobsterai',
+  ProviderName.LobsteraiServer,
+  'youdao',
+]);
+const OAUTH_SCOPED_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  ProviderName.Copilot,
+  OpenClawProviderId.OpenAICodex,
+  'xai-oauth',
+]);
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
@@ -81,8 +93,16 @@ let enterpriseMembershipRevokedHandler: (
   (event: OpenClawTokenProxyMembershipRevocationEvent) => void
 ) | null = null;
 let inboundAuthTokenGetter: (() => string | null) | null = null;
+let oauthProviderUpstreamResolver: ((providerId: string) => Promise<{
+  baseUrl: string;
+  headers: Record<string, string>;
+} | null> | {
+  baseUrl: string;
+  headers: Record<string, string>;
+} | null) | null = null;
 let lastUnauthorizedWarnAt = 0;
 let requestFinishedHandler: OpenClawTokenProxyConfig['onRequestFinished'];
+let serverRequestFinishedHandler: OpenClawTokenProxyConfig['onServerRequestFinished'];
 let requestObserver: OpenClawTokenProxyConfig['observeRequest'];
 
 export interface ProxyRequestObservation {
@@ -113,6 +133,8 @@ export type OpenClawTokenProxyConfig = {
   getAccountContextHeaders?: () => Record<string, string>;
   getSessionKey?: () => string | null;
   onRequestFinished?: (origin: { traceId: string; sessionId: string; owner: string }) => void;
+  /** Lightweight notification whenever a LobsterAI server request finishes for the active account. */
+  onServerRequestFinished?: (info: { owner: string; completed: boolean; status: number | null }) => void;
   /** Optional observation, including generated traces without a Cowork turn. */
   observeRequest?: (request: ProxyRequestObservation) => ((result: ProxyRequestResult) => void) | undefined;
   getClientVersion: () => string;
@@ -124,6 +146,14 @@ export type OpenClawTokenProxyConfig = {
   preferredPort?: number | null;
   /** Shared secret that OpenClaw and dsh send as the provider API key. */
   getInboundAuthToken?: () => string | null;
+  /** Optional upstream resolver for `/v1/<providerId>/*` OAuth providers (Codex, Copilot, xAI). */
+  resolveOAuthProviderUpstream?: (providerId: string) => Promise<{
+    baseUrl: string;
+    headers: Record<string, string>;
+  } | null> | {
+    baseUrl: string;
+    headers: Record<string, string>;
+  } | null;
 };
 
 type OpenClawTokenProxyQuotaError = {
@@ -156,6 +186,7 @@ type ProxyRequestTrace = {
   serverTraceId: string | null;
   status: number | null;
   finished: boolean;
+  owner?: string | null;
   usageOrigin?: { traceId: string; sessionId: string; owner: string };
   /** Prompt prefix compared with the previous request of the same conversation. */
   promptPrefix?: { key: string; observation: PromptPrefixObservation };
@@ -185,11 +216,13 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
   sessionKeyGetter = config.getSessionKey ?? null;
   requestFinishedHandler = config.onRequestFinished;
+  serverRequestFinishedHandler = config.onServerRequestFinished;
   requestObserver = config.observeRequest;
   clientVersionGetter = config.getClientVersion;
   enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
   enterpriseMembershipRevokedHandler = config.onEnterpriseMembershipRevoked ?? null;
   inboundAuthTokenGetter = config.getInboundAuthToken ?? null;
+  oauthProviderUpstreamResolver = config.resolveOAuthProviderUpstream ?? null;
 
   if (proxyServer && proxyPort) return Promise.resolve({ port: proxyPort });
   if (proxyStartPromise) return proxyStartPromise;
@@ -233,11 +266,13 @@ export function stopOpenClawTokenProxy(): void {
   accountContextHeadersGetter = null;
   sessionKeyGetter = null;
   requestFinishedHandler = undefined;
+  serverRequestFinishedHandler = undefined;
   requestObserver = undefined;
   clientVersionGetter = null;
   enterpriseAuthSessionSnapshotGetter = null;
   enterpriseMembershipRevokedHandler = null;
   inboundAuthTokenGetter = null;
+  oauthProviderUpstreamResolver = null;
 }
 
 export function getOpenClawTokenProxyPort(): number | null {
@@ -337,6 +372,19 @@ function finishProxyRequest(
       requestFinishedHandler?.(trace.usageOrigin);
     } catch (error) {
       console.warn('[OpenClawTokenProxy] failed to refresh completed request usage.', error);
+    }
+  }
+  const mayHaveChargedCredits = completed
+    || (trace.status !== null && trace.status >= 200 && trace.status < 300);
+  if (mayHaveChargedCredits && trace.owner && trace.owner === sessionKeyGetter?.()) {
+    try {
+      serverRequestFinishedHandler?.({
+        owner: trace.owner,
+        completed,
+        status: trace.status,
+      });
+    } catch (error) {
+      console.warn('[OpenClawTokenProxy] failed to notify credits activity.', error);
     }
   }
 }
@@ -530,6 +578,19 @@ function rejectInboundRequest(req: http.IncomingMessage, res: http.ServerRespons
   }));
 }
 
+/**
+ * Normalize the path suffix after `/v1/<lobsterai-plan-alias>` before forwarding
+ * to `/api/proxy/*`. OpenAI clients request `/v1/<alias>/chat/completions`
+ * (`restPath = '/chat/completions'`), whereas Anthropic SDK clients append
+ * `/v1/messages` themselves (`restPath = '/v1/messages'`). Avoid doubling `/v1`.
+ */
+function normalizeScopedLobsterPlanPath(restPath: string): string {
+  if (restPath === '/v1' || restPath.startsWith('/v1/') || restPath.startsWith('/v1?')) {
+    return restPath;
+  }
+  return `/v1${restPath}`;
+}
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!isLoopbackHostHeader(req.headers.host)) {
     rejectInboundRequest(req, res, 403, 'proxy_host_not_loopback');
@@ -543,6 +604,100 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     await handleNativeRunLlmTraceReport(req, res);
     return;
   }
+
+  // Handle provider-scoped proxy routes `/v1/<providerId>/*` used by DSH's
+  // in-memory provider bridge and Quick Answer one-shot calls. LobsterAI Plan
+  // aliases (`lobster`, `lobsterai`, `lobsterai-server`, `youdao`) rewrite to
+  // `/v1/*` and continue through the standard LobsterAI Server path;
+  // third-party OAuth providers (`github-copilot`, `openai-codex`, `xai-oauth`)
+  // forward through `oauthProviderUpstreamResolver`.
+  let effectiveReqUrl = req.url ?? '/';
+  const scopedMatch = /^\/v1\/([^/?]+)(\/.*)?$/.exec(effectiveReqUrl);
+  if (scopedMatch) {
+    let providerId: string;
+    try {
+      providerId = decodeURIComponent(scopedMatch[1]);
+    } catch {
+      providerId = scopedMatch[1];
+    }
+    const restPath = scopedMatch[2] || '/';
+    if (LOBSTER_SCOPED_PROVIDER_IDS.has(providerId)) {
+      effectiveReqUrl = normalizeScopedLobsterPlanPath(restPath);
+    } else {
+      const upstream = oauthProviderUpstreamResolver
+        ? await oauthProviderUpstreamResolver(providerId)
+        : null;
+      if (upstream) {
+        try {
+          const body = await collectRequestBody(req);
+          const targetUrl = `${upstream.baseUrl.replace(/\/+$/, '')}${restPath}`;
+          const headers: Record<string, string> = {
+            'content-type': typeof req.headers['content-type'] === 'string'
+              ? req.headers['content-type']
+              : 'application/json',
+            ...(typeof req.headers.accept === 'string' ? { accept: req.headers.accept } : {}),
+            ...(typeof req.headers['openai-beta'] === 'string' ? { 'openai-beta': req.headers['openai-beta'] } : {}),
+            ...(typeof req.headers.originator === 'string' ? { originator: req.headers.originator } : {}),
+            ...upstream.headers,
+          };
+          const response = await net.fetch(targetUrl, {
+            method: req.method || 'POST',
+            headers,
+            body: body.length > 0 ? new Uint8Array(body) : undefined,
+          });
+          const resHeaders: Record<string, string> = {};
+          response.headers.forEach((value, key) => {
+            const lower = key.toLowerCase();
+            if (lower !== 'content-encoding' && lower !== 'transfer-encoding' && lower !== 'content-length') {
+              resHeaders[key] = value;
+            }
+          });
+          res.writeHead(response.status, resHeaders);
+          if (response.body) {
+            const reader = response.body.getReader();
+            res.on('close', () => {
+              void reader.cancel().catch(() => {});
+            });
+            const pump = async (): Promise<void> => {
+              const { done, value } = await reader.read();
+              if (done || res.destroyed || res.writableEnded) {
+                if (!res.destroyed && !res.writableEnded) {
+                  res.end();
+                }
+                return;
+              }
+              res.write(Buffer.from(value));
+              await pump();
+            };
+            await pump();
+          } else {
+            res.end();
+          }
+        } catch (error) {
+          console.warn('[OpenClawTokenProxy] OAuth upstream request failed for %s:', providerId, error);
+          if (!res.headersSent) {
+            res.writeHead(502, { 'Content-Type': 'application/json' });
+            res.end(buildUpstreamRequestFailureBody(error));
+          } else if (!res.destroyed && !res.writableEnded) {
+            res.destroy();
+          }
+        }
+        return;
+      }
+      if (OAUTH_SCOPED_PROVIDER_IDS.has(providerId)) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message: `OAuth provider proxy upstream unavailable for ${providerId}`,
+            type: 'service_unavailable',
+            code: 'oauth_upstream_unavailable',
+          },
+        }));
+        return;
+      }
+    }
+  }
+
   let requestTrace: ProxyRequestTrace | undefined;
   try {
     const tokens = tokenGetter?.();
@@ -563,7 +718,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     const body = await collectRequestBody(req);
-    requestTrace = createProxyRequestTrace(req.headers[LLM_TRACEPARENT_HEADER], req.url?.split('?')[0] ?? '/');
+    requestTrace = createProxyRequestTrace(req.headers[LLM_TRACEPARENT_HEADER], effectiveReqUrl.split('?')[0] ?? '/');
+    requestTrace.owner = requestSessionKey;
     const usageContext = requestTrace.generated ? null : getLlmUsageContext(requestTrace.traceId, requestSessionKey);
     if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)
       || (usageContext && usageContext.owner !== undefined && usageContext.owner !== requestSessionKey)) {
@@ -590,15 +746,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       console.debug('[OpenClawTokenProxy] Request observation skipped');
     }
     observePromptPrefix(requestTrace, parsedBody, body.length, requestModel);
-    const upstreamBody = shouldHydrateGeminiChatCompletionsBody(req.url)
+    const upstreamBody = shouldHydrateGeminiChatCompletionsBody(effectiveReqUrl)
       ? hydrateGeminiChatCompletionsBody(body)
       : body;
 
     // Build upstream URL: serverBaseUrl + request path
-    // OpenClaw sends to /v1/chat/completions, upstream is /api/proxy/v1/chat/completions
+    // DSH sends to /v1/chat/completions (or /v1/lobsterai-server/chat/completions),
+    // upstream is /api/proxy/v1/chat/completions
     // Only the two virtual-model resolution routes share this authenticated loopback transport.
-    const resolutionPath = /^\/models\/(yd-fast|yd-ultra)\/resolve$/.test(req.url ?? '');
-    const upstreamPath = resolutionPath ? `/api${req.url}` : `/api/proxy${req.url || '/'}`;
+    const resolutionPath = /^\/models\/(yd-fast|yd-ultra)\/resolve$/.test(effectiveReqUrl);
+    const upstreamPath = resolutionPath ? `/api${effectiveReqUrl}` : `/api/proxy${effectiveReqUrl || '/'}`;
     const upstreamUrl = `${serverBaseUrl}${upstreamPath}`;
 
     const clientVersion = clientVersionGetter?.() ?? '';
@@ -1642,4 +1799,5 @@ export const __openClawTokenProxyTestUtils = {
   isTemporaryAuthRefreshFailure,
   isProxySessionKeyCurrent,
   shouldRefreshLobsterAIToken,
+  normalizeScopedLobsterPlanPath,
 };

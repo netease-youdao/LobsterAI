@@ -23,6 +23,7 @@ import CardToggle from '../common/CardToggle';
 import ManagementSearchHeader from '../common/ManagementSearchHeader';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
+import ContextCleanupBanner from '../cowork/ContextCleanupBanner';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
@@ -72,15 +73,13 @@ const importTabConfig: Record<ImportSourceType, {
 const CARD_ACTION_REVEAL_CLASS =
   'invisible group-hover:visible group-focus-within:visible';
 const SKILL_CARD_ACTION_CLASS =
-  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-neutral-900 px-3 '
-  + `${MANAGEMENT_META_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
-  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 '
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 '
+  + `${MANAGEMENT_META_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
+  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 '
   + 'focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
 const SKILL_DETAIL_USE_CLASS =
-  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-5 '
-  + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-action px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 interface SkillsManagerProps {
@@ -320,7 +319,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
 
   const handleToggleSkill = async (skillId: string) => {
     const targetSkill = skills.find(skill => skill.id === skillId);
-    if (!targetSkill) return;
+    if (!targetSkill || targetSkill.canDisable === false) return;
     const marketplaceSkill = marketplaceSkills.find(skill => skill.id === skillId);
     const targetEnabled = !targetSkill.enabled;
     reportSkillAction('toggle_enabled', {
@@ -628,6 +627,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const getSkillInstallStatus = (marketplaceSkill: MarketplaceSkill): 'not_installed' | 'installed' | 'update_available' => {
     const installed = skills.find(s => s.id === marketplaceSkill.id);
     if (!installed) return 'not_installed';
+    if (installed.isBuiltIn) return 'installed';
     if (!marketplaceSkill.version) return 'installed';
     const localVersion = installed.version || '0.0.0';
     if (compareVersions(marketplaceSkill.version, localVersion) > 0) return 'update_available';
@@ -637,7 +637,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const updatableSkills = useMemo(() => {
     return marketplaceSkills.filter(ms => {
       const installed = skills.find(s => s.id === ms.id);
-      if (!installed || !ms.version) return false;
+      if (!installed || installed.isBuiltIn || !ms.version) return false;
       const localVersion = installed.version || '0.0.0';
       return compareVersions(ms.version, localVersion) > 0;
     });
@@ -1076,9 +1076,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     const displayName = skillService.getLocalizedSkillName(skill.id, skill.name);
     const marketplaceSkill = marketplaceSkills.find(m => m.id === skill.id);
     const hasUpdate = Boolean(
-      marketplaceSkill?.version
+      !skill.isBuiltIn
+      && marketplaceSkill?.version
       && compareVersions(marketplaceSkill.version, skill.version || '0.0.0') > 0,
     );
+    const isAlwaysEnabled = skill.canDisable === false;
+    const menuItems = buildInstalledSkillMenuItems(skill);
     return (
       <div
         key={skill.id}
@@ -1102,17 +1105,26 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             {displayName}
           </div>
           {/* Reveal the management menu on hover or keyboard focus;
-              keep the enable switch visible at rest. */}
+              keep the enable switch visible at rest, or show an always-enabled
+              pill for core built-in skills that cannot be disabled. */}
           <div className="flex flex-shrink-0 items-center gap-1">
-            <div className={`flex items-center gap-1 ${CARD_ACTION_REVEAL_CLASS}`}>
-              <CardOverflowMenu items={buildInstalledSkillMenuItems(skill)} />
-            </div>
-            <CardToggle
-              isOn={skill.enabled}
-              label={i18nService.t(skill.enabled ? 'disable' : 'enable')}
-              disabled={readOnly}
-              onToggle={() => handleToggleSkill(skill.id)}
-            />
+            {menuItems.length > 0 && (
+              <div className={`flex items-center gap-1 ${CARD_ACTION_REVEAL_CLASS}`}>
+                <CardOverflowMenu items={menuItems} />
+              </div>
+            )}
+            {isAlwaysEnabled ? (
+              <span className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary">
+                {i18nService.t('skillAlwaysEnabled')}
+              </span>
+            ) : (
+              <CardToggle
+                isOn={skill.enabled}
+                label={i18nService.t(skill.enabled ? 'disable' : 'enable')}
+                disabled={readOnly}
+                onToggle={() => handleToggleSkill(skill.id)}
+              />
+            )}
           </div>
         </div>
 
@@ -1227,7 +1239,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 return next;
               });
             }}
-            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-action text-action-foreground hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-5 w-5" aria-hidden="true" />
             <span>{i18nService.t('addSkill')}</span>
@@ -1289,6 +1301,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           )}
         </div>
         </ManagementSearchHeader>
+
+        {!readOnly && <ContextCleanupBanner className="mb-3" />}
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">
@@ -1815,7 +1829,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                     return <div className={`mt-1 truncate ${MANAGEMENT_BODY_TEXT} text-secondary`}>{author}</div>;
                   })()}
                 </div>
-                {onUseSkill && selectedSkill.enabled && (
+                {onUseSkill && selectedSkill.enabled && selectedSkill.userInvocable !== false && (
                   <button
                     type="button"
                     onClick={() => handleUseSkill(selectedSkill)}
@@ -1890,21 +1904,29 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               </div>
             </div>
 
-            {/* Footer is the management strip: the labelled switch says what it
-                toggles, and delete stays quiet until you reach for it. */}
+            {/* Footer is the management strip: core built-in skills display an
+                always-enabled badge, while user skills show toggle and delete. */}
             <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border px-6 py-3">
-              <div className="flex items-center gap-2.5">
-                <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
-                <CardToggle
-                  isOn={selectedSkill.enabled}
-                  label={i18nService.t(selectedSkill.enabled ? 'disable' : 'enable')}
-                  disabled={readOnly}
-                  onToggle={() => {
-                    handleToggleSkill(selectedSkill.id);
-                    setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
-                  }}
-                />
-              </div>
+              {selectedSkill.canDisable === false ? (
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-surface-raised px-2.5 py-1 text-xs font-medium text-secondary">
+                    {i18nService.t('skillAlwaysEnabled')}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2.5">
+                  <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
+                  <CardToggle
+                    isOn={selectedSkill.enabled}
+                    label={i18nService.t(selectedSkill.enabled ? 'disable' : 'enable')}
+                    disabled={readOnly}
+                    onToggle={() => {
+                      handleToggleSkill(selectedSkill.id);
+                      setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
+                    }}
+                  />
+                </div>
+              )}
               {!readOnly && !selectedSkill.isBuiltIn && (
                 <button
                   type="button"
@@ -2044,7 +2066,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 type="button"
                 onClick={handleImportFromDialog}
                 disabled={isDownloadingSkill || !skillDownloadSource.trim()}
-                className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
+                className="w-full py-2.5 rounded-xl bg-action text-action-foreground text-sm font-medium hover:bg-action-hover transition-colors disabled:opacity-50"
               >
                 {isDownloadingSkill ? i18nService.t('importingSkill') : i18nService.t('importSkill')}
               </button>
@@ -2148,7 +2170,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               <button
                 type="button"
                 onClick={handleSyncFromOpenClaw}
-                className="px-4 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+                className="px-4 py-1.5 text-xs rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors"
               >
                 {i18nService.t('skillsSyncNow')}
               </button>

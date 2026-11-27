@@ -15,6 +15,31 @@ const child: SubagentSessionSummary = {
   sessionKey: 'agent:main:dashboard:child', status: 'running', createdAt: 2, endedAt: null,
 };
 
+test('dsh wait follows the activated native child until the parent summarizes', () => {
+  const turn: CoworkMessage[] = [
+    messages[0],
+    { ...messages[1], metadata: { toolName: SubagentToolName.DshFork, toolUseId: 'fork' } },
+    { id: 'result', type: 'tool_result', content: 'worker', timestamp: 3, metadata: { toolUseId: 'fork', subagentRunId: 'dsh:child' } },
+    { ...messages[2], metadata: { toolName: SubagentToolName.DshWait, toolUseId: 'wait' } },
+  ];
+  const nativeChild = { ...child, id: 'dsh:child' };
+  expect(getSubagentWaitPhase(turn, [nativeChild])).toBe(SubagentWaitPhase.Children);
+  expect(getSubagentWaitPhase(turn, [{ ...nativeChild, status: 'done' }])).toBe(SubagentWaitPhase.Summary);
+  expect(getSubagentWaitPhase([...turn, messages[0]], [nativeChild])).toBeNull();
+});
+
+test('dsh wait follows delegate_agent specialist delegations identically', () => {
+  const turn: CoworkMessage[] = [
+    messages[0],
+    { ...messages[1], metadata: { toolName: SubagentToolName.DshDelegate, toolUseId: 'delegate' } },
+    { id: 'result', type: 'tool_result', content: 'delegated', timestamp: 3, metadata: { toolUseId: 'delegate', subagentRunId: 'dsh:blog-child' } },
+    { ...messages[2], metadata: { toolName: SubagentToolName.DshWait, toolUseId: 'wait' } },
+  ];
+  const specialistChild = { ...child, id: 'dsh:blog-child', agentId: 'blog-publisher' };
+  expect(getSubagentWaitPhase(turn, [specialistChild])).toBe(SubagentWaitPhase.Children);
+  expect(getSubagentWaitPhase(turn, [{ ...specialistChild, status: 'done' }])).toBe(SubagentWaitPhase.Summary);
+});
+
 test('waits for children, then summary, and clears when the parent resumes', () => {
   expect(getSubagentWaitPhase(messages, [child])).toBe(SubagentWaitPhase.Children);
   expect(getSubagentWaitPhase(messages, [{ ...child, status: 'done' }])).toBe(SubagentWaitPhase.Summary);

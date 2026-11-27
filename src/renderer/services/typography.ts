@@ -26,8 +26,12 @@ const TEXT_SIZE_BASE = {
   markdownH4: 15,
   promptLarge: 15,
   sidebarCompact: 13,
-  // Task titles nested under an agent sit one step below the agent name.
-  sidebarTask: 12,
+  // Nested task titles match sidebarCompact (14px at the 15px default) so
+  // scanning tasks stays effortless; hierarchy comes from icon, indent, and weight.
+  sidebarTask: 13,
+  // Section headers, timestamps, and fold controls stay crisp at an integer 12px
+  // (at both 14px and 15px UI sizes) so Windows DirectWrite never blurs half pixels.
+  sidebarMeta: 11.5,
 } as const;
 
 const LINE_HEIGHT_BASE = {
@@ -52,6 +56,42 @@ const setPxVariable = (
 ): void => {
   root.style.setProperty(name, `${Math.round(value)}px`);
 };
+
+export const parseFontSizeDraft = (
+  raw: string,
+  min: number,
+  max: number,
+): number | null => {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Math.round(Number.parseFloat(trimmed));
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return null;
+  }
+  return parsed;
+};
+
+export const commitFontSizeDraft = (
+  raw: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const trimmed = raw.trim();
+  if (!/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    return normalizeFontPreference(fallback, fallback, min, max);
+  }
+  return normalizeFontPreference(trimmed, fallback, min, max);
+};
+
+export const stepFontSize = (
+  current: number,
+  delta: number,
+  min: number,
+  max: number,
+): number => normalizeFontPreference(current + delta, current, min, max);
 
 export const resolveTypographyPreferences = (config: TypographyConfig) => ({
   uiFontSize: normalizeFontPreference(

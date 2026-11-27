@@ -6,12 +6,40 @@ export const WeixinPlugin = {
   LoginWait: 'web.login.wait',
 } as const;
 
+export const WEIXIN_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
+
+/** OpenClaw's account key for an iLink bot ID, also used in its filenames and DM keys. */
+export function legacyWeixinAccountId(id: string): string {
+  return id.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+}
+
+/** Only authentication failures from the channel driver require a new QR login. */
+export function weixinCredentialErrorKey(error?: string | null) {
+  if (error?.startsWith('Weixin not configured: iLink token is required')) return 'imWeixinCredentialsMissing';
+  if (error?.startsWith('Weixin session expired (errcode=-14)')) return 'imWeixinCredentialsExpired';
+  return null;
+}
+
+export const WeixinQrPollStatus = {
+  Wait: 'wait',
+  Scanned: 'scaned',
+  Confirmed: 'confirmed',
+  Expired: 'expired',
+  ScannedRedirect: 'scaned_but_redirect',
+  NeedVerifyCode: 'need_verifycode',
+  VerifyCodeBlocked: 'verify_code_blocked',
+  BindedRedirect: 'binded_redirect',
+} as const;
+export type WeixinQrPollStatus = typeof WeixinQrPollStatus[keyof typeof WeixinQrPollStatus];
+
 export const WEIXIN_QR_ACTIVATION_TIMEOUT_MS = 10 * 60_000;
 
 export const WeixinQrLoginTimeout = {
   Start: 5 * 60_000,
   Wait: 8 * 60_000,
   RpcGrace: 10_000,
+  PollIntervalMs: 1_000,
+  LongPollMs: 35_000,
 } as const;
 
 /** Stable, redacted diagnostics emitted by the pinned Weixin plugin patch. */

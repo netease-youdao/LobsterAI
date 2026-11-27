@@ -1,10 +1,8 @@
-import {
-  ChatBubbleLeftIcon,
-  QuestionMarkCircleIcon,
-} from '@heroicons/react/24/outline';
+import { ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
+import SideChatIcon from '../icons/SideChatIcon';
 
 interface SelectedTextActionToolbarProps {
   left: number;
@@ -40,7 +38,7 @@ const SelectedTextActionToolbar: React.FC<SelectedTextActionToolbarProps> = ({
       onClick={onAskInSideChat}
       className="inline-flex min-w-0 items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised"
     >
-      <QuestionMarkCircleIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
+      <SideChatIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
       <span className="truncate whitespace-nowrap">
         {i18nService.t('coworkSelectedTextAskInSideChat')}
       </span>

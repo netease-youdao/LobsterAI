@@ -1,27 +1,26 @@
-import { describe, expect, test } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { describe, expect, test, vi } from 'vitest';
 
 import {
+  clearDshCleanShutdownMarker,
   findOrphanedDshRuntimes,
   isDshWebCommand,
   parseProcessTable,
   type ProcessTableRow,
   reapOrphanedDshRuntimes,
+  writeDshCleanShutdownMarker,
 } from './dshOrphanReaper';
-import { buildDshProcessLaunch } from './dshProcessLauncher';
 import { buildDshWebArgs } from './dshRuntime';
 
 const EXEC = '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI';
 const DEV_EXEC = '/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron';
-const INSTALLED_ENTRY = '/Users/me/Library/Application Support/LobsterAI/dsh-runtime/0.2.1-rc.5/lib/bin.js';
+const INSTALLED_ENTRY = '/Users/me/Library/Application Support/LobsterAI/dsh-runtime/0.2.2-rc.5/lib/bin.js';
 
-// The command line exactly as the manager spawns it, so the matcher cannot
-// drift from dshProcessLauncher/buildDshWebArgs unnoticed.
 function dshCommand(executablePath: string, entry: string, port: number): string {
-  const launch = buildDshProcessLaunch(
-    { executablePath, args: buildDshWebArgs(entry, port), cwd: '/', env: {} },
-    'darwin'
-  );
-  return [launch.command, ...launch.args].join(' ');
+  return [executablePath, '--expose-internals', ...buildDshWebArgs(entry, port)].join(' ');
 }
 
 describe('parseProcessTable', () => {
@@ -38,16 +37,43 @@ describe('parseProcessTable', () => {
 });
 
 describe('isDshWebCommand', () => {
-  test('matches the spawned runtime, through bin.js or a generated launcher', () => {
+  const LAUNCHER_ENTRY = '/Users/me/Library/Application Support/LobsterAI/dsh-profile/dsh-launcher/launch.mjs';
+
+  test('matches the spawned runtime, through bin.js, profile boot, or a generated launcher', () => {
     expect(isDshWebCommand(dshCommand(EXEC, INSTALLED_ENTRY, 57437), EXEC)).toBe(true);
+    expect(isDshWebCommand(`${EXEC} --expose-internals ${INSTALLED_ENTRY} --profile lobsterai --no-open`, EXEC)).toBe(true);
+    expect(
+      isDshWebCommand(
+        `${EXEC} --expose-internals /Users/me/Library/Application Support/LobsterAI/dsh-profile/dsh-launcher/launch.mjs --profile lobsterai --no-open --host 127.0.0.1 --port 0`,
+        EXEC,
+      ),
+    ).toBe(true);
     expect(isDshWebCommand(dshCommand(EXEC, '/Users/me/Library/Application Support/LobsterAI/dsh-launcher/launch.mjs', 1), EXEC)).toBe(true);
+    expect(
+      isDshWebCommand(
+        `${EXEC} --expose-internals ${LAUNCHER_ENTRY} --profile lobsterai --no-open --host 127.0.0.1 --port 0`,
+        EXEC,
+      ),
+    ).toBe(true);
   });
 
-  test('ignores another install, the main process, and other Node-mode children', () => {
+  test('ignores another install, the main process, plugin CLI runs, and other Node-mode children', () => {
     expect(isDshWebCommand(dshCommand(DEV_EXEC, INSTALLED_ENTRY, 57437), EXEC)).toBe(false);
     expect(isDshWebCommand(EXEC, EXEC)).toBe(false);
     expect(isDshWebCommand(`${EXEC} /runtime/openclaw.mjs gateway --port 18789`, EXEC)).toBe(false);
     expect(isDshWebCommand(`${EXEC} --expose-internals ${INSTALLED_ENTRY} plugin install foo`, EXEC)).toBe(false);
+    expect(
+      isDshWebCommand(`${EXEC} --expose-internals ${LAUNCHER_ENTRY} plugin --profile lobsterai add foo`, EXEC),
+    ).toBe(false);
+    expect(
+      isDshWebCommand(`${EXEC} --expose-internals ${LAUNCHER_ENTRY} plugin --profile lobsterai add --no-open`, EXEC),
+    ).toBe(false);
+    expect(
+      isDshWebCommand(
+        `${EXEC} --expose-internals /Users/me/Library/Application Support/LobsterAI/dsh-profile/dsh-launcher/launch.mjs plugin --profile lobsterai add foo`,
+        EXEC,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -58,6 +84,15 @@ describe('findOrphanedDshRuntimes', () => {
 
   test('keeps a runtime whose LobsterAI main process is alive', () => {
     expect(findOrphanedDshRuntimes([main, owned], EXEC)).toEqual([]);
+  });
+
+  test('preserves Helper children of a live Electron instance, including relative or unobserved parents', () => {
+    const helper = '/private/test/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper';
+    const child = { ...owned, command: `${helper} --expose-internals /runtime/bin.js --profile lobsterai --no-open` };
+    const relativeMain = { ...main, command: 'output/test/Electron.app/Contents/MacOS/Electron .' };
+    expect(findOrphanedDshRuntimes([relativeMain, child], helper)).toEqual([]);
+    expect(findOrphanedDshRuntimes([child], helper)).toEqual([]);
+    expect(findOrphanedDshRuntimes([{ ...child, ppid: 1 }], helper)).toHaveLength(1);
   });
 
   test('reclaims a runtime reparented to launchd', () => {
@@ -77,6 +112,17 @@ describe('findOrphanedDshRuntimes', () => {
 });
 
 describe('reapOrphanedDshRuntimes', () => {
+  test('does not force-kill a PID now owned by a live instance', async () => {
+    const command = dshCommand(EXEC, INSTALLED_ENTRY, 4000);
+    let scan = 0;
+    const signals: string[] = [];
+    await reapOrphanedDshRuntimes({
+      platform: 'darwin', executablePath: EXEC, graceMs: 0,
+      listProcesses: async () => `600 ${++scan === 1 ? 1 : 500} ${command}`,
+      isAlive: () => true, sendSignal: (_pid, signal) => { signals.push(signal); },
+    });
+    expect(signals).toEqual(['SIGTERM']);
+  });
   const table = `  500     1 ${EXEC}\n  501   500 ${dshCommand(EXEC, INSTALLED_ENTRY, 4000)}\n  600     1 ${dshCommand(EXEC, INSTALLED_ENTRY, 4001)}\n`;
 
   test('sends SIGTERM to orphans only and stops once they exit', async () => {
@@ -121,5 +167,46 @@ describe('reapOrphanedDshRuntimes', () => {
     };
     expect(await reapOrphanedDshRuntimes({ platform: 'win32', listProcesses: neverCalled })).toBe(0);
     expect(await reapOrphanedDshRuntimes({ platform: 'darwin', listProcesses: neverCalled })).toBe(0);
+  });
+
+  test('skips process table scan when clean shutdown marker matches executablePath', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-orphan-marker-'));
+    const markerPath = path.join(dir, 'dsh-clean-shutdown.json');
+    try {
+      writeDshCleanShutdownMarker(markerPath, EXEC);
+      const listProcesses = vi.fn(async () => table);
+
+      expect(await reapOrphanedDshRuntimes({
+        platform: 'darwin',
+        executablePath: EXEC,
+        cleanShutdownMarkerPath: markerPath,
+        listProcesses,
+      })).toBe(0);
+      expect(listProcesses).not.toHaveBeenCalled();
+
+      // Different executable path must still scan.
+      expect(await reapOrphanedDshRuntimes({
+        platform: 'darwin',
+        executablePath: DEV_EXEC,
+        cleanShutdownMarkerPath: markerPath,
+        listProcesses,
+      })).toBe(0);
+      expect(listProcesses).toHaveBeenCalledTimes(1);
+
+      // Clearing the marker (as on host start / crash recovery) restores scanning.
+      clearDshCleanShutdownMarker(markerPath);
+      expect(fs.existsSync(markerPath)).toBe(false);
+      await reapOrphanedDshRuntimes({
+        platform: 'darwin',
+        executablePath: EXEC,
+        cleanShutdownMarkerPath: markerPath,
+        listProcesses,
+        sendSignal: () => undefined,
+        isAlive: () => false,
+      });
+      expect(listProcesses).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

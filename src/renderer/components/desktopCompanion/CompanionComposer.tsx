@@ -1,5 +1,5 @@
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { buildSessionTitleFromInput } from '../../../common/sessionTitle';
@@ -12,13 +12,18 @@ import {
   DesktopCompanionSize,
   EMPTY_DESKTOP_COMPANION_DRAFT,
 } from '../../../shared/desktopCompanion/constants';
+import {
+  type CompanionContextAction,
+  CompanionContextActionKind,
+  resolveCompanionContextActions,
+} from '../../../shared/desktopCompanion/contextActions';
 import { buildSelectionTaskPrompt } from '../../../shared/desktopCompanion/selectionTaskContext';
 import { authService } from '../../services/auth';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
 import { i18nService } from '../../services/i18n';
 import type { RootState } from '../../store';
-import { type DraftAttachment, setDraftAttachments, setDraftKitIds, setDraftSkillIds } from '../../store/slices/coworkSlice';
+import { type DraftAttachment, setDraftAttachments, setDraftKitIds, setDraftPrompt, setDraftSkillIds } from '../../store/slices/coworkSlice';
 import { clearActiveKits } from '../../store/slices/kitSlice';
 import { clearActiveSkills } from '../../store/slices/skillSlice';
 import { CoworkCollaborationMode, type CoworkImageAttachment } from '../../types/cowork';
@@ -29,6 +34,7 @@ import { useHomeStartContext } from '../cowork/useHomeStartContext';
 import Toast, { type ToastEventDetail } from '../Toast';
 import { beginCompanionTask, companionPreflightFailure } from './analytics';
 import { bootstrapCompanionComposer, refreshCompanionComposer } from './companionComposerBootstrap';
+import CompanionContextBar from './CompanionContextBar';
 import SelectionTaskContextCard from './SelectionTaskContextCard';
 import { ComposerExit, useComposerMotion } from './useComposerMotion';
 import { useDesktopCompanionState } from './useDesktopCompanionState';
@@ -72,6 +78,7 @@ export default function CompanionComposer() {
   const motionRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<CoworkPromptInputRef>(null);
   const submittingRef = useRef(false);
+  const runningContextActionRef = useRef(false);
   const passThroughRef = useRef<boolean | null>(null);
   const start = useHomeStartContext();
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
@@ -136,7 +143,10 @@ export default function CompanionComposer() {
   const draft = companion?.draft;
   useEffect(() => {
     if (!ready || !draft || (!draft.prompt.trim() && draft.attachments.length === 0)) return;
-    if (draft.prompt.trim() && !homePromptRef.current.trim()) inputRef.current?.setValue(draft.prompt, 'template');
+    if (draft.prompt.trim() && !homePromptRef.current.trim()) {
+      inputRef.current?.setValue(draft.prompt);
+      dispatch(setDraftPrompt({ sessionId: HOME_DRAFT_KEY, draft: draft.prompt }));
+    }
     if (draft.attachments.length > 0) {
       const incoming: DraftAttachment[] = draft.attachments.map(file => ({
         path: file.path,
@@ -276,6 +286,71 @@ export default function CompanionComposer() {
   const openSkills = useCallback(() => { void api.openMainPage(DesktopCompanionMainPage.Skills); }, [api]);
   const openKits = useCallback(() => { void api.openMainPage(DesktopCompanionMainPage.Kits); }, [api]);
 
+  const contextActions = useMemo(() => {
+    if (!companion || companion.preferences.contextHints === false) return [];
+    return resolveCompanionContextActions(companion.context, companion.foreground?.category);
+  }, [companion]);
+
+  const showContextBar = ready
+    && !selectionContext
+    && !homePrompt.trim()
+    && (homeAttachments?.length ?? 0) === 0
+    && contextActions.length > 0;
+
+  const handleContextAction = useCallback(async (action: CompanionContextAction) => {
+    if (runningContextActionRef.current) return;
+    if (action.kind === CompanionContextActionKind.Template) {
+      if (action.promptKey) {
+        const prompt = t(action.promptKey);
+        inputRef.current?.setValue(prompt);
+        dispatch(setDraftPrompt({ sessionId: HOME_DRAFT_KEY, draft: prompt }));
+      }
+      inputRef.current?.focus();
+      void api.runContextAction({ actionId: action.id }).catch(() => {});
+      return;
+    }
+    runningContextActionRef.current = true;
+    try {
+      const result = await api.runContextAction({ actionId: action.id });
+      if (!result.success) {
+        if (result.error) showToast(result.error);
+        return;
+      }
+      if (result.attachments && result.attachments.length > 0) {
+        const incoming: DraftAttachment[] = result.attachments.map(file => ({
+          path: file.path,
+          name: file.name,
+          isImage: file.isImage === true,
+          isDirectory: file.isDirectory === true,
+        }));
+        const merged = new Map([...(homeAttachmentsRef.current ?? []), ...incoming].map(file => [file.path, file]));
+        dispatch(setDraftAttachments({ draftKey: HOME_DRAFT_KEY, attachments: [...merged.values()] }));
+      }
+      if (result.pastedText) {
+        const pastedId = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `clip-${Date.now()}`;
+        inputRef.current?.addPastedTexts([{ id: pastedId, text: result.pastedText }]);
+      }
+      if (result.prompt) {
+        inputRef.current?.setValue(result.prompt);
+        dispatch(setDraftPrompt({ sessionId: HOME_DRAFT_KEY, draft: result.prompt }));
+      }
+      if (action.kind === CompanionContextActionKind.ActiveFile || action.kind === CompanionContextActionKind.Clipboard) {
+        inputRef.current?.focus();
+      }
+    } catch (error) {
+      console.error('[CompanionComposer] failed to run contextual action', error);
+      showToast(t('desktopCompanionRequestFailed'));
+    } finally {
+      runningContextActionRef.current = false;
+    }
+  }, [api, dispatch, showToast]);
+
+  const handleDismissClipboard = useCallback((fingerprint: string) => {
+    void api.dismissContextClipboard(fingerprint).catch(error => {
+      console.error('[CompanionComposer] failed to dismiss clipboard context', error);
+    });
+  }, [api]);
+
   // The card sits in the window's corner by the orb; the rest of the window is room for menus.
   const cardAlignClass = placement === DesktopCompanionPanelPlacement.Left ? 'items-end' : 'items-start';
 
@@ -299,6 +374,14 @@ export default function CompanionComposer() {
                 void clearSelectionContext().then(() => inputRef.current?.focus())
                   .catch(() => showToast(t('desktopCompanionRequestFailed')));
               }}
+            />
+          )}
+          {showContextBar && (
+            <CompanionContextBar
+              actions={contextActions}
+              disabled={!ready}
+              onSelect={action => { void handleContextAction(action); }}
+              onDismissClipboard={handleDismissClipboard}
             />
           )}
           <CoworkPromptInput

@@ -1,6 +1,6 @@
-import { execSync, spawnSync } from 'child_process';
+import { execFile, execSync, spawnSync } from 'child_process';
 import { app } from 'electron';
-import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
@@ -98,13 +98,108 @@ export function getElectronNodeRuntimePath(): string {
  * Cached user shell PATH. Resolved once and reused across calls.
  */
 let cachedUserShellPath: string | null | undefined;
+let userShellPathInFlight: Promise<string | null> | null = null;
+
+/**
+ * Seed the in-memory shell PATH cache (e.g. from persisted startup KV) so
+ * packaged macOS/Linux launches never block the main thread on `execSync`.
+ */
+export function seedUserShellPathCache(shellPath: string | null): void {
+  if (typeof shellPath === 'string' && shellPath.trim().length > 0) {
+    cachedUserShellPath = shellPath.trim();
+  }
+}
+
+/** Return the currently cached shell PATH without spawning a subprocess. */
+export function getCachedUserShellPath(): string | null {
+  return cachedUserShellPath ?? null;
+}
+
+/** Common POSIX tool directories used as a fast fallback before shell probe finishes. */
+export function getFallbackCommonShellPaths(): string[] {
+  if (process.platform === 'win32') return [];
+  const home = process.env.HOME || '';
+  const candidates = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ];
+  if (home) {
+    candidates.push(
+      `${home}/.local/bin`,
+      `${home}/.nvm/current/bin`,
+      `${home}/.volta/bin`,
+      `${home}/.fnm/current/bin`,
+    );
+  }
+  return candidates;
+}
+
+/**
+ * Non-blocking resolution of the user's login shell PATH on macOS/Linux.
+ * Avoids freezing Electron's main thread during packaged startup.
+ */
+export async function resolveUserShellPathAsync(options: {
+  timeoutMs?: number;
+  forceRefresh?: boolean;
+} = {}): Promise<string | null> {
+  if (process.platform === 'win32') {
+    cachedUserShellPath = null;
+    return null;
+  }
+  if (!options.forceRefresh && cachedUserShellPath !== undefined) {
+    return cachedUserShellPath;
+  }
+  if (!options.forceRefresh && userShellPathInFlight) {
+    return userShellPathInFlight;
+  }
+
+  const shell = process.env.SHELL || '/bin/bash';
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const run = new Promise<string | null>((resolve) => {
+    execFile(
+      shell,
+      ['-lc', 'echo __PATH__=$PATH'],
+      {
+        encoding: 'utf-8',
+        timeout: timeoutMs,
+        env: { ...process.env },
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+        const match = stdout.match(/__PATH__=(.+)/);
+        const resolved = match?.[1]?.trim() || null;
+        if (resolved) {
+          cachedUserShellPath = resolved;
+        } else if (cachedUserShellPath === undefined) {
+          cachedUserShellPath = null;
+        }
+        resolve(resolved);
+      },
+    );
+  }).finally(() => {
+    if (userShellPathInFlight === run) {
+      userShellPathInFlight = null;
+    }
+  });
+
+  if (!options.forceRefresh) {
+    userShellPathInFlight = run;
+  }
+  return run;
+}
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
  * Packaged Electron apps on macOS don't inherit the user's shell profile,
  * so node/npm and other tools won't be in PATH unless we resolve it.
  */
-function resolveUserShellPath(): string | null {
+export function resolveUserShellPath(): string | null {
   if (cachedUserShellPath !== undefined) return cachedUserShellPath;
 
   if (process.platform === 'win32') {
@@ -1096,26 +1191,6 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       env.PATH = [devBinDir, env.PATH].filter(Boolean).join(delimiter);
       coworkLog('INFO', 'applyPackagedEnvOverrides', `Dev mode: prepended node_modules/.bin to PATH: ${devBinDir}`);
     }
-
-    // In dev mode, add openclaw runtime's node_modules to NODE_PATH so exec tool
-    // can access shared packages like sharp.
-    const devRuntimeNodeModules = (() => {
-      const candidates = [
-        join(app.getAppPath(), 'vendor', 'openclaw-runtime', 'current', 'node_modules'),
-        join(process.cwd(), 'vendor', 'openclaw-runtime', 'current', 'node_modules'),
-      ];
-      for (const c of candidates) {
-        try {
-          const resolved = realpathSync(c);
-          if (existsSync(resolved)) return resolved;
-        } catch { /* symlink target missing — skip */ }
-      }
-      return null;
-    })();
-    if (devRuntimeNodeModules) {
-      env.NODE_PATH = appendEnvPath(env.NODE_PATH, [devRuntimeNodeModules]);
-      coworkLog('INFO', 'applyPackagedEnvOverrides', `Dev mode: added openclaw runtime node_modules to NODE_PATH: ${devRuntimeNodeModules}`);
-    }
     return;
   }
 
@@ -1190,7 +1265,6 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   const nodePaths = [
     join(resourcesPath, 'app.asar', 'node_modules'),
     join(resourcesPath, 'app.asar.unpacked', 'node_modules'),
-    join(resourcesPath, 'cfmind', 'node_modules'),
   ].filter((nodePath) => existsSync(nodePath));
 
   if (nodePaths.length > 0) {

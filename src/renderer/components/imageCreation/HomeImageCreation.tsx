@@ -70,19 +70,9 @@ export default function HomeImageCreation({ actions, selectedActionId, onActionS
           aria-controls="image-creation-gallery"
           data-image-creation-tab={ImageCreation.TabId}
           onClick={() => { if (selectedActionId) onDeselect(); setExpanded(!visible); }}
-          icon={<PhotoIcon className="h-3.5 w-3.5" strokeWidth={2} />}
+          icon={<PhotoIcon className="h-6 w-6" strokeWidth={1.75} />}
+          iconAccentClassName="text-amber-500 dark:text-amber-400"
           label={t('imageCreationTab')}
-          badge={(
-            <span
-              className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors duration-200 ${
-                visible
-                  ? 'bg-primary/15 text-primary-hover'
-                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-              }`}
-            >
-              {t('imageCreationNew')}
-            </span>
-          )}
         />
       )}
     </QuickActionBar>
@@ -93,21 +83,17 @@ export default function HomeImageCreation({ actions, selectedActionId, onActionS
         setBackup(null);
       }}>{t('imageCreationRestore')}</button>
     </div>}
-    {/* The shelf hangs below the quick-action block instead of sitting in its
-        flow (the block is the positioned ancestor), so the greeting and input
-        keep their place whether or not examples are showing or still loading;
-        the page scrolls to reveal what does not fit. */}
-    {visible && catalog?.enabled && <section id="image-creation-gallery" className="absolute inset-x-0 top-full animate-fade-in-up pb-10 pt-6" aria-labelledby="image-creation-heading">
+    {visible && catalog?.enabled && <section id="image-creation-gallery" className="mt-6 w-full animate-fade-in-up pb-4" aria-labelledby="image-creation-heading">
       <h2 id="image-creation-heading" className="sr-only">{t('imageCreationHeading')}</h2>
       <ImageExampleShelf catalog={catalog} onSelect={setSelected} />
-      <div className="mt-5 flex items-center justify-between gap-4 px-0.5 text-xs leading-5 text-muted">
+      <div className="mt-4 flex items-center justify-between gap-4 px-0.5 text-xs leading-5 text-muted">
         <button type="button" className="flex items-center gap-1 rounded transition-colors hover:text-foreground"
           onClick={() => window.dispatchEvent(new CustomEvent(ExpertUiEvent.OpenPlaza, { detail: { presetId: catalog.expertPresetId } }))}>{t('imageCreationMore')}<ArrowRightIcon className="h-3.5 w-3.5" /></button>
         <button type="button" className="flex shrink-0 items-center gap-1 rounded transition-colors hover:text-foreground"
           onClick={() => setExpanded(false)}>{t('coworkQuickActionCollapse')}<ChevronUpIcon className="h-3.5 w-3.5" /></button>
       </div>
     </section>}
-    {visible && !catalog && !failed && <div className="absolute inset-x-0 top-full grid grid-cols-4 gap-x-4 pt-6" aria-label={t('loading')}>{Array.from({ length: 4 }, (_, index) => <div key={index} className="aspect-[8/5] animate-pulse rounded-xl bg-surface-raised" />)}</div>}
+    {visible && !catalog && !failed && <div className="mt-6 grid w-full grid-cols-4 gap-x-4" aria-label={t('loading')}>{Array.from({ length: 4 }, (_, index) => <div key={index} className="aspect-[8/5] animate-pulse rounded-xl bg-surface-raised" />)}</div>}
     {failed && !catalog && <p className="mt-3 text-center text-xs text-muted">{t('imageCreationLoadFailed')} <button type="button" className="text-primary hover:underline" onClick={() => void retry()}>{t('retry')}</button></p>}
     {children}
     {selected && <ImageExampleDialog key={selected.id} example={selected} onClose={() => { preparation.current++; setSelected(null); }} onUse={useExample} />}

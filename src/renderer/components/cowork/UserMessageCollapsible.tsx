@@ -33,8 +33,13 @@ const UserMessageCollapsible: React.FC<UserMessageCollapsibleProps> = ({ childre
     const content = contentRef.current;
     if (!content) return undefined;
     const measure = () => {
-      setIsCollapsible(shouldCollapseUserMessage(content.offsetHeight));
-      setLineCount(Array.from(content.querySelectorAll(`[${USER_MESSAGE_TEXT_ATTRIBUTE}]`))
+      const textBlocks = Array.from(content.querySelectorAll(`[${USER_MESSAGE_TEXT_ATTRIBUTE}]`));
+      const measuredTextHeight = textBlocks.reduce(
+        (total, block) => total + block.getBoundingClientRect().height,
+        0,
+      );
+      setIsCollapsible(shouldCollapseUserMessage(measuredTextHeight));
+      setLineCount(textBlocks
         .reduce((total, block) => total + countUserMessageLines(
           block.getBoundingClientRect().height,
           Number.parseFloat(getComputedStyle(block).lineHeight),

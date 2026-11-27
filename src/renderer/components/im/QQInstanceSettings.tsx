@@ -144,11 +144,11 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
                 if (e.key === 'Escape') { setNameValue(instance.instanceName); setEditingName(false); }
               }}
               autoFocus
-              className="text-sm font-medium text-foreground bg-transparent border-b border-primary focus:outline-none px-0 py-0"
+              className="text-sm font-medium text-foreground bg-transparent border-b border-foreground/40 focus:outline-none px-0 py-0"
             />
           ) : (
             <span
-              className="text-sm font-medium text-foreground cursor-pointer hover:text-primary transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
+              className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
               onClick={() => setEditingName(true)}
               title={i18nService.t('imQQClickToRename')}
             >
@@ -185,7 +185,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
                 console.error('[IM] Failed to open guide URL:', err);
               });
             }}
-            className="mt-2 text-xs font-medium text-primary dark:text-primary hover:text-primary dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
+            className="mt-2 text-xs font-medium text-secondary hover:text-foreground underline underline-offset-2 transition-colors"
           >
             {i18nService.t('imViewGuide')}
           </button>
@@ -211,7 +211,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ appId: '' }); void onSave({ appId: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -240,7 +240,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ appSecret: '' }); void onSave({ appSecret: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -249,7 +249,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => setShowSecrets(prev => ({ ...prev, 'appSecret': !prev['appSecret'] }))}
-              className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+              className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
               title={showSecrets['appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
             >
               {showSecrets['appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -263,7 +263,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
 
       {/* Advanced Settings (collapsible) */}
       <details className="group">
-        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
           {i18nService.t('imAdvancedSettings')}
         </summary>
         <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -328,7 +328,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
                     void onSave({ allowFrom: newIds });
                   }
                 }}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('add') || '添加'}
               </button>

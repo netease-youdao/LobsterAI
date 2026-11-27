@@ -1,7 +1,7 @@
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { type AppConfig, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction, SHORTCUTS_MIGRATION_VERSION, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
+import { type AppConfig, ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, REMOVED_PROVIDER_MODELS_MIGRATION_VERSION, resolveArtifactAutoPreviewEnabled, ShortcutAction, SHORTCUTS_MIGRATION_VERSION, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
 
 const makeLegacyConfigWithoutMiniMaxAddedModels = (): AppConfig => ({
   ...defaultConfig,
@@ -287,38 +287,71 @@ describe('configService theme persistence', () => {
 });
 
 describe('configService artifact auto-preview persistence', () => {
-  test('disables auto-preview only for an explicit false value', () => {
-    expect(resolveArtifactAutoPreviewEnabled(false)).toBe(false);
+  test('enables auto-preview only for an explicit true value', () => {
     expect(resolveArtifactAutoPreviewEnabled(true)).toBe(true);
-    expect(resolveArtifactAutoPreviewEnabled(undefined)).toBe(true);
-    expect(resolveArtifactAutoPreviewEnabled(null)).toBe(true);
+    expect(resolveArtifactAutoPreviewEnabled(false)).toBe(false);
+    expect(resolveArtifactAutoPreviewEnabled(undefined)).toBe(false);
+    expect(resolveArtifactAutoPreviewEnabled(null)).toBe(false);
   });
 
-  test('defaults legacy configs to auto-preview enabled', async () => {
+  test('defaults legacy configs without the preference to auto-preview disabled', async () => {
     const legacyConfig: Partial<AppConfig> = { ...defaultConfig };
     delete legacyConfig.artifactAutoPreviewEnabled;
+    delete legacyConfig.artifactAutoPreviewMigrationVersion;
     const { configService, storeData } = await loadConfigServiceWithStoredConfig(
       legacyConfig as AppConfig,
     );
 
     await configService.init();
 
-    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(true);
-    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).artifactAutoPreviewEnabled).toBe(true);
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewMigrationVersion).toBe(
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
+    );
   });
 
-  test('preserves a disabled auto-preview preference across partial updates', async () => {
-    const storedConfig: AppConfig = {
+  test('force-resets pre-migration enabled configs to disabled exactly once', async () => {
+    const preMigrationConfig = {
       ...defaultConfig,
-      artifactAutoPreviewEnabled: false,
-    };
-    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+      artifactAutoPreviewEnabled: true,
+    } as AppConfig;
+    delete (preMigrationConfig as Partial<AppConfig>).artifactAutoPreviewMigrationVersion;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
 
     await configService.init();
+
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewMigrationVersion).toBe(
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
+    );
+  });
+
+  test('preserves re-enabled auto-preview after the forced reset across partial updates and restarts', async () => {
+    const preMigrationConfig = {
+      ...defaultConfig,
+      artifactAutoPreviewEnabled: true,
+    } as AppConfig;
+    delete (preMigrationConfig as Partial<AppConfig>).artifactAutoPreviewMigrationVersion;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
+
+    await configService.init();
+    await configService.updateConfig({ artifactAutoPreviewEnabled: true });
     await configService.updateConfig({ useSystemProxy: true });
 
-    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
-    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).artifactAutoPreviewEnabled).toBe(false);
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(true);
+    expect(savedConfig.artifactAutoPreviewEnabled).toBe(true);
+    expect(savedConfig.artifactAutoPreviewMigrationVersion).toBe(
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
+    );
+
+    const { configService: restartedService } = await loadConfigServiceWithStoredConfig(savedConfig);
+    await restartedService.init();
+    expect(restartedService.getConfig().artifactAutoPreviewEnabled).toBe(true);
   });
 });
 
@@ -686,7 +719,7 @@ describe('configService provider migrations', () => {
     expect(savedConfig.providerModelMigrationVersions?.[ProviderName.Moonshot]).toBe(2);
   });
 
-  test('repairs stale official Kimi K3 capability values after migration', async () => {
+  test('repairs stale Kimi K3 capability flags while respecting explicit user limits and overrides', async () => {
     const storedConfig: AppConfig = {
       ...defaultConfig,
       providerModelMigrationVersions: {
@@ -705,8 +738,22 @@ describe('configService provider migrations', () => {
               supportsImage: false,
               supportsVideo: false,
               supportsThinking: false,
-              contextWindow: 128_000,
-              maxTokens: 4_096,
+              contextWindow: 200_000,
+              maxTokens: 262_144,
+            },
+          ],
+        },
+        custom_0: {
+          enabled: true,
+          apiKey: 'sk-custom',
+          baseUrl: 'https://custom.example.com/v1',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'kimi-k3',
+              name: 'Custom Kimi K3',
+              supportsImage: false,
+              capabilityOverrides: { image: false },
             },
           ],
         },
@@ -716,15 +763,98 @@ describe('configService provider migrations', () => {
 
     await configService.init();
 
-    const model = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
+    const moonshotModel = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
       .providers?.[ProviderName.Moonshot].models?.[0];
-    expect(model).toMatchObject({
+    expect(moonshotModel).toMatchObject({
       id: 'kimi-k3',
       supportsImage: true,
       supportsVideo: true,
       supportsThinking: true,
+      contextWindow: 200_000,
+      maxTokens: 262_144,
+    });
+
+    const customModel = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
+      .providers?.custom_0.models?.[0];
+    expect(customModel).toMatchObject({
+      id: 'kimi-k3',
+      supportsImage: false,
+      supportsVideo: true,
+      supportsThinking: true,
       contextWindow: 1_048_576,
       maxTokens: 1_048_576,
+      capabilityOverrides: { image: false },
+    });
+  });
+
+  test('migrates legacy OpenClaw Kimi K3 customParams max_tokens into maxTokens and strips reserved keys', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      providerModelMigrationVersions: {
+        [ProviderName.Moonshot]: 2,
+      },
+      providers: {
+        ...defaultConfig.providers,
+        [ProviderName.Moonshot]: {
+          ...defaultConfig.providers![ProviderName.Moonshot],
+          enabled: true,
+          apiKey: 'sk-moonshot',
+          models: [
+            {
+              id: 'kimi-k3',
+              name: 'Kimi K3',
+              supportsImage: true,
+              supportsVideo: true,
+              supportsThinking: true,
+              contextWindow: 1_048_576,
+              maxTokens: 1_048_576,
+              customParams: {
+                max_tokens: 262_144,
+              },
+            },
+          ],
+        },
+        custom_0: {
+          enabled: true,
+          apiKey: 'sk-custom',
+          baseUrl: 'https://custom.example.com/v1',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'kimi-k3',
+              name: 'Custom K3',
+              supportsImage: true,
+              maxTokens: 8_192,
+              customParams: {
+                max_tokens: 65_536,
+                temperature: 1,
+                compat: { maxTokensField: 'max_tokens' },
+                service_tier: 'priority',
+              },
+            },
+          ],
+        },
+      },
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+
+    const moonshotK3 = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
+      .providers?.[ProviderName.Moonshot].models?.[0];
+    expect(moonshotK3).toMatchObject({
+      id: 'kimi-k3',
+      contextWindow: 1_048_576,
+      maxTokens: 262_144,
+    });
+    expect(moonshotK3).not.toHaveProperty('customParams');
+
+    const customK3 = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
+      .providers?.custom_0.models?.[0];
+    expect(customK3).toMatchObject({
+      id: 'kimi-k3',
+      maxTokens: 65_536,
+      customParams: { service_tier: 'priority' },
     });
   });
 
@@ -1112,6 +1242,66 @@ describe('configService provider migrations', () => {
     expect(restartedService.getConfig().codeFontSize).toBe(16);
   });
 
+  test('removes retired default models once and preserves user-added or discovered models after migration', async () => {
+    const preMigrationConfig: AppConfig = {
+      ...defaultConfig,
+      removedProviderModelsMigrationVersion: undefined,
+      model: {
+        ...defaultConfig.model,
+        defaultModel: 'deepseek-chat',
+        defaultModelProvider: ProviderName.DeepSeek,
+      },
+      providers: {
+        ...defaultConfig.providers,
+        [ProviderName.DeepSeek]: {
+          ...defaultConfig.providers![ProviderName.DeepSeek],
+          enabled: true,
+          apiKey: 'sk-deepseek',
+          models: [
+            { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
+            { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true },
+          ],
+        },
+      },
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
+
+    await configService.init();
+
+    const migrated = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(migrated.removedProviderModelsMigrationVersion).toBe(REMOVED_PROVIDER_MODELS_MIGRATION_VERSION);
+    expect(migrated.providers?.[ProviderName.DeepSeek].models?.map(m => m.id)).not.toContain('deepseek-chat');
+    expect(migrated.model.defaultModel).toBe(defaultConfig.model.defaultModel);
+
+    // After migration has been applied, explicitly re-adding or discovering a
+    // previously retired ID (e.g. deepseek-chat) must survive subsequent restarts.
+    await configService.updateConfig({
+      model: {
+        ...migrated.model,
+        defaultModel: 'deepseek-chat',
+        defaultModelProvider: ProviderName.DeepSeek,
+      },
+      providers: {
+        ...migrated.providers,
+        [ProviderName.DeepSeek]: {
+          ...migrated.providers![ProviderName.DeepSeek],
+          models: [
+            ...(migrated.providers![ProviderName.DeepSeek].models ?? []),
+            { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
+          ],
+        },
+      },
+    });
+
+    const afterUserAdd = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    const { configService: restartedService } = await loadConfigServiceWithStoredConfig(afterUserAdd);
+    await restartedService.init();
+    expect(
+      restartedService.getConfig().providers?.[ProviderName.DeepSeek].models?.map(m => m.id),
+    ).toContain('deepseek-chat');
+    expect(restartedService.getConfig().model.defaultModel).toBe('deepseek-chat');
+  });
+
   test('clamps font preferences when saving config updates', async () => {
     const { configService, storeData } = await loadConfigServiceWithStoredConfig(defaultConfig);
 
@@ -1189,5 +1379,27 @@ describe('configService builtin default model refresh', () => {
       expect(savedConfig.providers?.[providerName].models).toEqual(models);
     }
     expect(savedConfig.model).toEqual(storedConfig.model);
+  });
+
+  test('serializes concurrent updateConfig calls so rapid immediate saves do not overwrite each other', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      language: 'zh',
+      useSystemProxy: false,
+      artifactAutoPreviewEnabled: false,
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+    await configService.init();
+
+    await Promise.all([
+      configService.updateConfig({ language: 'en' }),
+      configService.updateConfig({ useSystemProxy: true }),
+      configService.updateConfig({ artifactAutoPreviewEnabled: true }),
+    ]);
+
+    const saved = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(saved.language).toBe('en');
+    expect(saved.useSystemProxy).toBe(true);
+    expect(saved.artifactAutoPreviewEnabled).toBe(true);
   });
 });

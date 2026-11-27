@@ -1,0 +1,7 @@
+# LobsterAI IM Channels Bundle (@lobsterai/dsh-channels)
+# Layered ctx.channels service supporting the retained IM platforms:
+# Feishu/Lark, Weixin, DingTalk, WeCom, QQ, Telegram, Discord, POPO.
+
+- insert:
+    - id: lobster-channels-service
+      name: './plugins/channels-service.mjs'

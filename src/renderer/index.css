@@ -6,6 +6,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Bundled common-CJK subset of Noto Serif SC Medium (SIL OFL 1.1) for the
+   home headline so macOS Songti SC's narrow, floating U+FF1F question mark
+   and cross-OS serif fallback inconsistencies are avoided. */
+@font-face {
+  font-family: 'Lobster Home Serif';
+  src: url('./assets/fonts/LobsterHomeSerif-Medium.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* KaTeX styles */
 .katex-display {
   overflow-x: auto;
@@ -112,6 +123,18 @@ blockquote {
 }
 
 :root {
+  /* Sidebar rail: soft light-gray surface in light themes so the rail
+     separates cleanly from content canvases. */
+  --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface-raised) 88%, var(--lobster-background));
+  --lobster-sidebar-item-hover: rgba(0, 0, 0, 0.045);
+}
+
+.dark {
+  --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface) 58%, var(--lobster-background));
+  --lobster-sidebar-item-hover: rgba(255, 255, 255, 0.055);
+}
+
+:root {
   /* Pre-JS fallbacks; must match what applyTypographyPreferences() emits for
      the default preferences (UiFontSizeDefault 15 over the 14px baseline),
      otherwise text visibly resizes right after startup. */
@@ -138,7 +161,8 @@ blockquote {
   --lobster-text-markdownH4: 16px;
   --lobster-text-promptLarge: 16px;
   --lobster-text-sidebarCompact: 14px;
-  --lobster-text-sidebarTask: 13px;
+  --lobster-text-sidebarTask: 14px;
+  --lobster-text-sidebarMeta: 12px;
   --lobster-leading-xs: 17px;
   --lobster-leading-sm: 21px;
   --lobster-leading-base: 26px;
@@ -270,285 +294,6 @@ body {
   display: none;
 }
 
-.dreaming-scene-star {
-  animation: dreaming-star-twinkle 3s ease-in-out infinite alternate;
-}
-
-.dreaming-scene-star-soft {
-  background-color: rgba(59, 130, 246, 0.24);
-}
-
-.dreaming-scene-star-accent {
-  background-color: rgba(255, 95, 86, 0.34);
-}
-
-.dark .dreaming-scene-star-soft {
-  background-color: rgba(245, 246, 248, 0.7);
-}
-
-.dark .dreaming-scene-star-accent {
-  background-color: rgba(255, 77, 77, 0.78);
-}
-
-.dreaming-scene {
-  background:
-    radial-gradient(circle at 20% 78%, rgba(59, 130, 246, 0.14), transparent 28%),
-    linear-gradient(180deg, #eef7ff 0%, #f9fbff 52%, #fff6ee 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
-}
-
-.dark .dreaming-scene {
-  background: #090d13;
-  box-shadow: none;
-}
-
-.dreaming-scene-orb {
-  background: #f3c955;
-  box-shadow: 0 0 44px rgba(243, 201, 85, 0.28);
-}
-
-.dark .dreaming-scene-orb {
-  background: #d8b85b;
-  box-shadow: 0 0 44px rgba(216, 184, 91, 0.22);
-}
-
-.dreaming-scene-orb-haze {
-  background: rgba(255, 255, 255, 0.56);
-}
-
-.dark .dreaming-scene-orb-haze {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.dreaming-insight-bubble {
-  border-color: rgba(255, 95, 86, 0.22);
-  background: rgba(255, 255, 255, 0.68);
-  color: #d93636;
-  box-shadow: 0 12px 34px rgba(255, 116, 84, 0.12);
-  animation: dreaming-bubble-drift 5s ease-in-out infinite;
-}
-
-.dark .dreaming-insight-bubble {
-  border-color: rgba(255, 77, 77, 0.2);
-  background: rgba(51, 24, 29, 0.7);
-  color: #ff5b5b;
-  box-shadow: 0 0 32px rgba(255, 77, 77, 0.08);
-}
-
-.dreaming-scene-title {
-  color: rgba(51, 65, 85, 0.58);
-}
-
-.dark .dreaming-scene-title {
-  color: rgba(255, 255, 255, 0.45);
-}
-
-.dreaming-status-active {
-  color: #16a34a;
-}
-
-.dark .dreaming-status-active {
-  color: #27c469;
-}
-
-.dreaming-status-idle {
-  color: rgba(71, 85, 105, 0.56);
-}
-
-.dark .dreaming-status-idle {
-  color: rgba(255, 255, 255, 0.42);
-}
-
-.dreaming-status-dot-active {
-  background: #22c55e;
-  box-shadow: 0 0 14px rgba(34, 197, 94, 0.36);
-}
-
-.dark .dreaming-status-dot-active {
-  background: #2bd46f;
-  box-shadow: 0 0 14px rgba(43, 212, 111, 0.5);
-}
-
-.dreaming-status-dot-idle {
-  background: rgba(100, 116, 139, 0.48);
-}
-
-.dark .dreaming-status-dot-idle {
-  background: rgba(255, 255, 255, 0.4);
-}
-
-.dreaming-phase-card {
-  border-color: rgba(148, 163, 184, 0.28);
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 12px 28px rgba(59, 130, 246, 0.08);
-}
-
-.dark .dreaming-phase-card {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(12, 17, 25, 0.85);
-  box-shadow: 0 0 20px rgba(43, 212, 111, 0.04);
-}
-
-.dreaming-phase-label {
-  color: rgba(30, 41, 59, 0.82);
-}
-
-.dark .dreaming-phase-label {
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.dreaming-phase-time {
-  color: rgba(71, 85, 105, 0.6);
-}
-
-.dark .dreaming-phase-time {
-  color: rgba(255, 255, 255, 0.42);
-}
-
-.dreaming-mascot {
-  position: relative;
-  width: clamp(168px, 24vw, 200px);
-  min-width: 168px;
-  pointer-events: none;
-}
-
-.dreaming-mascot-glow {
-  position: absolute;
-  left: 50%;
-  top: 58%;
-  width: 92%;
-  height: 42%;
-  transform: translate(-50%, -50%);
-  border-radius: 9999px;
-  background: radial-gradient(ellipse, rgba(255, 77, 77, 0.16) 0%, rgba(255, 140, 78, 0.08) 42%, transparent 72%);
-  filter: blur(18px);
-  animation: dreaming-glow-pulse 4s ease-in-out infinite;
-}
-
-.dark .dreaming-mascot-glow {
-  background: radial-gradient(ellipse, rgba(255, 77, 77, 0.2) 0%, rgba(255, 77, 77, 0.08) 40%, transparent 72%);
-}
-
-.dreaming-mascot-image {
-  position: relative;
-  z-index: 2;
-  display: block;
-  width: 100%;
-  height: auto;
-  filter: drop-shadow(0 18px 26px rgba(148, 163, 184, 0.28)) drop-shadow(0 0 22px rgba(255, 77, 77, 0.14));
-  user-select: none;
-  animation: dreaming-breathe 4s ease-in-out infinite;
-}
-
-.dark .dreaming-mascot-image {
-  filter: drop-shadow(0 0 38px rgba(255, 77, 77, 0.22));
-}
-
-.dreaming-z {
-  position: absolute;
-  z-index: 3;
-  color: rgba(214, 54, 54, 0.7);
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-weight: 800;
-  line-height: 1;
-  opacity: 0;
-  animation: dreaming-float-z 4s ease-out infinite;
-}
-
-.dark .dreaming-z {
-  color: #ff4d4d;
-}
-
-.dreaming-z-one {
-  left: 70%;
-  top: 31%;
-  font-size: 14px;
-  animation-delay: 0s;
-}
-
-.dreaming-z-two {
-  left: 82%;
-  top: 21%;
-  font-size: 20px;
-  animation-delay: 1.2s;
-}
-
-.dreaming-z-three {
-  left: 95%;
-  top: 10%;
-  font-size: 28px;
-  animation-delay: 2.4s;
-}
-
-@keyframes dreaming-breathe {
-  0%, 100% {
-    transform: scale(1) translateY(0);
-  }
-  50% {
-    transform: scale(1.04) translateY(-5px);
-  }
-}
-
-@keyframes dreaming-float-z {
-  0% {
-    opacity: 0;
-    transform: translate(0, 0) rotate(-10deg);
-  }
-  15% {
-    opacity: 0.72;
-  }
-  80% {
-    opacity: 0.28;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(22px, -42px) rotate(15deg);
-  }
-}
-
-@keyframes dreaming-star-twinkle {
-  0% {
-    transform: scale(0.75);
-    filter: blur(0);
-  }
-  100% {
-    transform: scale(1.25);
-    filter: blur(0.2px);
-  }
-}
-
-@keyframes dreaming-glow-pulse {
-  0%, 100% {
-    opacity: 0.58;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes dreaming-bubble-drift {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dreaming-scene-star,
-  .dreaming-mascot-glow,
-  .dreaming-mascot-image,
-  .dreaming-z,
-  .dreaming-insight-bubble {
-    animation: none;
-  }
-
-  .dreaming-z {
-    opacity: 0.42;
-  }
-}
-
 /* Style for select options to match theme */
 option {
   background-color: var(--lobster-surface);
@@ -592,7 +337,7 @@ select::-ms-expand {
 
 /* Button styles */
 .btn-primary {
-  @apply bg-primary hover:bg-primary-hover text-white font-medium py-2 px-4 rounded-lg transition-colors;
+  @apply bg-action hover:bg-action-hover text-action-foreground font-medium py-2 px-4 rounded-lg transition-colors;
 }
 
 .btn-secondary {

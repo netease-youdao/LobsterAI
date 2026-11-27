@@ -6,13 +6,13 @@ import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT } from './managementTypograp
 // in under the cursor.
 export const CARD_ACTION_PILL_CLASS =
   'inline-flex h-[26px] flex-shrink-0 items-center gap-1 rounded-full bg-surface-raised px-3 '
-  + `${MANAGEMENT_META_TEXT} font-semibold text-primary transition-colors hover:bg-primary hover:text-white `
+  + `${MANAGEMENT_META_TEXT} font-semibold text-foreground transition-colors hover:bg-action hover:text-action-foreground `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 /** Same capsule, sized for a detail header where it is the one loud action. */
 export const DETAIL_ACTION_PILL_CLASS =
-  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-primary px-5 '
-  + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-primary-hover `
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-action px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 // Secondary capsules for the slot while its primary action is running (e.g.

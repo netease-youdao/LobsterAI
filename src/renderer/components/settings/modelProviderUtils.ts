@@ -3,6 +3,7 @@
  * Used by both Settings.tsx and ModelSettingsSection.tsx.
  */
 import {
+  ApiFormat,
   isOpenAIApiModeAvailable,
   type ModelCapabilityOverrides,
   ModelRuntimeProfile,
@@ -19,7 +20,7 @@ import {
   supportsGeminiApiFormatSelection,
   usesCustomGeminiApiFormat,
 } from '../../../shared/providers';
-import { type AppConfig, defaultConfig, isCustomProvider } from '../../config';
+import { type AppConfig, defaultConfig, getVisibleProviders, isCustomProvider } from '../../config';
 import { i18nService } from '../../services/i18n';
 
 export const CUSTOM_PROVIDER_KEYS = [
@@ -63,6 +64,57 @@ export const hasEquivalentProviderModelId = (
       )
     )
   ));
+};
+
+export const CONTEXT_WINDOW_MIN = 4_096;
+export const CONTEXT_WINDOW_MAX = 4_000_000;
+export const CONTEXT_WINDOW_PRESETS = [
+  { label: '128K', value: 128_000 },
+  { label: '200K', value: 200_000 },
+  { label: '1M', value: 1_000_000 },
+] as const;
+
+/**
+ * Parses an optional context window input from the model editor. Empty input
+ * returns undefined (automatic inference). Accepts whole numbers with common
+ * digit separators as well as `K`/`M` shorthand (e.g. `128K`, `1M`).
+ */
+export const parseContextWindowInput = (input: string): number | null | undefined => {
+  const normalized = input.trim().toLowerCase().replace(/[\s,_]/g, '');
+  if (!normalized) {
+    return undefined;
+  }
+  const match = normalized.match(/^(\d+(?:\.\d+)?)(k|m)?$/);
+  if (!match) {
+    return null;
+  }
+  let num = Number(match[1]);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  if (match[2] === 'k') {
+    num *= 1_000;
+  } else if (match[2] === 'm') {
+    num *= 1_000_000;
+  } else if (!Number.isInteger(num)) {
+    return null;
+  }
+  const result = Math.round(num);
+  return result >= CONTEXT_WINDOW_MIN && result <= CONTEXT_WINDOW_MAX ? result : null;
+};
+
+/** Formats a token count concisely for model list badges (e.g. `128K`, `1M`). */
+export const formatCompactTokenCount = (value: number): string => {
+  if (value >= 1_000_000) {
+    // 1_048_576 (1 MiB) and 1_000_000 both display cleanly as 1M on badges.
+    if (value === 1_048_576 || value === 1_000_000) return '1M';
+    const millions = value / 1_000_000;
+    return Number.isInteger(millions) ? `${millions}M` : `${millions.toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}K`;
+  }
+  return String(value);
 };
 
 export const MAX_OUTPUT_TOKENS_MIN = 1024;
@@ -177,6 +229,7 @@ export const shouldShowApiFormatSelector = (
   value?: unknown,
 ): boolean => (
   getFixedApiFormatForProvider(provider) === null
+  || provider === ProviderName.OpenAI
   || (provider === ProviderName.Moonshot && value === 'anthropic')
 );
 
@@ -196,12 +249,20 @@ type OpenAIApiModeConfig = {
   authType?: unknown;
 };
 
-export const getApiFormatOptions = (provider: string, config?: OpenAIApiModeConfig): ApiFormatOption[] => [
-  ApiFormatOption.OpenAIChatCompletions,
-  ApiFormatOption.Anthropic,
-  ...(isOpenAIApiModeAvailable(provider, config) ? [ApiFormatOption.OpenAIResponses] : []),
-  ...(supportsGeminiApiFormatSelection(provider) ? [ApiFormatOption.Gemini] : []),
-];
+export const getApiFormatOptions = (provider: string, config?: OpenAIApiModeConfig): ApiFormatOption[] => {
+  if (provider === ProviderName.OpenAI) {
+    return [
+      ApiFormatOption.OpenAIResponses,
+      ApiFormatOption.OpenAIChatCompletions,
+    ];
+  }
+  return [
+    ApiFormatOption.OpenAIChatCompletions,
+    ApiFormatOption.Anthropic,
+    ...(isOpenAIApiModeAvailable(provider, config) ? [ApiFormatOption.OpenAIResponses] : []),
+    ...(supportsGeminiApiFormatSelection(provider) ? [ApiFormatOption.Gemini] : []),
+  ];
+};
 
 export const getApiFormatOption = (provider: string, config: OpenAIApiModeConfig): ApiFormatOption => {
   const apiFormat = getEffectiveApiFormat(provider, config.apiFormat);
@@ -289,10 +350,11 @@ export const getDefaultProviders = (): ProvidersConfig => {
   ) as ProvidersConfig;
 };
 
-export const getDefaultActiveProvider = (): ProviderType => {
+export const getDefaultActiveProvider = (language: 'zh' | 'en' = i18nService.getLanguage()): ProviderType => {
   const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
-  const firstEnabledProvider = providerKeys.find(providerKey => providers[providerKey]?.enabled);
-  return firstEnabledProvider ?? providerKeys[0];
+  const orderedKeys = [...getVisibleProviders(language), ...CUSTOM_PROVIDER_KEYS] as ProviderType[];
+  const firstEnabledProvider = orderedKeys.find(providerKey => providers[providerKey]?.enabled);
+  return firstEnabledProvider ?? orderedKeys[0] ?? providerKeys[0];
 };
 
 export const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provider: string): string => {
@@ -345,10 +407,18 @@ export const buildOpenAIResponsesUrl = (baseUrl: string): string => {
 export const shouldUseOpenAIResponsesForProvider = (
   provider: string,
   config?: OpenAIApiModeConfig,
-): boolean => (
-  provider === 'openai'
-  || resolveProviderOpenAIApiMode(provider, config) === OpenAIApiMode.Responses
-);
+): boolean => {
+  if (provider === ProviderName.OpenAI) {
+    if (config?.authType === ProviderAuthType.OAuth) {
+      return true;
+    }
+    return resolveProviderOpenAIApiMode(provider, {
+      ...config,
+      apiFormat: ApiFormat.OpenAI,
+    }) === OpenAIApiMode.Responses;
+  }
+  return resolveProviderOpenAIApiMode(provider, config) === OpenAIApiMode.Responses;
+};
 
 export const shouldUseMaxCompletionTokensForOpenAI = (provider: string, modelId?: string): boolean => {
   if (provider !== 'openai') {

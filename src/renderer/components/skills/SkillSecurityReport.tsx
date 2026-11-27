@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
-  ShieldCheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ShieldCheckIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
+
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
 
@@ -192,7 +193,7 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
               type="button"
               onClick={() => onAction('installDisabled')}
               disabled={isLoading}
-              className="px-4 py-2 text-sm font-medium rounded-xl bg-primary hover:bg-primary-hover text-white transition-colors active:scale-[0.98] disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium rounded-xl bg-action hover:bg-action-hover text-action-foreground transition-colors active:scale-[0.98] disabled:opacity-50"
             >
               {i18nService.t('securityInstallDisabled')}
             </button>

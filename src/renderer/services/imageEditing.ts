@@ -51,7 +51,7 @@ export function focusImageEdit(source: ImageVersion, regionId?: string, regions?
   store.dispatch(openImageStudio({ artifact }));
   store.dispatch(requestImageEditorFocus({ id: crypto.randomUUID(), source, regionId, operation }));
 }
-/** Opens an image in the full-screen studio, optionally straight into an editing tool or a specific version. */
-export function openImageInStudio(artifact: Artifact, operation?: ImageEditOperation, versionId?: string): void {
-  store.dispatch(openImageStudio({ artifact, operation, versionId }));
+/** Opens an image in the full-screen studio, optionally straight into an editing tool, a specific version, or a sibling gallery. */
+export function openImageInStudio(artifact: Artifact, operation?: ImageEditOperation, versionId?: string, artifacts?: Artifact[]): void {
+  store.dispatch(openImageStudio({ artifact, operation, versionId, artifacts }));
 }

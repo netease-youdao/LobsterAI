@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 
 import {
+  hasPendingConversationSearch,
   PENDING_CONVERSATION_SEARCH_TTL_MS,
   setPendingConversationSearch,
   takePendingConversationSearch,
@@ -9,6 +10,17 @@ import {
 describe('pendingConversationSearch', () => {
   beforeEach(() => {
     setPendingConversationSearch('', '');
+  });
+
+  test('peeks without consuming a pending query and respects session and TTL', () => {
+    setPendingConversationSearch('session-a', 'scroll', 1000);
+    expect(hasPendingConversationSearch('session-b', 1100)).toBe(false);
+    expect(hasPendingConversationSearch('session-a', 1100)).toBe(true);
+    expect(takePendingConversationSearch('session-a', 1200)).toBe('scroll');
+    expect(hasPendingConversationSearch('session-a', 1300)).toBe(false);
+
+    setPendingConversationSearch('session-a', 'expired', 1000);
+    expect(hasPendingConversationSearch('session-a', 1001 + PENDING_CONVERSATION_SEARCH_TTL_MS)).toBe(false);
   });
 
   test('hands the query to the target session once', () => {

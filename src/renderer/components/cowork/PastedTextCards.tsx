@@ -39,7 +39,7 @@ const PastedTextTile: React.FC<{
       <span className="line-clamp-5 break-all text-[11px] leading-4 text-secondary">
         {getPastedTextSnippet(text)}
       </span>
-      <span className="inline-flex h-5 items-center self-start rounded-md border border-border px-1.5 text-[10px] font-medium uppercase tracking-wide text-secondary">
+      <span className="inline-flex h-5 items-center self-start rounded-md bg-black/[0.04] px-1.5 text-[10px] font-medium uppercase tracking-wide text-secondary dark:bg-white/[0.08]">
         {i18nService.t('coworkPastedTextBadge')}
       </span>
     </button>

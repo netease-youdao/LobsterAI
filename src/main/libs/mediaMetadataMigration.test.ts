@@ -41,6 +41,16 @@ beforeEach(() => {
 });
 
 describe('migrateInlineMediaMetadata', () => {
+  test('recovers a small inline-only image even when the previous size-limited scan finished', async () => {
+    kvValues.set('cowork.mediaMetadataCompaction.v1', { done: true, lastRowId: 1 });
+    const bytes = pngBytes.subarray(0, 128);
+    insert('tiny', 'system', { toolResultDetails: { mediaType: 'image', assets: [
+      { type: 'image', url: 'data:image/png;base64,' + bytes.toString('base64') },
+    ] } });
+    expect(await run()).toMatchObject({ done: true, rescuedImages: 1 });
+    expect(fs.readFileSync(stored('tiny').toolResultDetails.assets[0].filePath)).toEqual(bytes);
+    expect(await run()).toMatchObject({ done: true, rescuedImages: 0 });
+  });
   test('rewrites saved assets, result URLs and poll details to file references', async () => {
     const savedPath = path.join(tempDir, 'generated.png');
     fs.writeFileSync(savedPath, pngBytes);
@@ -89,7 +99,7 @@ describe('migrateInlineMediaMetadata', () => {
   });
 
   test('leaves rows it cannot rescue and unrelated large metadata untouched', async () => {
-    const videoDataUrl = `data:video/mp4;base64,${'A'.repeat(100_000)}`;
+    const videoDataUrl = `data:video/unknown;base64,${'A'.repeat(100_000)}`;
     const unrescuable = { toolResultDetails: { mediaType: 'video', assets: [{ type: 'video', url: videoDataUrl }] } };
     const unrelated = { toolResultDetails: { content: 'x'.repeat(100_000) }, toolInput: { image: dataUrl } };
     insert('video', 'tool_result', unrescuable);
@@ -100,6 +110,19 @@ describe('migrateInlineMediaMetadata', () => {
     expect(result).toMatchObject({ done: true, compactedRows: 0, skippedRows: 1 });
     expect(stored('video')).toEqual(unrescuable);
     expect(stored('unrelated')).toEqual(unrelated);
+  });
+
+  test('restores an inline MP4 before opening a session even after the image migration finished', async () => {
+    kvValues.set('cowork.mediaMetadataCompaction.v2', { done: true, lastRowId: 1 });
+    const bytes = Buffer.from('example MP4 bytes');
+    const url = 'data:video/mp4;base64,' + bytes.toString('base64');
+    insert('old-video', 'system', { toolResultDetails: { mediaType: 'video', assets: [{ type: 'video', url }] } });
+    expect(await run()).toMatchObject({ rescuedImages: 0, rescuedVideos: 1, done: true });
+    const asset = stored('old-video').toolResultDetails.assets[0];
+    expect(asset.filePath).toMatch(/\.mp4$/);
+    expect(fs.readFileSync(asset.filePath)).toEqual(bytes);
+    expect(asset.url).toBe(pathToFileURL(asset.filePath).href);
+    expect(await run()).toMatchObject({ rescuedVideos: 0 });
   });
 
   test('rewrites rows only while the user is idle and can stop while waiting', async () => {

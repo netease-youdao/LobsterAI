@@ -17,6 +17,28 @@ export const AgentModelSelectionMode = {
 } as const;
 export type AgentModelSelectionMode = typeof AgentModelSelectionMode[keyof typeof AgentModelSelectionMode];
 
+export const SubagentCollaborationMode = {
+  All: 'all',
+  Allowlist: 'allowlist',
+  Disabled: 'disabled',
+} as const;
+export type SubagentCollaborationMode =
+  typeof SubagentCollaborationMode[keyof typeof SubagentCollaborationMode];
+
+export function normalizeSubagentCollaborationMode(
+  raw: unknown,
+  fallback: SubagentCollaborationMode = SubagentCollaborationMode.All,
+): SubagentCollaborationMode {
+  if (
+    raw === SubagentCollaborationMode.All
+    || raw === SubagentCollaborationMode.Allowlist
+    || raw === SubagentCollaborationMode.Disabled
+  ) {
+    return raw;
+  }
+  return fallback;
+}
+
 export const AgentIpcChannel = {
   List: 'agents:list',
   Get: 'agents:get',
@@ -24,6 +46,9 @@ export const AgentIpcChannel = {
   Update: 'agents:update',
   Reorder: 'agents:reorder',
   Delete: 'agents:delete',
+  GenerateDraft: 'agents:generateDraft',
+  GenerateDraftChunk: 'agents:generateDraft:chunk',
+  CancelDraft: 'agents:generateDraft:cancel',
   CleanupLegacyIdentityBlock: 'agents:cleanupLegacyIdentityBlock',
   Presets: 'agents:presets',
   PresetTemplates: 'agents:presetTemplates',
@@ -37,6 +62,14 @@ export const AgentIpcChannel = {
 } as const;
 
 export type AgentIpcChannel = typeof AgentIpcChannel[keyof typeof AgentIpcChannel];
+
+export const AgentUiEvent = {
+  OpenImSettings: 'agent:open-im-settings',
+  OpenMemorySettings: 'agent:open-memory-settings',
+  OpenSkillsMarketplace: 'agent:open-skills-marketplace',
+} as const;
+
+export type AgentUiEvent = typeof AgentUiEvent[keyof typeof AgentUiEvent];
 
 export const AgentLegacyIdentityCleanupStatus = {
   Cleaned: 'cleaned',

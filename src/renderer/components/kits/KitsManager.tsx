@@ -57,7 +57,7 @@ const SKILL_TOOLTIP_MIN_WIDTH = 180;
 const SKILL_TOOLTIP_VIEWPORT_MARGIN = 12;
 const SKILL_TOOLTIP_GAP = 8;
 
-const KIT_ACTION_BUTTON_CLASS = 'inline-flex flex-shrink-0 items-center justify-center gap-1.5 rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
+const KIT_ACTION_BUTTON_CLASS = 'inline-flex flex-shrink-0 items-center justify-center gap-1.5 rounded-lg bg-action font-semibold text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
 const KIT_CARD_ACTION_CLASS = `${KIT_ACTION_BUTTON_CLASS} h-7 px-3 ${MANAGEMENT_META_TEXT}`;
 const KIT_DETAIL_ACTION_CLASS = `${KIT_ACTION_BUTTON_CLASS} h-8 px-5 ${MANAGEMENT_BODY_TEXT}`;
 

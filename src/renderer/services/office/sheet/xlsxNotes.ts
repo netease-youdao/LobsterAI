@@ -7,7 +7,8 @@ import {
 } from './xlsxPackage';
 import { mapElements, RelationshipTypes } from './xlsxStructureExport';
 import {
-  addElementPrefix, appendChildren, childInsertionPoint, decodeXml, elementPrefix, encodeExcelString, encodeXmlText, firstXmlElement, plainText, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
+  addElementPrefix, appendChildren, childInsertionPoint, decodeXml, elementPrefix, encodeExcelString, encodeXmlText, ensureXmlNamespace,
+  firstXmlElement, namespacePrefixFor, plainText, setXmlAttributes, xmlAttribute, type XmlElement, xmlElements,
 } from './xlsxXml';
 
 /**
@@ -342,7 +343,8 @@ function editedComment(element: XmlElement, key: string, text: string, prefix: s
 /** Prefixes a VML part uses for the VML, Office and Excel namespaces. */
 function vmlPrefixes(vml: string): { v: string; o: string; x: string } {
   const prefix = (namespace: string, fallback: string) => {
-    const match = new RegExp(`xmlns:([\\w.-]+)="${namespace.replace(/[.]/g, '\\.')}"`).exec(vml);
+    const escapedNamespace = namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`xmlns:([\\w.-]+)="${escapedNamespace}"`).exec(vml);
     return match ? match[1] : fallback;
   };
   return { v: prefix(VML_NS, 'v'), o: prefix(OFFICE_NS, 'o'), x: prefix(EXCEL_NS, 'x') };
@@ -416,7 +418,9 @@ export function rewriteNotes(files: Map<string, Uint8Array>, sheetPart: string, 
     files.delete(found.part);
     rels = rels && mapElements(rels, 'Relationship', element => (xmlAttribute(element.open, 'Id') === found.id ? null : undefined));
     removeContentType(files, `/${found.part}`);
-    if (type === RelationshipTypes.VmlDrawing) sheet = mapElements(sheet, 'legacyDrawing', element => (xmlAttribute(element.open, 'r:id') === found.id ? null : undefined));
+    if (type === RelationshipTypes.VmlDrawing) {
+      sheet = mapElements(sheet, 'legacyDrawing', element => ((xmlAttribute(element.open, 'r:id') ?? xmlAttribute(element.open, 'id')) === found.id ? null : undefined));
+    }
   };
   const relationIds = new Set([...(rels ?? '').matchAll(/\bId="([^"]+)"/g)].map(match => match[1]));
   const addRelationship = (type: string, part: string): string => {
@@ -521,9 +525,12 @@ export function rewriteNotes(files: Map<string, Uint8Array>, sheetPart: string, 
     addDefaultContentType(files, 'vml', VML_CONTENT_TYPE);
     const worksheet = firstXmlElement(sheet, 'worksheet');
     const prefix = elementPrefix(worksheet?.name ?? '');
+    const relPrefix = (worksheet && namespacePrefixFor(worksheet.open, RELATIONSHIPS_NS)) ?? 'r';
+    const ensured = ensureXmlNamespace(sheet, 'worksheet', relPrefix, RELATIONSHIPS_NS);
+    sheet = ensured.xml;
+    const localRelNs = ensured.bound ? '' : ` xmlns:${relPrefix}="${RELATIONSHIPS_NS}"`;
     const at = childInsertionPoint(sheet, 'worksheet', AFTER_LEGACY_DRAWING) ?? sheet.lastIndexOf('</');
-    sheet = sheet.slice(0, at) + addElementPrefix(`<legacyDrawing r:id="${id}"/>`, prefix) + sheet.slice(at);
-    if (worksheet && !/\sxmlns:r=/.test(worksheet.open)) sheet = sheet.replace(worksheet.open, worksheet.open.replace(/>$/, ` xmlns:r="${RELATIONSHIPS_NS}">`));
+    sheet = sheet.slice(0, at) + addElementPrefix(`<legacyDrawing${localRelNs} ${relPrefix}:id="${id}"/>`, prefix) + sheet.slice(at);
   }
   if (vmlPart && vml) {
     const prefixes = vmlPrefixes(vml);

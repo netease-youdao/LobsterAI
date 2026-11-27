@@ -1,13 +1,11 @@
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
-import {
-  type AgentSidebarActivityItem,
-  type SidebarTaskFilter,
-  SidebarTaskStatusFilter,
-  SidebarTaskTimeFilter,
+import type {
+  AgentSidebarActivityItem,
+  SidebarTaskFilter,
 } from './taskFilter';
-import { getSidebarTaskStatusFilterLabel, getSidebarTaskTimeFilterLabel } from './taskFilterLabels';
+import { getSidebarTaskFilterSummary } from './taskFilterLabels';
 
 interface AgentSidebarFilteredViewProps {
   filter: SidebarTaskFilter;
@@ -70,11 +68,6 @@ const groupItemsByDay = (items: AgentSidebarActivityItem[]): DateGroup[] => {
   return Array.from(groups.values());
 };
 
-const getFilterSummary = (filter: SidebarTaskFilter): string => [
-  filter.status !== SidebarTaskStatusFilter.All ? getSidebarTaskStatusFilterLabel(filter.status) : null,
-  filter.time !== SidebarTaskTimeFilter.All ? getSidebarTaskTimeFilterLabel(filter.time) : null,
-].filter(Boolean).join(' · ');
-
 const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
   filter,
   items,
@@ -85,6 +78,7 @@ const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
 }) => {
   // Recompute at render time so an in-place language switch updates date labels.
   const groups = groupItemsByDay(items);
+  const showResultCount = !isLoading && !hasError && items.length > 0;
   const statusMessage = items.length > 0
     ? null
     : isLoading
@@ -94,32 +88,39 @@ const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
         : i18nService.t('sidebarFilterNoResults');
 
   return (
-    <div className="pb-3 pt-1" role="tree" aria-label={i18nService.t('sidebarFilterResults')}>
-      <div className="sticky top-0 z-30 -ml-[6px] flex h-9 w-[calc(100%+12px)] items-center gap-2 bg-surface-raised pl-2 pr-1">
-        <span className="min-w-0 flex-1 truncate text-xs text-secondary/80">
+    <div className="pb-3" role="tree" aria-label={i18nService.t('sidebarFilterResults')}>
+      <div className="sticky top-9 z-20 -mx-2.5 flex h-7 items-center gap-2 bg-[var(--lobster-sidebar-bg)] px-2.5">
+        <span className="min-w-0 flex-1 truncate pl-2.5 text-[11.5px] text-secondary/85">
           {i18nService.t('sidebarFilterActiveLabel')}
-          <span className="font-medium text-foreground/80">{getFilterSummary(filter)}</span>
+          <span className="font-medium text-foreground/85">{getSidebarTaskFilterSummary(filter)}</span>
+          {showResultCount && (
+            <span className="ml-1 tabular-nums text-secondary/75">({items.length})</span>
+          )}
         </span>
         <button
           type="button"
           onClick={onClear}
-          className="shrink-0 rounded-md px-1.5 py-0.5 text-xs text-secondary transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"
+          className="mr-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-xs text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground"
         >
           {i18nService.t('sidebarFilterClear')}
         </button>
       </div>
       {statusMessage ? (
-        <p className="px-0 py-3 text-[13px] text-secondary/70">{statusMessage}</p>
-      ) : groups.map(group => (
-        <div key={group.key} role="group" aria-label={group.label} className="mb-2">
-          <h3 className="px-0 py-1 text-[12px] font-normal text-secondary/70">
-            {group.label}
-          </h3>
-          <div className="space-y-0.5">
-            {group.items.map(renderTask)}
-          </div>
+        <p className="px-2.5 py-3 text-[13px] text-secondary/75">{statusMessage}</p>
+      ) : (
+        <div className="pt-1">
+          {groups.map(group => (
+            <div key={group.key} role="group" aria-label={group.label} className="mb-2">
+              <h3 className="px-2.5 py-1 text-[11.5px] font-medium text-secondary/80">
+                {group.label}
+              </h3>
+              <div className="space-y-0.5">
+                {group.items.map(renderTask)}
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 };

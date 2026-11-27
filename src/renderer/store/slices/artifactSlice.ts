@@ -27,11 +27,13 @@ export const ArtifactContentView = {
 export type ArtifactContentView = typeof ArtifactContentView[keyof typeof ArtifactContentView];
 
 export const ArtifactSpecialTab = {
+  NewTab: 'newTab',
   FileList: 'fileList',
   Browser: 'browser',
   AgentBrowser: 'agentBrowser',
   Subagents: 'subagents',
   UserAttachment: 'userAttachment',
+  SideChat: 'sideChat',
 } as const;
 export type ArtifactSpecialTab = typeof ArtifactSpecialTab[keyof typeof ArtifactSpecialTab];
 
@@ -381,6 +383,36 @@ const artifactSlice = createSlice({
       }
     },
 
+    // A library preview and a conversation card may show the same document under different IDs.
+    // Saving the file updates existing cards without registering a new artifact or retargeting a tab.
+    syncMarkdownFileContent(state, action: PayloadAction<{
+      sessionId: string; filePath: string; content: string; contentVersion: number;
+    }>) {
+      const { sessionId, filePath, content, contentVersion } = action.payload;
+      const key = normalizeFilePathForDedup(filePath);
+      for (const item of state.artifactsBySession[sessionId] ?? []) {
+        if (item.type === ArtifactTypeValue.Markdown && item.filePath
+          && normalizeFilePathForDedup(item.filePath) === key && item.content !== content) {
+          item.content = content;
+          item.contentVersion = contentVersion;
+        }
+      }
+    },
+
+    renameArtifactFile(state, action: PayloadAction<{
+      sessionId: string; oldFilePath: string; newFilePath: string; newFileName: string;
+    }>) {
+      const { sessionId, oldFilePath, newFilePath, newFileName } = action.payload;
+      const key = normalizeFilePathForDedup(oldFilePath);
+      for (const item of state.artifactsBySession[sessionId] ?? []) {
+        if (item.filePath && normalizeFilePathForDedup(item.filePath) === key) {
+          item.filePath = newFilePath;
+          item.fileName = newFileName;
+          item.title = newFileName;
+        }
+      }
+    },
+
     updateLocalServiceProjectMetadata(
       state,
       action: PayloadAction<UpdateLocalServiceProjectMetadataPayload>,
@@ -414,6 +446,11 @@ const artifactSlice = createSlice({
       activatePreviewTab(state, action.payload.sessionId, action.payload.tabId);
     },
 
+    activateArtifactNewTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
     activateArtifactFileListTab(state, action: PayloadAction<{ sessionId: string }>) {
       activatePreviewTab(state, action.payload.sessionId, null);
       setPanelOpen(state, action.payload.sessionId, true);
@@ -435,6 +472,11 @@ const artifactSlice = createSlice({
     },
 
     activateArtifactUserAttachmentTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
+    activateArtifactSideChatTab(state, action: PayloadAction<{ sessionId: string }>) {
       activatePreviewTab(state, action.payload.sessionId, null);
       setPanelOpen(state, action.payload.sessionId, true);
     },
@@ -502,6 +544,8 @@ export const {
   setSessionArtifacts,
   addArtifact,
   addLinkedFileArtifact,
+  syncMarkdownFileContent,
+  renameArtifactFile,
   updateLocalServiceProjectMetadata,
   selectArtifact,
   openArtifactPreviewTab,
@@ -509,7 +553,9 @@ export const {
   activateArtifactAgentBrowserTab,
   activateArtifactSubagentTab,
   activateArtifactUserAttachmentTab,
+  activateArtifactSideChatTab,
   activateArtifactPreviewTab,
+  activateArtifactNewTab,
   activateArtifactFileListTab,
   closeArtifactPreviewTab,
   setPreviewTabContentView,

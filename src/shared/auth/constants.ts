@@ -1,11 +1,15 @@
 export const AuthIpcChannel = {
+  AccessStateChanged: 'auth:accessStateChanged',
   Callback: 'auth:callback',
   CancelLogin: 'auth:cancelLogin',
   ClaimCreditsFinalReward: 'auth:claimCreditsFinalReward',
+  CreditsActivity: 'auth:creditsActivity',
   Exchange: 'auth:exchange',
+  GetAccessState: 'auth:getAccessState',
   GetAccessToken: 'auth:getAccessToken',
   GetActiveClientBanner: 'auth:getActiveClientBanner',
   GetActiveClientBanners: 'auth:getActiveClientBanners',
+  GetCachedSnapshot: 'auth:getCachedSnapshot',
   GetClientBannerSnapshot: 'auth:getClientBannerSnapshot',
   GetModels: 'auth:getModels',
   GetPricingCatalog: 'auth:getPricingCatalog',
@@ -139,3 +143,38 @@ export const AuthSubscriptionStatus = {
 } as const;
 
 export type AuthSubscriptionStatus = typeof AuthSubscriptionStatus[keyof typeof AuthSubscriptionStatus];
+
+export const AuthAccessPolicy = {
+  LegacyOptional: 'legacy_optional',
+  LoginRequired: 'login_required',
+} as const;
+
+export type AuthAccessPolicy = typeof AuthAccessPolicy[keyof typeof AuthAccessPolicy];
+
+export const AuthAccessPolicyStoreKey = {
+  Policy: 'auth_access_policy',
+} as const;
+
+export type AuthAccessPolicyStoreKey =
+  typeof AuthAccessPolicyStoreKey[keyof typeof AuthAccessPolicyStoreKey];
+
+export const AuthGateReason = {
+  FirstRun: 'first_run',
+  LoggedOut: 'logged_out',
+  SessionExpired: 'session_expired',
+} as const;
+
+export type AuthGateReason = typeof AuthGateReason[keyof typeof AuthGateReason];
+
+export const AuthGateErrorCode = {
+  AuthRequired: 'AUTH_REQUIRED',
+} as const;
+
+export type AuthGateErrorCode = typeof AuthGateErrorCode[keyof typeof AuthGateErrorCode];
+
+export interface AuthAccessState {
+  policy: AuthAccessPolicy;
+  loginRequired: boolean;
+  blocked: boolean;
+  reason: AuthGateReason | null;
+}
