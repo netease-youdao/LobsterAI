@@ -1820,6 +1820,39 @@ export class IMStore {
     return row ? mapSessionMappingRow(row) : null;
   }
 
+  /** Ordinary groups share a Cowork task across accounts bound to the same agent. */
+  findSharedGroupMapping(
+    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string,
+  ): IMSessionMapping | null {
+    // OpenClaw lowercased its group keys. DSH peer IDs are case-sensitive.
+    // Older DSH rows stored an untyped chat ID: only reuse another bot's row
+    // when the desktop task also identifies this group. Keep split transcripts intact.
+    const row = this.db.prepare(`
+      SELECT m.* FROM im_session_mappings m JOIN cowork_sessions s ON s.id = m.cowork_session_id
+      WHERE m.agent_id = @agentId AND COALESCE(NULLIF(s.agent_id, ''), 'main') = m.agent_id
+        AND (m.platform = @platform OR m.platform GLOB @instances)
+        AND (m.im_conversation_id = @groupId
+          OR (m.openclaw_session_key IS NOT NULL AND m.im_conversation_id = lower(@groupId))
+          OR (m.openclaw_session_key IS NULL AND m.im_conversation_id = @chatId AND s.title = @groupTitle
+            AND NOT EXISTS (SELECT 1 FROM im_config c WHERE @platform = 'dingtalk' AND c.key = m.platform
+              AND json_valid(c.value) AND (json_extract(c.value, '$.groupSessionScope') = 'group_sender'
+                OR json_extract(c.value, '$.separateSessionByConversation') = 0
+                OR json_extract(c.value, '$.sharedMemoryAcrossConversations') = 1))))
+      ORDER BY (m.openclaw_session_key IS NOT NULL) DESC, (m.im_conversation_id = @groupId) DESC,
+        m.last_active_at DESC, m.rowid DESC LIMIT 1
+    `).get({ platform, instances: `${platform}:*`, groupId, chatId, agentId, groupTitle }) as SessionMappingRow | undefined;
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
+  recordGroupSessionRoute(groupId: string, botPlatform: Platform, taskId: string, agentId: string): void {
+    this.db.prepare(`
+      INSERT INTO im_session_mappings (im_conversation_id, platform, cowork_session_id, agent_id, created_at, last_active_at)
+      VALUES (@groupId, @botPlatform, @taskId, @agentId, @now, @now)
+      ON CONFLICT (im_conversation_id, platform, agent_id) DO UPDATE SET
+        cowork_session_id = excluded.cowork_session_id, last_active_at = excluded.last_active_at
+    `).run({ groupId, botPlatform, taskId, agentId, now: Date.now() });
+  }
+
   findLegacyFeishuGroupSessionMapping(route: FeishuGroupSessionRoute): IMSessionMapping | null {
     const row = findLegacyFeishuGroupSession(this.db, route, this.getIMSettings().platformAgentBindings);
     return row ? mapSessionMappingRow(row) : null;
@@ -1846,7 +1879,7 @@ export class IMStore {
   getSessionMappingByCoworkSessionId(coworkSessionId: string): IMSessionMapping | null {
     const row = this.db
       .prepare(
-        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE cowork_session_id = ? LIMIT 1',
+        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE cowork_session_id = ? ORDER BY last_active_at DESC, rowid DESC LIMIT 1',
       )
       .get(coworkSessionId) as SessionMappingRow | undefined;
     return row ? mapSessionMappingRow(row) : null;

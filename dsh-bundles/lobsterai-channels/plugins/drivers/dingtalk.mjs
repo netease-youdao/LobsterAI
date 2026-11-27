@@ -430,6 +430,9 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
                     sessionWebhook: payload.sessionWebhook,
                     senderStaffId: payload.senderStaffId,
                     conversationType: payload.conversationType,
+                    ...(!isDirect && (this.config.groupSessionScope === 'group_sender'
+                      || this.config.separateSessionByConversation === false
+                      || this.config.sharedMemoryAcrossConversations === true) ? { useGroupSession: false } : {}),
                   },
                 });
               })
@@ -466,7 +469,7 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
   async sendMessage({ chatId, text, replyContext }) {
     const content = String(text || '');
     const webhook = String(replyContext?.sessionWebhook || this.config.webhookUrl || '').trim();
-    const target = String(chatId || '').trim().replace(/^(?:[^:]+:)?direct:/i, '');
+    const target = String(chatId || '').trim().replace(/^(?:[^:]+:)?(?:direct|group):/i, '');
     const staffId = replyContext?.conversationType === '1' && replyContext.senderStaffId
       ? String(replyContext.senderStaffId) : this.privateRecipients.entries.get(target);
     const isGroup = replyContext?.conversationType

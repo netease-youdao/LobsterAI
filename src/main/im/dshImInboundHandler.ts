@@ -81,6 +81,10 @@ export interface DshImInboundCoworkStorePort {
 }
 
 export interface DshImInboundIMStorePort {
+  findSharedGroupMapping(
+    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string,
+  ): IMSessionMapping | null;
+  recordGroupSessionRoute(groupId: string, botPlatform: Platform, taskId: string, agentId: string): void;
   findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null;
   findLegacyFeishuGroupSessionMapping(route: FeishuGroupSessionRoute): IMSessionMapping | null;
   getConversationReplyRoute(platform: Platform, imConversationId: string): { to: string } | null;
@@ -212,8 +216,22 @@ function readFeishuThread(event: DshImInboundEvent) {
 
 function groupConversationId(event: DshImInboundEvent): string | null {
   if (event.chatType !== ImPeerKind.Group) return null;
-  const kind = event.platform === RetainedImPlatform.Discord ? ImPeerKind.Channel : ImPeerKind.Group;
-  return `${kind}:${event.chatId}`;
+  const kind = event.platform.trim().toLowerCase() === RetainedImPlatform.Discord ? ImPeerKind.Channel : ImPeerKind.Group;
+  return `${kind}:${event.chatId.trim()}`;
+}
+
+function inboundBot(event: DshImInboundEvent): string {
+  return event.instanceId?.trim() || 'default';
+}
+
+function sharedGroupId(event: DshImInboundEvent, groupId: string | null, threaded: boolean): string | null {
+  if (threaded || (event.platform === RetainedImPlatform.DingTalk && event.replyContext?.useGroupSession === false)) return null;
+  return groupId;
+}
+
+function sameGroupTurn(first: DshImInboundEvent, next: DshImInboundEvent): boolean {
+  return first === next || Boolean(first.senderId && first.senderId === next.senderId
+    && inboundBot(first) === inboundBot(next));
 }
 
 function extractTurnReplyText(
@@ -330,7 +348,7 @@ export class DshImInboundHandler {
 
   enqueue(event: DshImInboundEvent): Promise<void> {
     const platform = event.platform.trim().toLowerCase();
-    const instanceId = event.instanceId?.trim() || 'default';
+    const instanceId = inboundBot(event);
     const agentId = event.agentId?.trim() || 'main';
 
     if (event.messageId) {
@@ -347,24 +365,23 @@ export class DshImInboundHandler {
     }
 
     const thread = readFeishuThread(event);
+    const groupId = groupConversationId(event);
     const conversationId = thread
       ? buildFeishuTopicConversationId(event.chatId, thread.rootMessageId || thread.threadId)
-      : groupConversationId(event) ?? event.chatId;
-    const queueKey = `${platform}:${instanceId}:${conversationId}:${agentId}`;
+      : groupId ?? event.chatId.trim();
+    const queueKey = JSON.stringify([platform, sharedGroupId(event, groupId, !!thread) ? null : instanceId, conversationId, agentId]);
 
     // If an approval request is currently awaiting confirmation for this IM
     // conversation, intercept the reply instead of interrupting the active turn.
-    if (this.approvalRelay?.hasPendingApproval(queueKey)) {
+    const activeRun = this.conversations.get(queueKey)?.activeRun;
+    if (activeRun && inboundBot(activeRun.events[0]) === instanceId && this.approvalRelay?.hasPendingApproval(queueKey)) {
       return this.approvalRelay.tryHandleInboundReply(queueKey, {
         text: event.text,
         senderId: event.senderId,
         chatType: event.chatType,
         replyContext: event.replyContext,
         onReplyContextUpdated: (updated) => {
-          const activeState = this.conversations.get(queueKey);
-          if (activeState?.activeRun) {
-            activeState.activeRun.latestReplyContext = updated;
-          }
+          activeRun.latestReplyContext = updated;
         },
       }).then((result) => {
         if (result.handled) {
@@ -405,11 +422,12 @@ export class DshImInboundHandler {
       state.firstPendingAt = Date.now();
     }
 
-    if (state.activeRun) {
+    const activeRun = state.activeRun;
+    if (activeRun) {
       // Interrupt the in-flight turn immediately so rapid multi-image bursts or
       // follow-up corrections don't wait for the stale reply to finish.
       const canInterrupt = event.chatType !== ImPeerKind.Group
-        || (event.senderId && event.senderId === state.activeRun.events[0].senderId);
+        || state.pendingEvents.every(pending => sameGroupTurn(activeRun.events[0], pending));
       if (canInterrupt && options.interruptActiveRun && !state.activeRun.interrupted) {
         state.activeRun.interrupted = true;
         if (state.activeRun.sessionId) {
@@ -480,12 +498,12 @@ export class DshImInboundHandler {
       state.debounceTimer = null;
     }
 
-    // An IM turn has one approval requester and one reply context. Keep group members' turns in order.
+    // Each turn has one requester, addressed bot and reply context.
     const first = state.pendingEvents[0];
-    const nextSender = first.chatType === ImPeerKind.Group
-      ? state.pendingEvents.findIndex(event => event.senderId !== first.senderId)
+    const nextTurn = first.chatType === ImPeerKind.Group
+      ? state.pendingEvents.findIndex(event => !sameGroupTurn(first, event))
       : -1;
-    const batch = state.pendingEvents.splice(0, nextSender < 0 ? state.pendingEvents.length : nextSender);
+    const batch = state.pendingEvents.splice(0, nextTurn < 0 ? state.pendingEvents.length : nextTurn);
     state.firstPendingAt = null;
     const run: ActiveImRun = {
       sessionId: null,
@@ -547,7 +565,7 @@ export class DshImInboundHandler {
     const platform = latestEvent.platform.trim().toLowerCase();
     if (!isRetainedImPlatform(platform)) return;
 
-    const instanceId = latestEvent.instanceId?.trim() || 'default';
+    const instanceId = inboundBot(latestEvent);
     const agentId = latestEvent.agentId?.trim() || 'main';
     const chatId = latestEvent.chatId.trim();
     if (!chatId) return;
@@ -655,7 +673,13 @@ export class DshImInboundHandler {
 
     const topic = readFeishuThread(latestEvent);
     const groupId = groupConversationId(latestEvent);
-    const conversationId = topic ? buildFeishuTopicConversationId(chatId, topic.threadId) : chatId;
+    const prefix = getPlatformTitlePrefix(platform);
+    const groupTitle = groupId ? `[${prefix}] ${buildChannelDisplayName(groupId)}${topic ? ` · ${topic.threadId}` : ''}` : null;
+    const ordinaryGroup = sharedGroupId(latestEvent, groupId, !!topic);
+    // Weixin's single-account routes use the native user ID. Multi-bot routes
+    // use the peer kind so a new DM can never be adopted as an untyped group.
+    const directId = !groupId && platform !== RetainedImPlatform.Weixin ? `${ImPeerKind.Direct}:${chatId}` : null;
+    const conversationId = topic ? buildFeishuTopicConversationId(chatId, topic.threadId) : ordinaryGroup ?? directId ?? chatId;
     const topicAlias = topic?.rootMessageId && topic.rootMessageId !== topic.threadId
       ? buildFeishuTopicConversationId(chatId, topic.rootMessageId)
       : null;
@@ -673,8 +697,12 @@ export class DshImInboundHandler {
     const legacyPopo = platform === RetainedImPlatform.Popo
       ? findLegacyPopoMapping(this.deps.imStore, instanceId, latestEvent.chatType ?? ImPeerKind.Direct, chatId, agentId)
       : null;
-    const existingMapping = legacyFeishuGroup ?? legacyDirect ?? (groupId ? legacyPopo : null)
+    const sharedGroup = ordinaryGroup && groupTitle
+      ? this.deps.imStore.findSharedGroupMapping(platform, ordinaryGroup, chatId, agentId, groupTitle)
+      : null;
+    const existingMapping = sharedGroup ?? legacyFeishuGroup ?? legacyDirect ?? (groupId ? legacyPopo : null)
       ?? this.deps.imStore.getSessionMapping(conversationId, mappingPlatform, agentId)
+      ?? (ordinaryGroup || directId ? this.deps.imStore.getSessionMapping(chatId, mappingPlatform, agentId) : null)
       ?? (topicAlias ? this.deps.imStore.getSessionMapping(topicAlias, mappingPlatform, agentId) : null)
       ?? legacyPopo;
     const storedChatId = existingMapping?.imConversationId ?? conversationId;
@@ -684,8 +712,6 @@ export class DshImInboundHandler {
       : null;
     const isExistingSession = Boolean(session);
 
-    const prefix = getPlatformTitlePrefix(platform);
-    const groupTitle = groupId ? `[${prefix}] ${buildChannelDisplayName(groupId)}${topic ? ` · ${topic.threadId}` : ''}` : null;
     if (!session) {
       const label = platform === RetainedImPlatform.Weixin
         ? buildWeixinSessionLabel({
@@ -705,7 +731,7 @@ export class DshImInboundHandler {
         undefined,
         agentId,
       );
-      if (existingMapping) {
+      if (existingMapping && !ordinaryGroup) {
         this.deps.imStore.updateSessionMappingTarget(
           storedChatId,
           storedPlatform,
@@ -714,17 +740,22 @@ export class DshImInboundHandler {
           undefined,
           existingMapping.agentId,
         );
-      } else {
+      } else if (!ordinaryGroup) {
         this.deps.imStore.createSessionMapping(conversationId, mappingPlatform, session.id, agentId);
       }
-      this.deps.notifySessionsChanged?.(session.id);
     } else {
-      this.deps.imStore.updateSessionLastActive(storedChatId, storedPlatform, agentId);
+      if (!ordinaryGroup) {
+        this.deps.imStore.updateSessionLastActive(storedChatId, storedPlatform, agentId);
+      }
       // Only replace the previous generated title when this inbound event proves its value.
       if (groupTitle && !topic && storedChatId === chatId && session.title === `[${prefix}] ${(senderName || chatId).slice(0, 32)}`) {
         this.deps.coworkStore.updateSession(session.id, { title: groupTitle }, { touchUpdatedAt: false });
       }
     }
+
+    // Keep a deliverable route for each bot without moving its historical raw mapping.
+    if (ordinaryGroup) this.deps.imStore.recordGroupSessionRoute(ordinaryGroup, mappingPlatform, session.id, agentId);
+    if (!isExistingSession) this.deps.notifySessionsChanged?.(session.id);
 
     if (topic) {
       const previous = topic.threadId === topic.rootMessageId

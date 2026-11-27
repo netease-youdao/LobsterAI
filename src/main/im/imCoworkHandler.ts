@@ -177,15 +177,14 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   private ensureBackgroundAccumulator(sessionId: string): MessageAccumulator | null {
-    const conversation = this.sessionConversationMap.get(sessionId);
-    if (!conversation) {
-      return null;
-    }
-
     const existing = this.messageAccumulators.get(sessionId);
     if (existing) {
       return existing;
     }
+    // A shared group's latest addressed bot may have changed since the previous turn.
+    const route = this.imStore.getSessionMappingByCoworkSessionId(sessionId);
+    if (!route) return null;
+    this.trackSessionMapping(route);
 
     const timeoutId = setTimeout(() => {
       const accumulator = this.messageAccumulators.get(sessionId);
@@ -201,8 +200,8 @@ export class IMCoworkHandler extends EventEmitter {
       turnStartedAt: Date.now(),
       seenMessageIds: new Set<string>(),
       backgroundDelivery: {
-        conversationId: conversation.conversationId,
-        platform: conversation.platform,
+        conversationId: route.imConversationId,
+        platform: route.platform,
       },
     };
     this.messageAccumulators.set(sessionId, nextAccumulator);
