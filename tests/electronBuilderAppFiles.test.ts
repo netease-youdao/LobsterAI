@@ -29,7 +29,7 @@ const RUNTIME_DEPENDENCIES: Record<string, string> = {
   zod: 'imported by the spawned computer-use MCP server script',
   npm: 'CLI spawned from app.asar.unpacked',
   // coworkUtil puts app.asar/node_modules on NODE_PATH for skill processes.
-  cheerio: 'SKILLs/content-planner scripts',
+  cheerio: 'legacy/marketplace content-planner scripts',
   react: 'SKILLs/pptx html2pptx guide',
   'react-dom': 'SKILLs/pptx html2pptx guide (react-dom/server)',
 };

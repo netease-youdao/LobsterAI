@@ -40,14 +40,25 @@ describe('prettifySkillName', () => {
 
 describe('getLocalizedSkillName', () => {
   const legacySkills = [
+    { id: 'article-writer', name: 'article-writer', zh: '长文写作', en: 'Article Writer' },
     { id: 'canvas-design', name: 'canvas-design', zh: '画布设计', en: 'Canvas Design' },
+    { id: 'content-planner', name: 'content-planner', zh: '内容规划', en: 'Content Planner' },
     { id: 'create-plan', name: 'create-plan', zh: '计划生成', en: 'Create Plan' },
+    { id: 'daily-trending', name: 'daily-trending', zh: '每日热点', en: 'Daily Trending' },
     { id: 'develop-web-game', name: 'develop-web-game', zh: '网页游戏开发', en: 'Web Game Development' },
+    { id: 'local-tools', name: 'local-tools', zh: '本地工具', en: 'Local Tools' },
     { id: 'playwright', name: 'playwright', zh: 'Playwright 自动化', en: 'Playwright' },
+    { id: 'remotion', name: 'remotion', zh: '程序化视频', en: 'Programmatic Video' },
     { id: 'seedance', name: 'seedance', zh: 'Seedance 视频生成', en: 'Seedance' },
     { id: 'seedream', name: 'seedream', zh: 'Seedream 图像生成', en: 'Seedream' },
     { id: 'skill-vetter', name: 'skill-vetter', zh: '技能安全审查', en: 'Skill Vetter' },
+    { id: 'skin-creator', name: 'skin-creator', zh: '皮肤创建', en: 'Skin Creator' },
+    { id: 'stock-analyzer', name: 'stock-analyzer', zh: '股票分析', en: 'Stock Analyzer' },
+    { id: 'stock-announcements', name: 'stock-announcements', zh: '上市公司公告', en: 'Stock Announcements' },
+    { id: 'stock-explorer', name: 'stock-explorer', zh: '行情浏览', en: 'Stock Explorer' },
     { id: 'technology-news-search', name: 'technology-search', zh: '科技新闻检索', en: 'Tech News Search' },
+    { id: 'weather', name: 'weather', zh: '天气查询', en: 'Weather' },
+    { id: 'youdaonote', name: 'youdaonote', zh: '有道云笔记', en: 'Youdao Note' },
   ];
   const fetchMarketplace = vi.fn();
   let service: typeof import('./skill')['skillService'];

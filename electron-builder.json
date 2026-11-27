@@ -214,6 +214,13 @@
         "filter": [
           "*.zip"
         ]
+      },
+      {
+        "from": "resources/skin-pack",
+        "to": "skin-pack",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   },
@@ -267,6 +274,13 @@
       {
         "from": "resources/python-win",
         "to": "python-win",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/skin-pack",
+        "to": "skin-pack",
         "filter": [
           "**/*"
         ]

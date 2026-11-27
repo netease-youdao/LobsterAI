@@ -410,13 +410,25 @@ export function apply(ctx) {
             if (typeof p.skillsDir === 'string' && p.skillsDir.length > 0) {
               state.skillsDir = p.skillsDir;
             }
+            if (typeof p.bundledDir === 'string') {
+              state.skillsPolicy.bundledDir = p.bundledDir.trim();
+            }
+            state.skillsPolicy.bundledIds = Array.isArray(p.bundledIds)
+              ? new Set(p.bundledIds.filter((s) => typeof s === 'string' && s.trim().length > 0))
+              : null;
+            state.skillsPolicy.modelHiddenIds = Array.isArray(p.modelHiddenIds)
+              ? new Set(p.modelHiddenIds.filter((s) => typeof s === 'string' && s.trim().length > 0))
+              : new Set();
             state.invalidateSkills?.();
             return jsonResponse({
               ok: true,
               result: {
                 skillsDir: state.skillsDir,
+                bundledDir: state.skillsPolicy.bundledDir,
+                bundledCount: state.skillsPolicy.bundledIds ? state.skillsPolicy.bundledIds.size : null,
                 enabledCount: state.skillsPolicy.enabledIds ? state.skillsPolicy.enabledIds.size : null,
                 disabledCount: state.skillsPolicy.disabledIds.size,
+                modelHiddenCount: state.skillsPolicy.modelHiddenIds.size,
               },
             });
           }
@@ -583,12 +595,13 @@ export function apply(ctx) {
             const { nextPreset, context: nextContext } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
             state.sessionContexts.set(sessionId, nextContext);
             // Invalidate DSH's SkillRegistry collectCache whenever a session's
-            // agent binding or allowedSkillIds changes so Turn 2+ never serves
-            // a stale skill catalog from Turn 1.
+            // agent binding, allowedSkillIds, or per-turn selectedSkillIds
+            // changes so Turn 2+ never serves a stale skill catalog from Turn 1.
             if (
               !hadPrev
               || prev.agentId !== nextContext.agentId
               || !sameSkillAllowlist(prev.allowedSkillIds, nextContext.allowedSkillIds)
+              || !sameSkillAllowlist(prev.selectedSkillIds ?? [], nextContext.selectedSkillIds ?? [])
             ) {
               state.invalidateSkills?.();
             }

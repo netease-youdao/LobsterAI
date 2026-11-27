@@ -355,12 +355,18 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       const installedSkillMetadata: Record<string, KitSkillMetadata> = {};
       const sourceSkillMetadata = normalizeKitSkillMetadataList(params.skillList);
 
+      const reservedBuiltInIds = typeof skillManager.listBuiltInSkillIds === 'function'
+        ? skillManager.listBuiltInSkillIds()
+        : new Set<string>();
+
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = path.resolve(root, folderName);
+        let candidateId = folderName;
+        let targetDir = path.resolve(root, candidateId);
         let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = path.resolve(root, `${folderName}-${suffix}`);
+        while (reservedBuiltInIds.has(candidateId) || fs.existsSync(targetDir)) {
+          candidateId = `${folderName}-${suffix}`;
+          targetDir = path.resolve(root, candidateId);
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);

@@ -520,7 +520,7 @@ export const DOC_EXAMPLES: HomeShowcaseExample[] = [
       zh: '围绕你的真实观点或生活经验，拒绝空洞“AI 八股文”，产出有节奏、有案例、带备选标题和配图指令的完整成稿。',
       en: 'Crafts authentic, rhythmic articles without generic AI clichés—complete with headline variants, pull-quotes, and image prompts.',
     },
-    skillId: 'article-writer',
+    skillId: 'docx',
     acceptsUpload: true,
     uploadAccept: '.txt,.md,.docx,.pdf',
     uploadHint: { zh: '可上传你的口述笔记、素材摘录或历史风格样文', en: 'Optional: attach raw voice notes or a sample of your writing voice' },

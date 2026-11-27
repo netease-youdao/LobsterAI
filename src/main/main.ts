@@ -254,6 +254,7 @@ import {
 } from '../shared/shareDeployment/constants';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
 import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
+import { CoreSkillId } from '../shared/skills/constants';
 import { isUrlOnDomain } from '../shared/url/hostname';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
@@ -2431,6 +2432,7 @@ const getDshBootstrap = (): DshBootstrap => {
       userDataDir,
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
+      emailConfigDir: getSkillManager().getEmailConfigDir(),
       coworkStore: {
         messageEdits: storeInstance.messageEdits,
         messageVersions: storeInstance.messageVersions,
@@ -3257,6 +3259,9 @@ const syncOpenClawConfig = async (options: {
         enabledIds,
         disabledIds,
         skillsDir: getSkillManager().getSkillsRoot(),
+        bundledDir: getSkillManager().getBundledSkillsRoot(),
+        bundledIds: [...getSkillManager().listBuiltInSkillIds()],
+        modelHiddenIds: getSkillManager().hasEnabledEmailAccount() ? [] : [CoreSkillId.Email],
       },
       memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       webAccessPolicy: {
@@ -3650,6 +3655,7 @@ const getContextCleanupService = (): ContextCleanupService => {
         description: skill.description,
         enabled: skill.enabled,
         isBuiltIn: skill.isBuiltIn,
+        canDisable: skill.canDisable,
         updatedAt: skill.updatedAt,
         skillDirPath: skill.skillPath ? path.dirname(skill.skillPath) : undefined,
       })),

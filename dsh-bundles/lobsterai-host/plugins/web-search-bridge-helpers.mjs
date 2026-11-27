@@ -74,11 +74,15 @@ export function isOfficialDeepSeekBaseUrl(baseURL) {
  * @returns {boolean}
  */
 export function isWebSearchEnabledByPolicy(skillsPolicy, allowedSkillIds) {
-  if (skillsPolicy?.disabledIds instanceof Set && skillsPolicy.disabledIds.has(WEB_SEARCH_SKILL_ID)) {
-    return false;
-  }
-  if (skillsPolicy?.enabledIds instanceof Set && !skillsPolicy.enabledIds.has(WEB_SEARCH_SKILL_ID)) {
-    return false;
+  const isBundledCoreWebSearch =
+    skillsPolicy?.bundledIds instanceof Set && skillsPolicy.bundledIds.has(WEB_SEARCH_SKILL_ID);
+  if (!isBundledCoreWebSearch) {
+    if (skillsPolicy?.disabledIds instanceof Set && skillsPolicy.disabledIds.has(WEB_SEARCH_SKILL_ID)) {
+      return false;
+    }
+    if (skillsPolicy?.enabledIds instanceof Set && !skillsPolicy.enabledIds.has(WEB_SEARCH_SKILL_ID)) {
+      return false;
+    }
   }
   if (allowedSkillIds instanceof Set && !allowedSkillIds.has(WEB_SEARCH_SKILL_ID)) {
     return false;

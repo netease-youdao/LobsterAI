@@ -9,11 +9,13 @@ import {
   buildInstalledSkinPackKitRecord,
   buildSkinPackMarketplaceKit,
 } from './skinPackKit';
-
-const SKILLS_STATE_KEY = 'skills_state';
+import {
+  installSkinCreatorSkillToUserRoot,
+  removeSkinCreatorSkillFromUserRoot,
+  resolveBundledSkinCreatorSkillDir,
+} from './skinPackSkillResources';
 
 type InstalledKitsMap = Record<string, InstalledKitRecord>;
-type SkillStateMap = Record<string, { enabled: boolean }>;
 
 interface SkinPackKitStore {
   get<T = unknown>(key: string): T | undefined;
@@ -21,17 +23,17 @@ interface SkinPackKitStore {
 }
 
 interface SkinPackKitSkillManager {
-  listSkills(): Array<{ id: string }>;
+  getSkillsRoot(): string;
   setSkillEnabled(id: string, enabled: boolean): unknown;
   startWatching(): void;
   stopWatching(): void;
-  syncBundledSkillsToUserData(): void;
 }
 
 export interface SkinPackKitLifecycleDeps {
   getStore: () => SkinPackKitStore;
   getSkillManager: () => SkinPackKitSkillManager;
   notifySkillsChanged: () => void;
+  resolveSkinCreatorSourceDir?: () => string | null;
   syncOpenClawConfig: (options: {
     reason: string;
     restartGatewayIfRunning?: boolean;
@@ -146,9 +148,11 @@ export function createSkinPackKitLifecycle(
     }
 
     return withPausedSkillWatcher(async (skillManager) => {
-      skillManager.syncBundledSkillsToUserData();
-      const skinSkill = skillManager.listSkills().find(skill => skill.id === SkinPackSkillId.BuiltIn);
-      if (!skinSkill) {
+      const sourceDir = deps.resolveSkinCreatorSourceDir
+        ? deps.resolveSkinCreatorSourceDir()
+        : resolveBundledSkinCreatorSkillDir();
+      const installed = installSkinCreatorSkillToUserRoot(skillManager.getSkillsRoot(), sourceDir);
+      if (!installed) {
         throw new Error('Bundled AI Skin Creator skill is unavailable');
       }
       skillManager.setSkillEnabled(SkinPackSkillId.BuiltIn, true);
@@ -166,7 +170,7 @@ export function createSkinPackKitLifecycle(
         throw new Error(syncResult.error || 'OpenClaw config sync failed after AI Skin Designer install');
       }
 
-      console.log(`[SkinPackKit] Kit installed with bundled skill: ${SkinPackSkillId.BuiltIn}`);
+      console.log(`[SkinPackKit] Kit installed with managed skill: ${SkinPackSkillId.BuiltIn}`);
       return { success: true, skillIds: [SkinPackSkillId.BuiltIn] };
     });
   };
@@ -184,10 +188,8 @@ export function createSkinPackKitLifecycle(
       return { success: false, error: `Kit "${kitId}" is not installed` };
     }
 
-    return withPausedSkillWatcher(async () => {
-      const stateMap = store.get<SkillStateMap>(SKILLS_STATE_KEY) ?? {};
-      stateMap[SkinPackSkillId.BuiltIn] = { enabled: false };
-      store.set(SKILLS_STATE_KEY, stateMap);
+    return withPausedSkillWatcher(async (skillManager) => {
+      removeSkinCreatorSkillFromUserRoot(skillManager.getSkillsRoot(), store);
 
       delete installedMap[kitId];
       store.set(KitStoreKey.Installed, installedMap);

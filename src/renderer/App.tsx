@@ -26,6 +26,7 @@ import {
 } from '../shared/library/constants';
 import type { LibrarySessionRef } from '../shared/library/types';
 import { ProviderName, ProviderRegistry } from '../shared/providers';
+import { CoreSkillId } from '../shared/skills/constants';
 import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './components/agentSidebar/taskFilter';
 import { CoworkView } from './components/cowork';
 import {
@@ -992,6 +993,11 @@ const App: React.FC = () => {
     dispatch(setDraftPrompt({ sessionId: '__home__', draft: i18nService.t('skillCreatorPrompt') }));
     coworkService.clearSession();
     dispatch(clearSelection());
+    dispatch(setActiveSkillIds([CoreSkillId.SkillCreator]));
+    dispatch(setDraftSkillIds({
+      draftKey: '__home__',
+      skillIds: [CoreSkillId.SkillCreator],
+    }));
     dispatch(setDraftCollaborationMode({
       draftKey: '__home__',
       mode: CoworkCollaborationMode.Default,
@@ -1660,13 +1666,19 @@ const App: React.FC = () => {
         initialMemoryAgentId: detail?.agentId,
       });
     };
+    const openSkillsMarketplace = () => {
+      setShowSettings(false);
+      setMainView(MainView.Skills);
+    };
     window.addEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
     window.addEventListener(AgentUiEvent.OpenImSettings, openImSettings);
     window.addEventListener(AgentUiEvent.OpenMemorySettings, openMemorySettings);
+    window.addEventListener(AgentUiEvent.OpenSkillsMarketplace, openSkillsMarketplace);
     return () => {
       window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
       window.removeEventListener(AgentUiEvent.OpenImSettings, openImSettings);
       window.removeEventListener(AgentUiEvent.OpenMemorySettings, openMemorySettings);
+      window.removeEventListener(AgentUiEvent.OpenSkillsMarketplace, openSkillsMarketplace);
     };
   }, [handleShowSettings]);
 

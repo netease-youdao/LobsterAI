@@ -409,4 +409,107 @@ describe('persona-helpers', () => {
     tempDirs.push(emptyRoot);
     expect(buildWebSearchRoutingGuidance([emptyRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe('');
   });
+
+  test('supports read-only bundledDir precedence, frontmatter invocation policies, modelHiddenIds, and selectedSkillIds elevation', async () => {
+    const {
+      buildWebSearchRoutingGuidance,
+      discoverLobsterSkills,
+      WEB_SEARCH_ROUTING_GUIDANCE,
+    } = await loadHelpers() as PersonaHelpers & {
+      buildWebSearchRoutingGuidance: (
+        rootDirs: readonly string[],
+        policy: Record<string, unknown>,
+        allowedSkillIds: Set<string> | null,
+      ) => string;
+      discoverLobsterSkills: (
+        rootDirs: readonly string[],
+        policy: Record<string, unknown>,
+        allowedSkillIds: Set<string> | null,
+        options?: Record<string, unknown>,
+      ) => Array<{
+        name: string;
+        source: string;
+        invocation: { modelInvocable: boolean; userInvocable: boolean };
+      }>;
+      WEB_SEARCH_ROUTING_GUIDANCE: string;
+    };
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-bundled-skills-'));
+    tempDirs.push(root);
+    const bundledDir = path.join(root, 'bundled');
+    const userDir = path.join(root, 'user');
+    const writeSkill = (dir: string, id: string, fm: string, name = id) => {
+      const target = path.join(dir, id);
+      fs.mkdirSync(target, { recursive: true });
+      fs.writeFileSync(path.join(target, 'SKILL.md'), `---\nname: ${name}\n${fm}\n---\nBody ${id}\n`, 'utf8');
+    };
+
+    writeSkill(bundledDir, 'web-search', 'description: Built-in web search');
+    writeSkill(bundledDir, 'docx', 'description: Built-in docx');
+    writeSkill(bundledDir, 'skill-creator', 'description: Create skills\ndisable-model-invocation: true');
+    writeSkill(bundledDir, 'lobsterai-image-processing', 'description: Image tools\nuser-invocable: false');
+    writeSkill(bundledDir, 'imap-smtp-email', 'description: Email tools');
+    writeSkill(bundledDir, 'unlisted-dir', 'description: Should not load');
+    // User tries to shadow built-in docx
+    writeSkill(userDir, 'docx', 'description: Shadow attempt');
+    writeSkill(userDir, 'docx-1', 'description: Imported copy\ndisable-model-invocation: true', 'docx');
+    writeSkill(userDir, 'docx-2', 'description: Another copy', 'docx');
+    writeSkill(path.join(root, '.agents', 'skills'), 'project-copy', 'description: Project shadow', 'docx');
+    writeSkill(userDir, 'weather', 'description: User weather skill');
+
+    const policy = {
+      enabledIds: new Set(['weather']),
+      disabledIds: new Set(['docx', 'web-search']), // stale disabled IDs cannot turn off core built-ins
+      bundledDir,
+      bundledIds: new Set(['web-search', 'docx', 'skill-creator', 'lobsterai-image-processing', 'imap-smtp-email']),
+      modelHiddenIds: new Set(['imap-smtp-email']),
+    };
+
+    // web-search routing guidance finds bundled web-search even when userDir is empty and disabledIds has stale entry
+    expect(buildWebSearchRoutingGuidance([userDir], policy, null)).toBe(WEB_SEARCH_ROUTING_GUIDANCE);
+
+    // Default turn: bundled docx wins over user docx, unlisted-dir ignored,
+    // skill-creator & unconfigured imap-smtp-email have modelInvocable=false,
+    // lobsterai-image-processing has userInvocable=false.
+    const defaultTurn = discoverLobsterSkills([userDir], policy, null);
+    const byName = new Map(defaultTurn.map((c) => [c.name, c]));
+    expect([...byName.keys()].sort()).toEqual([
+      'docx',
+      'imap-smtp-email',
+      'lobsterai-image-processing',
+      'skill-creator',
+      'weather',
+    ]);
+    expect(byName.get('docx')?.source).toBe(path.join(bundledDir, 'docx', 'SKILL.md'));
+    expect(byName.get('skill-creator')?.invocation).toEqual({ modelInvocable: false, userInvocable: true });
+    expect(byName.get('lobsterai-image-processing')?.invocation).toEqual({ modelInvocable: true, userInvocable: false });
+    expect(byName.get('imap-smtp-email')?.invocation).toEqual({ modelInvocable: false, userInvocable: true });
+
+    // Turn where user explicitly selected skill-creator & imap-smtp-email elevates both to modelInvocable=true
+    const selectedTurn = discoverLobsterSkills([userDir], policy, null, {
+      selectedSkillIds: new Set(['skill-creator', 'imap-smtp-email']),
+    });
+    const selectedByName = new Map(selectedTurn.map((c) => [c.name, c]));
+    expect(selectedByName.get('skill-creator')?.invocation).toEqual({ modelInvocable: true, userInvocable: true });
+    expect(selectedByName.get('imap-smtp-email')?.invocation).toEqual({ modelInvocable: true, userInvocable: true });
+
+    const copyPolicy = { ...policy, enabledIds: new Set(['docx-1', 'docx-2']) };
+    const discoverCopies = (allowed: Set<string> | null, selected: string[]) =>
+      discoverLobsterSkills([userDir], copyPolicy, allowed, { cwd: root, selectedSkillIds: selected });
+    const copies = new Map(discoverCopies(null, ['docx']).map(c => [c.name, c]));
+    expect(copies.get('docx')?.source).toBe(path.join(bundledDir, 'docx', 'SKILL.md'));
+    expect(copies.get('docx-1')?.source).toBe(path.join(userDir, 'docx-1', 'SKILL.md'));
+    expect(copies.get('docx-1')?.invocation.modelInvocable).toBe(false);
+    expect(copies.get('docx-2')?.source).toBe(path.join(userDir, 'docx-2', 'SKILL.md'));
+    expect(discoverCopies(new Set(['docx']), ['docx-1']).map(c => c.name)).toEqual(['docx']);
+    expect(discoverCopies(new Set(['docx-1']), ['docx-1'])).toMatchObject([
+      { name: 'docx-1', invocation: { modelInvocable: true } },
+    ]);
+    expect(discoverCopies(new Set(['project-copy']), [])).toEqual([]);
+    const disabledCopy = discoverLobsterSkills(
+      [userDir], { ...copyPolicy, disabledIds: new Set(['docx-1']) }, new Set(['docx', 'docx-1', 'docx-2']),
+      { cwd: root, selectedSkillIds: ['docx-1'] },
+    );
+    expect(disabledCopy.map(c => c.name).sort()).toEqual(['docx', 'docx-2']);
+  });
 });

@@ -43,6 +43,7 @@ import type {
   ModelThinkingConfig,
   ModelThinkingLevel,
 } from '../../../shared/providers/modelThinking';
+import { EMAIL_SKILL_CONFIG_DIR_NAME } from '../../../shared/skills/constants';
 import { DSH_NODE_EXEC_ARGV, DSH_RUNTIME_ENTRY_RELPATH } from '../dshRuntime';
 import {
   buildIsolatedDshBaseEnv,
@@ -118,6 +119,9 @@ export interface DshHostSkillsPolicy {
   disabledIds?: string[];
   extraDirs?: string[];
   skillsDir?: string;
+  bundledDir?: string;
+  bundledIds?: string[];
+  modelHiddenIds?: string[];
 }
 
 export interface DshHostMemoryPolicy {
@@ -196,6 +200,7 @@ export interface DshHostSessionContext {
   traceId?: string;
   workspaceDir?: string;
   allowedSkillIds?: string[] | null;
+  selectedSkillIds?: string[] | null;
   customSystemPrompt?: string;
   officeAgentPrompt?: string;
   mediaTurnInstruction?: string;
@@ -317,6 +322,8 @@ export interface DshHostManagerOptions {
   channelsBundleDir?: string | null;
   /** Path to LobsterAI's `SKILLs` directory. */
   skillsDir: string;
+  /** Optional directory storing decoupled email skill credentials (`accounts.json` / `.env`). */
+  emailConfigDir?: string;
   /** Path to Electron (or Node in tests) executable used with `ELECTRON_RUN_AS_NODE=1`. */
   executablePath: string;
   /** Optional fallback IANA timezone when `TZ` is unset in the inherited environment. */
@@ -471,6 +478,8 @@ export function buildIsolatedDshChildEnv(params: {
   bridgeSecret: string;
   workspacesDir: string;
   skillsDir: string;
+  emailAccountsPath?: string;
+  emailEnvPath?: string;
   searchPolicy: DshSearchPolicy;
   runtimeDir?: string;
   runtimeVersion?: string | null;
@@ -513,6 +522,12 @@ export function buildIsolatedDshChildEnv(params: {
   env.SKILLS_ROOT = normalizedSkillsRoot;
   env.LOBSTERAI_SKILLS_ROOT = normalizedSkillsRoot;
   env[DshHostBundleEnvVar.SearchPolicy] = params.searchPolicy;
+  if (params.emailAccountsPath?.trim()) {
+    env.EMAIL_ACCOUNTS_PATH = params.emailAccountsPath.trim();
+  }
+  if (params.emailEnvPath?.trim()) {
+    env.EMAIL_ENV_PATH = params.emailEnvPath.trim();
+  }
 
   if (params.executablePath?.trim()) {
     env.LOBSTERAI_ELECTRON_PATH = params.executablePath.trim();
@@ -575,6 +590,7 @@ export class DshHostManager extends EventEmitter {
   private readonly dshHomeDir: string;
   private readonly profileDir: string;
   private readonly workspacesDir: string;
+  private readonly emailConfigDir: string;
   private readonly bridgeSecret: string;
 
   private phase: DshHostPhase = DshHostPhase.Stopped;
@@ -626,6 +642,7 @@ export class DshHostManager extends EventEmitter {
     this.dshHomeDir = path.join(options.userDataDir, DSH_PROFILE_DIR_NAME);
     this.profileDir = resolveLobsterDshProfileDir(this.dshHomeDir);
     this.workspacesDir = path.join(options.userDataDir, WORKSPACES_DIR_NAME);
+    this.emailConfigDir = options.emailConfigDir ?? path.join(options.userDataDir, EMAIL_SKILL_CONFIG_DIR_NAME);
     this.bridgeSecret = randomBytes(32).toString('hex');
   }
 
@@ -1103,6 +1120,8 @@ export class DshHostManager extends EventEmitter {
       bridgeSecret: this.bridgeSecret,
       workspacesDir: this.workspacesDir,
       skillsDir: this.options.skillsDir,
+      emailAccountsPath: path.join(this.emailConfigDir, 'accounts.json'),
+      emailEnvPath: path.join(this.emailConfigDir, '.env'),
       searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.AllowAll,
       runtimeDir: this.options.runtimeDir,
       runtimeVersion: this.runtimeVersion,

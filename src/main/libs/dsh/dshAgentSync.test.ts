@@ -7,11 +7,13 @@ import {
   SubagentCollaborationMode,
 } from '../../../shared/agent/constants';
 import { DshProgressiveCapability } from '../../../shared/dshEngine/hostConstants';
+import { CoreSkillId } from '../../../shared/skills/constants';
 import type { Agent } from '../../coworkStore';
 import {
   buildDshHostAgentSpecs,
   resolveAllowedSkillIdsForTurn,
   resolveHostCapabilitiesForAgent,
+  resolveSelectedSkillIdsForTurn,
 } from './dshAgentSync';
 
 function makeAgent(overrides: Partial<Agent> & { id: string; name: string }): Agent {
@@ -210,6 +212,26 @@ describe('buildDshHostAgentSpecs', () => {
       { id: 'folder-only', description: 'workspace: lobsterai' },
     ]);
   });
+});
+
+describe('resolveSelectedSkillIdsForTurn', () => {
+  test.each(['/skill-creator', '  /skill-creator 帮我创建技能', '/skill-creator\n新建技能'])(
+    'combines a leading command with the picker selection for %j',
+    message => {
+      expect(resolveSelectedSkillIdsForTurn(message)).toEqual([CoreSkillId.SkillCreator]);
+      const picked = [CoreSkillId.Docx, CoreSkillId.SkillCreator];
+      expect(resolveSelectedSkillIdsForTurn(message, picked)).toEqual(picked);
+      expect(resolveSelectedSkillIdsForTurn(message, [CoreSkillId.Docx])).toEqual(picked);
+    },
+  );
+
+  test.each(['继续', '解释 /skill-creator', '`/skill-creator`', '/skill-creator-1', '/skill-creator/SKILL.md'])(
+    'leaves ordinary text and other identifiers alone for %j',
+    message => {
+      expect(resolveSelectedSkillIdsForTurn(message)).toEqual([]);
+      expect(resolveSelectedSkillIdsForTurn(message, [CoreSkillId.Docx])).toEqual([CoreSkillId.Docx]);
+    },
+  );
 });
 
 describe('resolveAllowedSkillIdsForTurn', () => {

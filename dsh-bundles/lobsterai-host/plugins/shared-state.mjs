@@ -46,11 +46,14 @@ export function getHostState(ctx) {
        * @type {Map<string, { targetAgentId: string, parentDshSessionId?: string, rootCoworkSessionId?: string, workspaceDir?: string }>}
        */
       delegatedChildAgents: new Map(),
-      /** @type {{ enabledIds: Set<string> | null, disabledIds: Set<string>, extraDirs: string[] }} */
+      /** @type {{ enabledIds: Set<string> | null, disabledIds: Set<string>, extraDirs: string[], bundledDir: string, bundledIds: Set<string> | null, modelHiddenIds: Set<string> }} */
       skillsPolicy: {
         enabledIds: null,
         disabledIds: new Set(),
         extraDirs: [],
+        bundledDir: '',
+        bundledIds: null,
+        modelHiddenIds: new Set(),
       },
       /** @type {{ webFetchEnabled: boolean, browserSearchEnabled: boolean, blockedHostnames: string[], allowedHostnames: string[], deepseekSearchBaseUrl: string }} */
       webAccessPolicy: {

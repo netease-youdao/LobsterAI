@@ -14,6 +14,7 @@ import {
   DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
 import { canonicalizeDshProviderId } from '../../../shared/providers/constants';
+import { CoreSkillId } from '../../../shared/skills/constants';
 import type { Agent } from '../../coworkStore';
 import type { DshHostAgentSpec } from './dshHostManager';
 
@@ -190,6 +191,16 @@ function normalizeSkillIdList(rawIds: readonly string[] | null | undefined): str
     result.push(trimmed);
   }
   return result;
+}
+
+/** A typed /skill-creator command selects the skill for this user message only. */
+export function resolveSelectedSkillIdsForTurn(userMessage: string, messageSkillIds?: readonly string[]): string[] {
+  const selected = normalizeSkillIdList(Array.isArray(messageSkillIds) ? messageSkillIds : []);
+  const command = userMessage.trimStart().split(/\s/, 1)[0];
+  if (command === `/${CoreSkillId.SkillCreator}` && !selected.includes(CoreSkillId.SkillCreator)) {
+    selected.push(CoreSkillId.SkillCreator);
+  }
+  return selected;
 }
 
 /**

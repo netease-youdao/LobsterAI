@@ -238,4 +238,64 @@ describe('ContextCleanupService', () => {
     expect((await service.undo(applied.undoToken!)).success).toBe(false);
     db.close();
   });
+
+  test('excludes canDisable=false core built-in skills from scan candidates and apply targets', async () => {
+    const db = new Database(':memory:');
+    const dshHome = createTempDir();
+    const kv = new Map<string, unknown>();
+    const kvStore = {
+      get: <T,>(k: string) => kv.get(k) as T | undefined,
+      set: (k: string, v: unknown) => { kv.set(k, v); },
+    };
+    const usageStore = new CapabilityUsageStore(db, { flushDebounceMs: 0 });
+    const now = Date.UTC(2026, 10, 26, 12, 0, 0);
+    const oldTs = now - 60 * MS_PER_DAY;
+    const setSkillsEnabledBatch = vi.fn();
+
+    const skills: CleanupSkillDescriptor[] = [
+      {
+        id: 'docx',
+        name: 'Word',
+        description: 'Core built-in Word skill.',
+        enabled: true,
+        isBuiltIn: true,
+        canDisable: false,
+        updatedAt: oldTs,
+      },
+      {
+        id: 'weather',
+        name: 'Weather',
+        description: 'User-installed weather skill.',
+        enabled: true,
+        isBuiltIn: false,
+        canDisable: true,
+        updatedAt: oldTs,
+      },
+    ];
+
+    const service = new ContextCleanupService({
+      usageStore,
+      kvStore,
+      dshHomeDir: dshHome,
+      listSkills: () => skills,
+      setSkillsEnabledBatch,
+      listMcpServers: () => [],
+      setMcpServerEnabled: () => false,
+      listAgents: () => [],
+      isDecisionModelActive: () => false,
+      setDecisionModelEnabled: () => {},
+    });
+
+    const scan = service.scan({ now });
+    expect(scan.candidates.map((c) => c.id)).toEqual(['weather']);
+
+    // Even if a caller passes a locked built-in skill directly to apply(), it is ignored.
+    const applied = await service.apply([
+      { kind: CleanupCapabilityKind.Skill, id: 'docx' },
+      { kind: CleanupCapabilityKind.Skill, id: 'weather' },
+    ]);
+    expect(applied.closedCount).toBe(1);
+    expect(setSkillsEnabledBatch).toHaveBeenCalledWith(['weather'], false);
+    db.close();
+  });
 });

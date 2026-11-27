@@ -29,6 +29,7 @@ import { clearAgentSelectedModel } from '../store/slices/modelSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
 import { removeAgentOnboardingMeta } from './agentOnboarding';
+import { autoInstallMissingSkillsForAgent } from './expertSkillInstaller';
 import { i18nService } from './i18n';
 import { captureExpertModelSelection } from './newTaskModelSelection';
 import { resetDraftAnalytics } from './usageAnalytics';
@@ -426,6 +427,11 @@ class AgentService {
           subagentCollaborationMode: normalizeSubagentCollaborationMode(agent.subagentCollaborationMode),
           subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
         }));
+        if (agent.skillIds && agent.skillIds.length > 0) {
+          void autoInstallMissingSkillsForAgent(agent).catch((error) => {
+            console.warn('[AgentService] Background expert skill auto-install failed:', error);
+          });
+        }
         return agent;
       }
       return null;

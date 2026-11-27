@@ -6,7 +6,10 @@ import { Provider } from 'react-redux';
 
 import App from './App';
 import WindowZoomIndicator from './components/window/WindowZoomIndicator';
+import { installCleanRichTextCopy } from './services/clipboardRichText';
 import { store } from './store';
+
+installCleanRichTextCopy(document);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

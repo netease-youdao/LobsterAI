@@ -81,6 +81,7 @@ import { t } from '../../i18n';
 import { analyzeCommandDanger } from '../commandSafety';
 import type { CoworkMessageEditStore } from '../coworkMessageEditStore';
 import type { CoworkMessageVersionStore } from '../coworkMessageVersionStore';
+import { resolveSelectedSkillIdsForTurn } from '../dsh/dshAgentSync';
 import {
   buildApprovalScopeKey,
   extractShellCommandFromArgs,
@@ -1557,6 +1558,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         userQuestionsDisabled: session.userQuestionsDisabled,
         goalToolsEnabled: true,
         allowedSkillIds,
+        selectedSkillIds: [],
         customSystemPrompt: effectiveSystemPrompt,
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: this.getEffectivePermissionPreset(sessionId),
@@ -2687,6 +2689,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         userQuestionsDisabled: session.userQuestionsDisabled,
         ...(goalToolsEnabled ? { goalToolsEnabled: true } : {}),
         allowedSkillIds,
+        selectedSkillIds: resolveSelectedSkillIdsForTurn(persistedContent, params.messageSkillIds),
         customSystemPrompt: boundCustomSystemPrompt,
         ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
         mediaTurnInstruction: params.mediaInstruction ?? '',

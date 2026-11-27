@@ -109,7 +109,9 @@ export function groupSkillsForPicker(
   skills: readonly Skill[],
   { query, matchesQuery, recentSkillIds, getDisplayName }: GroupSkillsOptions,
 ): SkillPickerGroups {
-  const visible = skills.filter(skill => skill.enabled && matchesQuery(skill));
+  const visible = skills.filter(
+    skill => skill.enabled && skill.userInvocable !== false && matchesQuery(skill),
+  );
 
   const recent: Skill[] = [];
   if (!query.trim()) {
