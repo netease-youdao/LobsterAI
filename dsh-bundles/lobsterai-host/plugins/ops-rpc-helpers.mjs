@@ -61,6 +61,16 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
     ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
       ? { allowedSkillIds: p.allowedSkillIds }
       : {}),
+    ...(Array.isArray(p.selectedSkillIds)
+      ? {
+          selectedSkillIds: p.selectedSkillIds
+            .filter((s) => typeof s === 'string')
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
+        }
+      : p.selectedSkillIds === null
+        ? { selectedSkillIds: [] }
+        : {}),
     ...customSystemPromptPatch,
     ...(typeof p.officeAgentPrompt === 'string' && p.officeAgentPrompt.trim().length > 0
       ? { officeAgentPrompt: p.officeAgentPrompt }

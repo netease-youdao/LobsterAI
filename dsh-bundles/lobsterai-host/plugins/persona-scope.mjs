@@ -136,6 +136,9 @@ export function apply(ctx) {
         const allowedSkillIds = bound && Array.isArray(bound.allowedSkillIds)
           ? new Set(bound.allowedSkillIds.filter((s) => typeof s === 'string'))
           : null;
+        const selectedSkillIds = bound && Array.isArray(bound.selectedSkillIds)
+          ? new Set(bound.selectedSkillIds.filter((s) => typeof s === 'string'))
+          : null;
         const roots = [
           ...(state.skillsDir ? [state.skillsDir] : []),
           ...state.skillsPolicy.extraDirs,
@@ -143,6 +146,7 @@ export function apply(ctx) {
         return discoverLobsterSkills(roots, state.skillsPolicy, allowedSkillIds, {
           cwd: options?.cwd,
           isSkillName,
+          selectedSkillIds,
         });
       },
       async get(candidate) {
@@ -159,8 +163,8 @@ export function apply(ctx) {
           path: locator.filePath,
           content: body.trim(),
           invocation: {
-            modelInvocable: true,
-            userInvocable: true,
+            modelInvocable: candidate?.invocation?.modelInvocable !== false,
+            userInvocable: candidate?.invocation?.userInvocable !== false,
           },
           resourceBase: {
             kind: 'directory',

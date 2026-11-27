@@ -1169,7 +1169,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 </div>
 
                 {!isMainAgent && restrictSkills && (
-                  <div className="mt-3 h-[268px] rounded-lg border border-border bg-surface-raised/25 p-3">
+                  <div className="mt-3 h-[340px] rounded-lg border border-border bg-surface-raised/25 p-3">
                     <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
                   </div>
                 )}

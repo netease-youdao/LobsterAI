@@ -335,21 +335,52 @@ function matchesAnyIdentifier(set, identifiers) {
   return false;
 }
 
+export function parseFrontmatterBoolean(rawValue) {
+  if (typeof rawValue === 'boolean') return rawValue;
+  if (typeof rawValue !== 'string') return undefined;
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return undefined;
+}
+
+function resolveCandidateInvocation(meta, identifiers, modelHiddenIds, selectedSkillIds) {
+  const userInvocable = parseFrontmatterBoolean(meta['user-invocable']) !== false;
+  const disableModelInvocation = parseFrontmatterBoolean(meta['disable-model-invocation']) === true;
+  const dynamicallyHidden = matchesAnyIdentifier(modelHiddenIds, identifiers);
+  const explicitlySelected = matchesAnyIdentifier(selectedSkillIds, identifiers);
+  const modelInvocable = (!disableModelInvocation && !dynamicallyHidden) || explicitlySelected;
+  return {
+    modelInvocable,
+    userInvocable,
+  };
+}
+
 /**
  * Determine whether a LobsterAI skill is installed and enabled for the current
- * session (respecting global skill toggles and per-agent allowlists).
+ * session (respecting global skill toggles, read-only core bundled skills, and
+ * per-agent allowlists).
  *
  * @param {string} skillId
  * @param {readonly string[]} rootDirs
- * @param {{ enabledIds?: Set<string> | null, disabledIds?: Set<string> }} policy
+ * @param {{ enabledIds?: Set<string> | null, disabledIds?: Set<string>, bundledDir?: string, bundledIds?: Set<string> | null }} policy
  * @param {Set<string> | null | undefined} allowedSkillIds
  * @returns {boolean}
  */
 export function isSkillEnabledForSession(skillId, rootDirs, policy, allowedSkillIds) {
   if (!skillId) return false;
+  if (allowedSkillIds instanceof Set && !allowedSkillIds.has(skillId)) return false;
+
+  const bundledDir = typeof policy?.bundledDir === 'string' ? policy.bundledDir.trim() : '';
+  const bundledIds = policy?.bundledIds instanceof Set ? policy.bundledIds : null;
+  if (bundledDir && (!bundledIds || bundledIds.has(skillId))) {
+    if (existsSync(join(bundledDir, skillId, 'SKILL.md'))) {
+      return true;
+    }
+  }
+
   if (policy?.disabledIds?.has(skillId)) return false;
   if (policy?.enabledIds instanceof Set && !policy.enabledIds.has(skillId)) return false;
-  if (allowedSkillIds instanceof Set && !allowedSkillIds.has(skillId)) return false;
   if (!Array.isArray(rootDirs) || rootDirs.length === 0) return false;
   for (const rootDir of rootDirs) {
     if (typeof rootDir !== 'string' || rootDir.length === 0) continue;
@@ -421,10 +452,11 @@ function scanSkillEntries(rootDir) {
 }
 
 /**
- * Discover skills across LobsterAI's managed roots (`skillsDir` + `extraDirs`)
- * and optional project-local roots (`<projectRoot>/.dsh/skills`, `.agents/skills`),
- * strictly enforcing `policy.disabledIds`, `policy.enabledIds`, and per-session
- * `allowedSkillIds`.
+ * Discover skills across LobsterAI's read-only bundled core root (`policy.bundledDir`),
+ * managed user roots (`skillsDir` + `extraDirs`), and optional project-local roots
+ * (`<projectRoot>/.dsh/skills`, `.agents/skills`), strictly enforcing core built-in
+ * precedence, `policy.disabledIds`, `policy.enabledIds`, `policy.modelHiddenIds`,
+ * per-session `allowedSkillIds`, and per-turn `options.selectedSkillIds`.
  */
 export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options = {}) {
   const validateName = typeof options.isSkillName === 'function'
@@ -432,12 +464,24 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
     : (candidate) => SKILL_NAME_RE.test(candidate);
   const disabledIds = policy?.disabledIds instanceof Set ? policy.disabledIds : new Set();
   const enabledIds = policy?.enabledIds instanceof Set ? policy.enabledIds : null;
+  const bundledDir = typeof policy?.bundledDir === 'string' && policy.bundledDir.trim().length > 0
+    ? resolve(policy.bundledDir.trim())
+    : '';
+  const bundledIds = policy?.bundledIds instanceof Set ? policy.bundledIds : null;
+  const modelHiddenIds = policy?.modelHiddenIds instanceof Set ? policy.modelHiddenIds : new Set();
+  const selectedSkillIds = options.selectedSkillIds instanceof Set
+    ? options.selectedSkillIds
+    : Array.isArray(options.selectedSkillIds)
+      ? new Set(options.selectedSkillIds.filter((s) => typeof s === 'string' && s.trim().length > 0))
+      : null;
+
   const candidates = [];
   const seen = new Set();
+  const reservedBuiltInIds = new Set();
   const blockedByManagedPolicy = new Set();
   const scannedRoots = new Set();
 
-  const pushCandidate = (skillName, meta, skillDir, skillFile) => {
+  const pushCandidate = (skillName, meta, skillDir, skillFile, invocation) => {
     const description = (meta.description || meta.name || '').trim() || `LobsterAI skill: ${skillName}`;
     seen.add(skillName);
     candidates.push({
@@ -447,8 +491,8 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
       source: skillFile,
       rank: LOBSTERAI_SKILL_RANK,
       invocation: {
-        modelInvocable: true,
-        userInvocable: true,
+        modelInvocable: invocation?.modelInvocable !== false,
+        userInvocable: invocation?.userInvocable !== false,
       },
       resourceBase: {
         kind: 'directory',
@@ -463,7 +507,46 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
     });
   };
 
-  // 1. LobsterAI-managed skill roots (`skillsDir` + `extraDirs`).
+  // 0. Read-only bundled core skills (`policy.bundledDir`, filtered by `policy.bundledIds`).
+  // Core built-ins cannot be globally disabled and take strict precedence over user/project copies.
+  if (bundledDir) {
+    for (const entry of scanSkillEntries(bundledDir)) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const rawId = entry.name;
+      if (bundledIds !== null && !bundledIds.has(rawId)) continue;
+
+      const skillDir = join(bundledDir, rawId);
+      const skillFile = join(skillDir, 'SKILL.md');
+      if (!existsSync(skillFile)) continue;
+
+      const content = readTextCached(skillFile);
+      if (!content) continue;
+      const { meta } = parseSkillFrontmatter(content);
+      const skillName = resolveDshSkillName(rawId, meta.name, { preferRawId: true });
+      if (!validateName(skillName)) continue;
+
+      const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name);
+      for (const id of identifiers) reservedBuiltInIds.add(id);
+
+      // `web-search` is exposed natively through DSH's `web_search` tool via
+      // `lobster-web-search-bridge`; omit it from the model-facing skill
+      // catalog so it consumes zero prompt tokens.
+      if (identifiers.includes(WEB_SEARCH_SKILL_ID)) {
+        continue;
+      }
+
+      // Per-agent / per-turn skill allowlist still applies when the session restricts skills.
+      if (allowedSkillIds !== null && !matchesAnyIdentifier(allowedSkillIds, identifiers)) {
+        continue;
+      }
+
+      if (seen.has(skillName)) continue;
+      const invocation = resolveCandidateInvocation(meta, identifiers, modelHiddenIds, selectedSkillIds);
+      pushCandidate(skillName, meta, skillDir, skillFile, invocation);
+    }
+  }
+
+  // 1. LobsterAI-managed user skill roots (`skillsDir` + `extraDirs`).
   for (const rootDir of rootDirs ?? []) {
     if (!rootDir) continue;
     const normRoot = resolve(rootDir);
@@ -483,7 +566,13 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
       const skillName = resolveDshSkillName(rawId, meta.name, { preferRawId: true });
       if (!validateName(skillName)) continue;
 
-      const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name);
+      // SkillManager may install a copy as docx-1 while its frontmatter still says docx.
+      // The installed ID owns its policy and DSH name. A reserved alias belongs to the core skill.
+      if (reservedBuiltInIds.has(rawId) || reservedBuiltInIds.has(skillName)) {
+        continue;
+      }
+      const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name)
+        .filter((id) => !reservedBuiltInIds.has(id));
 
       // `web-search` is exposed natively through DSH's `web_search` tool via
       // `lobster-web-search-bridge`; omit it from the model-facing skill
@@ -509,7 +598,8 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
       }
 
       if (seen.has(skillName)) continue;
-      pushCandidate(skillName, meta, skillDir, skillFile);
+      const invocation = resolveCandidateInvocation(meta, identifiers, modelHiddenIds, selectedSkillIds);
+      pushCandidate(skillName, meta, skillDir, skillFile, invocation);
     }
   }
 
@@ -534,9 +624,10 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
 
       const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name);
 
-      // Never allow project-local skills to resurrect a LobsterAI-disabled skill.
+      // Never allow project-local skills to shadow reserved built-ins or resurrect a LobsterAI-disabled skill.
       if (
-        matchesAnyIdentifier(disabledIds, identifiers)
+        matchesAnyIdentifier(reservedBuiltInIds, identifiers)
+        || matchesAnyIdentifier(disabledIds, identifiers)
         || matchesAnyIdentifier(blockedByManagedPolicy, identifiers)
       ) {
         continue;
@@ -546,7 +637,8 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
       }
 
       if (seen.has(skillName)) continue;
-      pushCandidate(skillName, meta, skillDir, skillFile);
+      const invocation = resolveCandidateInvocation(meta, identifiers, modelHiddenIds, selectedSkillIds);
+      pushCandidate(skillName, meta, skillDir, skillFile, invocation);
     }
   }
 

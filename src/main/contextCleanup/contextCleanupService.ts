@@ -36,6 +36,7 @@ export interface CleanupSkillDescriptor {
   description: string;
   enabled: boolean;
   isBuiltIn?: boolean;
+  canDisable?: boolean;
   updatedAt?: number;
   skillDirPath?: string;
 }
@@ -168,7 +169,7 @@ export class ContextCleanupService {
     // while pre-existing items inherit their real disk/DB creation timestamps.
     const firstSeenSeeds: Array<{ kind: CleanupCapabilityKind; itemId: string; firstSeenAt: number }> = [];
     for (const skill of skills) {
-      if (!skill.enabled) continue;
+      if (!skill.enabled || skill.canDisable === false) continue;
       const seedTs = getFileCreatedOrMtimeMs(skill.skillDirPath, skill.updatedAt ?? now);
       firstSeenSeeds.push({ kind: CleanupCapabilityKind.Skill, itemId: skill.id, firstSeenAt: seedTs });
     }
@@ -242,9 +243,9 @@ export class ContextCleanupService {
       return { lastUsedAt, idleDays, enabledDays };
     };
 
-    // 1. Skills
+    // 1. Skills (skip always-enabled core built-in skills that cannot be disabled)
     for (const skill of skills) {
-      if (!skill.enabled) continue;
+      if (!skill.enabled || skill.canDisable === false) continue;
       const idle = evaluateIdle(CleanupCapabilityKind.Skill, skill.id, skill.updatedAt ?? now);
       if (!idle) continue;
       const dependencies: ContextCleanupDependency[] = [];
@@ -407,7 +408,11 @@ export class ContextCleanupService {
     const failedItems: Array<{ kind: CleanupCapabilityKind; id: string; reason: string }> = [];
 
     if (skillIds.length > 0) {
-      const enabledSkillSet = new Set(this.deps.listSkills().filter(s => s.enabled).map(s => s.id));
+      const enabledSkillSet = new Set(
+        this.deps.listSkills()
+          .filter(s => s.enabled && s.canDisable !== false)
+          .map(s => s.id),
+      );
       const toDisable = skillIds.filter(id => enabledSkillSet.has(id));
       if (toDisable.length > 0) {
         try {

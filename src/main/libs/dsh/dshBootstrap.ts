@@ -147,6 +147,9 @@ export interface DshBootstrapSyncInput {
     disabledIds?: string[];
     extraDirs?: string[];
     skillsDir?: string;
+    bundledDir?: string;
+    bundledIds?: string[];
+    modelHiddenIds?: string[];
   };
   memoryEnabled?: boolean;
   webAccessPolicy?: DshHostWebAccessPolicy;
@@ -187,6 +190,7 @@ export interface DshBootstrapOptions {
   userDataDir: string;
   db: Database.Database;
   skillsDir: string;
+  emailConfigDir?: string;
   coworkStore: DshCoworkStorePort & {
     forkSession?: (options: CoworkForkSessionOptions) => CoworkSession;
     prepareScheduledTaskSession?: CoworkStore['prepareScheduledTaskSession'];
@@ -630,6 +634,7 @@ export class DshBootstrap {
       hostBundleDir: this.hostBundleDir,
       channelsBundleDir: this.channelsBundleDir,
       skillsDir: options.skillsDir,
+      emailConfigDir: options.emailConfigDir,
       executablePath: this.executablePath,
       resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath),
       nodeToolchain: this.nodeToolchain,

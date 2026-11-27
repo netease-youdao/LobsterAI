@@ -66,6 +66,7 @@ export type AgentIpcChannel = typeof AgentIpcChannel[keyof typeof AgentIpcChanne
 export const AgentUiEvent = {
   OpenImSettings: 'agent:open-im-settings',
   OpenMemorySettings: 'agent:open-memory-settings',
+  OpenSkillsMarketplace: 'agent:open-skills-marketplace',
 } as const;
 
 export type AgentUiEvent = typeof AgentUiEvent[keyof typeof AgentUiEvent];

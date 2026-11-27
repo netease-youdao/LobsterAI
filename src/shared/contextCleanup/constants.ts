@@ -1,3 +1,5 @@
+import { CoreSkillId } from '../skills/constants';
+
 export const ContextCleanupIpcChannel = {
   Scan: 'contextCleanup:scan',
   Apply: 'contextCleanup:apply',
@@ -49,10 +51,6 @@ export const CONTEXT_CLEANUP_KV_KEYS = {
 
 export const DECISION_MODEL_JEV_ITEM_ID = 'jev' as const;
 
-export const CORE_BUILTIN_SKILL_IDS: ReadonlySet<string> = new Set([
-  'web-search',
-  'docx',
-  'xlsx',
-  'pptx',
-  'pdf',
-]);
+export const CORE_BUILTIN_SKILL_IDS: ReadonlySet<string> = new Set(
+  Object.values(CoreSkillId),
+);

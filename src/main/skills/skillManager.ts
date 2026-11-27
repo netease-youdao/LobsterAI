@@ -6,7 +6,12 @@ import fs from 'fs';
 import path from 'path';
 
 import { ComputerUseSkillId } from '../../shared/computerUse/constants';
-import { SkillLoadIssue } from '../../shared/skills/constants';
+import {
+  CoreSkillId,
+  EMAIL_SKILL_CONFIG_DIR_NAME,
+  SkillLoadIssue,
+} from '../../shared/skills/constants';
+import { SkinPackSkillId } from '../../shared/skin/kit';
 import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
 import { cpRecursiveSync } from '../fsCompat';
 import { t } from '../i18n';
@@ -15,6 +20,10 @@ import { resolveNodeRuntimeForSpawn } from '../libs/nodeRuntime';
 import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
 import { mergeReports,scanMultipleSkillDirs } from '../libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from '../libs/skillSecurity/skillSecurityTypes';
+import {
+  isSkinPackKitInstalled,
+  syncSkinCreatorSkillOnStartup,
+} from '../skins/skinPackSkillResources';
 import { SqliteStore } from '../sqliteStore';
 import { removeRetiredBundledSkills, removeRetiredSkillEntries, RETIRED_BUNDLED_SKILL_IDS } from './retiredBundledSkills';
 import {
@@ -335,11 +344,19 @@ export type SkillRecord = {
   enabled: boolean;
   isOfficial: boolean;
   isBuiltIn: boolean;
+  canDisable: boolean;
+  modelInvocable: boolean;
+  userInvocable: boolean;
   updatedAt: number;
   prompt: string;
   skillPath: string;
   version?: string;
   loadIssue?: SkillLoadIssue;
+};
+
+export type SkillDownloadOptions = {
+  skipSecurityScan?: boolean;
+  expectedSha256?: string;
 };
 
 type SkillStateMap = Record<string, { enabled: boolean }>;
@@ -390,6 +407,7 @@ export interface EmailSkillAccountsConfig {
 type SkillDefaultConfig = {
   order?: number;
   enabled?: boolean;
+  alwaysEnabled?: boolean;
 };
 
 type SkillsConfig = {
@@ -477,6 +495,17 @@ const isTruthy = (value?: unknown): boolean => {
   return normalized === 'true' || normalized === 'yes' || normalized === '1';
 };
 
+const parseFrontmatterBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1') return true;
+  if (value === 0 || value === '0') return false;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
+  if (normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
+  return undefined;
+};
+
 const extractDescription = (content: string): string => {
   const lines = content.split(/\r?\n/);
   for (const line of lines) {
@@ -499,23 +528,6 @@ const normalizeFolderName = (name: string): string => {
 };
 
 const isZipFile = (filePath: string): boolean => path.extname(filePath).toLowerCase() === '.zip';
-
-/**
- * Compare two semver-like version strings (e.g. "1.0.0" vs "1.0.1").
- * Returns 1 if a > b, -1 if a < b, 0 if equal.
- * Non-numeric segments are treated as 0.
- */
-const compareVersions = (a: string, b: string): number => {
-  const pa = a.split('.').map(s => parseInt(s, 10) || 0);
-  const pb = b.split('.').map(s => parseInt(s, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  return 0;
-};
 
 const resolveWithin = (root: string, target: string): string => {
   const resolvedRoot = path.resolve(root);
@@ -619,14 +631,17 @@ const resolveInstallTarget = (
   root: string,
   folderName: string,
   skillDir: string,
+  reservedIds: ReadonlySet<string> = new Set(),
 ): { targetDir: string; alreadyInstalled: boolean } => {
-  let targetDir = resolveWithin(root, folderName);
+  let candidateId = folderName;
+  let targetDir = resolveWithin(root, candidateId);
   let suffix = 1;
-  while (fs.existsSync(targetDir)) {
-    if (isSameSkillRelease(skillDir, targetDir)) {
+  while (reservedIds.has(candidateId) || fs.existsSync(targetDir)) {
+    if (!reservedIds.has(candidateId) && isSameSkillRelease(skillDir, targetDir)) {
       return { targetDir, alreadyInstalled: true };
     }
-    targetDir = resolveWithin(root, `${folderName}-${suffix}`);
+    candidateId = `${folderName}-${suffix}`;
+    targetDir = resolveWithin(root, candidateId);
     suffix += 1;
   }
   return { targetDir, alreadyInstalled: false };
@@ -636,11 +651,16 @@ const resolveInstallTarget = (
  * Copy downloaded skill directories into `root` and return the ids they ended up under.
  * Shared by direct installs and installs confirmed after a security review.
  */
-const installSkillDirs = (root: string, skillDirs: string[], nameHints: InstallFolderNameHints): string[] => {
+const installSkillDirs = (
+  root: string,
+  skillDirs: string[],
+  nameHints: InstallFolderNameHints,
+  reservedIds: ReadonlySet<string> = new Set(),
+): string[] => {
   const installedIds: string[] = [];
   for (const skillDir of skillDirs) {
     const folderName = resolveInstallFolderName(skillDir, nameHints);
-    const { targetDir, alreadyInstalled } = resolveInstallTarget(root, folderName, skillDir);
+    const { targetDir, alreadyInstalled } = resolveInstallTarget(root, folderName, skillDir, reservedIds);
     installedIds.push(path.basename(targetDir));
     if (alreadyInstalled) {
       console.log('[skills] same release of "%s" already installed at %s, skipping copy', folderName, targetDir);
@@ -1452,7 +1472,11 @@ const deriveZipUrlBaseName = (zipUrl: string): string => {
   return fileName.replace(/\.zip$/i, '');
 };
 
-const downloadZipUrl = async (zipUrl: string, tempRoot: string): Promise<string> => {
+const downloadZipUrl = async (
+  zipUrl: string,
+  tempRoot: string,
+  expectedSha256?: string,
+): Promise<string> => {
   const response = await session.defaultSession.fetch(zipUrl, {
     method: 'GET',
     headers: { 'User-Agent': 'LobsterAI Skill Downloader' },
@@ -1463,6 +1487,12 @@ const downloadZipUrl = async (zipUrl: string, tempRoot: string): Promise<string>
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
+  if (expectedSha256) {
+    const actualSha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+    if (actualSha256 !== expectedSha256.toLowerCase()) {
+      throw new Error(`Skill archive checksum mismatch (expected ${expectedSha256}, got ${actualSha256})`);
+    }
+  }
   const zipPath = path.join(tempRoot, `${REMOTE_ZIP_EXTRACT_DIR}.zip`);
   const extractRoot = path.join(tempRoot, REMOTE_ZIP_EXTRACT_DIR);
   fs.writeFileSync(zipPath, buffer);
@@ -1583,12 +1613,64 @@ export class SkillManager {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
   }
 
+  getEmailConfigDir(): string {
+    return path.resolve(app.getPath('userData'), EMAIL_SKILL_CONFIG_DIR_NAME);
+  }
+
+  getEmailAccountsFilePath(): string {
+    return path.join(this.getEmailConfigDir(), 'accounts.json');
+  }
+
+  getEmailEnvFilePath(): string {
+    return path.join(this.getEmailConfigDir(), '.env');
+  }
+
   ensureSkillsRoot(): string {
     const root = this.getSkillsRoot();
     if (!fs.existsSync(root)) {
       fs.mkdirSync(root, { recursive: true });
     }
     return root;
+  }
+
+  /**
+   * Migrate legacy email credentials from `<userData>/SKILLs/imap-smtp-email/`
+   * into the dedicated `<userData>/email-skill/` directory before removing
+   * stale bundled copies from `<userData>/SKILLs/`.
+   */
+  migrateLegacyEmailCredentials(): { migrated: boolean; safeToRemoveLegacyDir: boolean } {
+    const legacyDir = path.join(this.getSkillsRoot(), CoreSkillId.Email);
+    const targetDir = this.getEmailConfigDir();
+    let migrated = false;
+
+    for (const fileName of ['accounts.json', '.env'] as const) {
+      const legacyFile = path.join(legacyDir, fileName);
+      if (!fs.existsSync(legacyFile)) continue;
+
+      const targetFile = path.join(targetDir, fileName);
+      if (fs.existsSync(targetFile)) continue;
+
+      try {
+        const legacyBytes = fs.readFileSync(legacyFile);
+        fs.mkdirSync(targetDir, { recursive: true });
+        const tmpFile = `${targetFile}.tmp`;
+        fs.writeFileSync(tmpFile, legacyBytes);
+        const writtenBytes = fs.readFileSync(tmpFile);
+        if (!writtenBytes.equals(legacyBytes)) {
+          fs.rmSync(tmpFile, { force: true });
+          console.error(`[skills] Email credential verification failed for ${fileName}; retaining legacy directory`);
+          return { migrated: false, safeToRemoveLegacyDir: false };
+        }
+        fs.renameSync(tmpFile, targetFile);
+        migrated = true;
+        console.log(`[skills] Migrated legacy email credential file "${fileName}" to ${targetDir}`);
+      } catch (error) {
+        console.error(`[skills] Failed to migrate legacy email credential file "${fileName}":`, error);
+        return { migrated: false, safeToRemoveLegacyDir: false };
+      }
+    }
+
+    return { migrated, safeToRemoveLegacyDir: true };
   }
 
   recoverInterruptedUpgrades(): void {
@@ -1629,217 +1711,107 @@ export class SkillManager {
     }
   }
 
+  /**
+   * Startup initialization for read-only bundled skills:
+   * 1. Remove permanently retired bundled skills and their state entries.
+   * 2. Migrate legacy email credentials out of `<userData>/SKILLs/imap-smtp-email/`.
+   * 3. Remove stale copies of current read-only bundled skills from `<userData>/SKILLs/`
+   *    so `<userData>/SKILLs/` holds only user/marketplace/kit skills.
+   * 4. Heal any stale `enabled: false` state entries for always-enabled built-in skills.
+   * 5. Sync Kit-managed `skin-creator` artifacts with `ai-skin-designer` installation state.
+   */
   syncBundledSkillsToUserData(onlySkillId?: string): void {
-    console.log('[skills] syncBundledSkillsToUserData: start', { packaged: app.isPackaged });
+    console.log('[skills] syncBundledSkillsToUserData: start (read-only bundled mode)', { packaged: app.isPackaged });
     const userRoot = this.ensureSkillsRoot();
     if (!onlySkillId) {
       removeRetiredBundledSkills(userRoot, path.join(userRoot, SKILLS_CONFIG_FILE));
       const state = this.loadSkillStateMap();
-      if (removeRetiredSkillEntries(state)) this.saveSkillStateMap(state);
+      let stateChanged = removeRetiredSkillEntries(state);
+      const alwaysEnabledIds = this.listAlwaysEnabledSkillIds();
+      for (const id of alwaysEnabledIds) {
+        if (state[id]?.enabled === false) {
+          delete state[id];
+          stateChanged = true;
+        }
+      }
+      if (stateChanged) {
+        this.saveSkillStateMap(state);
+      }
     }
-    console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
+
+    const emailMigration = this.migrateLegacyEmailCredentials();
     const bundledRoot = this.getBundledSkillsRoot();
-    console.log('[skills] syncBundledSkillsToUserData: bundledRoot =', bundledRoot);
-    if (!bundledRoot || bundledRoot === userRoot || !fs.existsSync(bundledRoot)) {
-      console.log('[skills] syncBundledSkillsToUserData: bundledRoot skipped (missing or same as userRoot)');
-      return;
-    }
-
-    try {
-      // Build allowlist of bundled skill IDs from skills.config.json so
-      // user-added skill folders that happen to sit in the bundled root
-      // (e.g. restored by the installer's AppData backup) are not synced
-      // to user data. Falls back to the legacy "sync everything" behavior
-      // if the config is missing or malformed.
-      let bundledIds: Set<string> | null = null;
-      try {
-        const configPath = path.join(bundledRoot, SKILLS_CONFIG_FILE);
-        if (fs.existsSync(configPath)) {
-          const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-          if (parsed?.defaults && typeof parsed.defaults === 'object') {
-            bundledIds = new Set(Object.keys(parsed.defaults));
-          }
+    if (bundledRoot && bundledRoot !== userRoot && fs.existsSync(bundledRoot)) {
+      const builtInIds = this.listBuiltInSkillIds();
+      for (const id of builtInIds) {
+        if (onlySkillId && onlySkillId !== id) continue;
+        if (RETIRED_BUNDLED_SKILL_IDS.has(id)) continue;
+        if (id === CoreSkillId.Email && !emailMigration.safeToRemoveLegacyDir) {
+          console.warn('[skills] Skipping cleanup of legacy imap-smtp-email copy because credential migration did not finish');
+          continue;
         }
-      } catch (error) {
-        console.warn('[skills] Failed to parse skills.config.json for sync filter:', error);
-      }
-
-      const bundledSkillDirs = listSkillDirs(bundledRoot);
-      console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
-      bundledSkillDirs.forEach((dir) => {
-        const id = path.basename(dir);
-        if ((onlySkillId && onlySkillId !== id) || RETIRED_BUNDLED_SKILL_IDS.has(id)) return;
-        if (bundledIds && !bundledIds.has(id)) {
-          console.log(`[skills] syncBundledSkillsToUserData: skipping non-bundled "${id}"`);
-          return;
-        }
-        const targetDir = path.join(userRoot, id);
-        const targetExists = fs.existsSync(targetDir);
-
-        // Check if skill needs repair
-        let shouldRepair = false;
-        let needsCleanCopy = false;
-        if (targetExists) {
-          // Version-based update: if bundled has a version and it's newer, force update
-          const bundledVer = this.getSkillVersion(dir);
-          if (bundledVer && compareVersions(bundledVer, this.getSkillVersion(targetDir) || '0.0.0') > 0) {
-            shouldRepair = true;
-            needsCleanCopy = true;
+        for (const dirName of [id, `${id}.upgrading`]) {
+          const staleDir = path.join(userRoot, dirName);
+          if (!fs.existsSync(staleDir)) continue;
+          try {
+            fs.rmSync(staleDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+            console.log(`[skills] Cleaned stale bundled copy from userData: ${staleDir}`);
+          } catch (error) {
+            console.warn(`[skills] Failed to clean stale bundled copy at ${staleDir}:`, error);
           }
-          // Generic check: if bundled has node_modules but target doesn't, repair it
-          else if (!this.isSkillRuntimeHealthy(targetDir, dir)) {
-            shouldRepair = true;
-          }
-        }
-
-        if (targetExists && !shouldRepair) return;
-        try {
-          console.log(`[skills] syncBundledSkillsToUserData: copying "${id}" from ${dir} to ${targetDir}`);
-
-          // Preserve user-managed email credentials before clean copy
-          let envBackup: Buffer | null = null;
-          let accountsBackup: Buffer | null = null;
-          const envPath = path.join(targetDir, '.env');
-          const accountsPath = path.join(targetDir, 'accounts.json');
-          if (needsCleanCopy && fs.existsSync(envPath)) {
-            envBackup = fs.readFileSync(envPath);
-          }
-          if (needsCleanCopy && fs.existsSync(accountsPath)) {
-            accountsBackup = fs.readFileSync(accountsPath);
-          }
-
-          // Version-based update: delete target dir first to remove stale files
-          // (e.g. old .py scripts, __pycache__, leftover package-lock.json)
-          if (needsCleanCopy) {
-            fs.rmSync(targetDir, { recursive: true, force: true });
-          }
-
-          cpRecursiveSync(dir, targetDir, {
-            dereference: true,
-            force: shouldRepair,
-          });
-
-          // Restore user-managed email credentials after clean copy
-          if (envBackup !== null) {
-            fs.writeFileSync(envPath, envBackup);
-          }
-          if (accountsBackup !== null) {
-            fs.writeFileSync(accountsPath, accountsBackup);
-          }
-
-          console.log(`[skills] syncBundledSkillsToUserData: copied "${id}" successfully`);
-          if (shouldRepair) {
-            console.log(`[skills] Repaired bundled skill "${id}" in user data`);
-          }
-        } catch (error) {
-          console.warn(`[skills] Failed to sync bundled skill "${id}":`, error);
-        }
-      });
-
-      if (onlySkillId) return;
-      const bundledConfig = path.join(bundledRoot, SKILLS_CONFIG_FILE);
-      const targetConfig = path.join(userRoot, SKILLS_CONFIG_FILE);
-      if (fs.existsSync(bundledConfig)) {
-        if (!fs.existsSync(targetConfig)) {
-          console.log('[skills] syncBundledSkillsToUserData: copying skills.config.json');
-          cpRecursiveSync(bundledConfig, targetConfig);
-        } else {
-          this.mergeSkillsConfig(bundledConfig, targetConfig);
         }
       }
-      console.log('[skills] syncBundledSkillsToUserData: done');
-    } catch (error) {
-      console.warn('[skills] Failed to sync bundled skills:', error);
-    }
-  }
-
-  /**
-   * Check if a skill's runtime is healthy by comparing with bundled version.
-   * Returns false if bundled has dependencies but target doesn't.
-   */
-  private isSkillRuntimeHealthy(targetDir: string, bundledDir: string): boolean {
-    const bundledNodeModules = path.join(bundledDir, 'node_modules');
-    const targetNodeModules = path.join(targetDir, 'node_modules');
-    const targetPackageJson = path.join(targetDir, 'package.json');
-
-    // If target has no package.json, it's a simple skill (no deps needed)
-    if (!fs.existsSync(targetPackageJson)) {
-      return true;
     }
 
-    // If bundled doesn't have node_modules, no deps to sync
-    if (!fs.existsSync(bundledNodeModules)) {
-      return true;
+    if (!onlySkillId) {
+      syncSkinCreatorSkillOnStartup(userRoot, this.getStore());
     }
-
-    // If bundled has node_modules but target doesn't, needs repair
-    if (!fs.existsSync(targetNodeModules)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  private getSkillVersion(skillDir: string): string {
-    try {
-      const skillFile = path.join(skillDir, SKILL_FILE_NAME);
-      const raw = fs.readFileSync(skillFile, 'utf8');
-      const { frontmatter } = parseFrontmatter(raw, skillFile);
-      const meta = frontmatter.metadata as Record<string, unknown> | undefined;
-      const v = frontmatter.version ?? meta?.version;
-      return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
-    } catch {
-      return '';
-    }
-  }
-
-  private mergeSkillsConfig(bundledPath: string, targetPath: string): void {
-    try {
-      const bundled = JSON.parse(fs.readFileSync(bundledPath, 'utf-8'));
-      const target = JSON.parse(fs.readFileSync(targetPath, 'utf-8'));
-      if (!bundled.defaults || !target.defaults) return;
-      let changed = false;
-      for (const [id, config] of Object.entries(bundled.defaults)) {
-        if (!(id in target.defaults)) {
-          target.defaults[id] = config;
-          changed = true;
-        }
-      }
-      if (changed) {
-        // Write to temp file first, then rename for atomic update
-        const tmpPath = targetPath + '.tmp';
-        fs.writeFileSync(tmpPath, JSON.stringify(target, null, 2) + '\n', 'utf-8');
-        fs.renameSync(tmpPath, targetPath);
-        console.log('[skills] mergeSkillsConfig: merged new skill entries into user config');
-      }
-    } catch (e) {
-      console.warn('[skills] Failed to merge skills config:', e);
-    }
+    console.log('[skills] syncBundledSkillsToUserData: done');
   }
 
   listSkills(): SkillRecord[] {
     const primaryRoot = this.ensureSkillsRoot();
+    const bundledRoot = this.getBundledSkillsRoot();
     const state = this.loadSkillStateMap();
     const roots = this.getSkillRoots(primaryRoot);
-    const orderedRoots = roots.filter(root => root !== primaryRoot).concat(primaryRoot);
-    const defaults = this.loadSkillsDefaults(roots);
+    const bundledDefaults = this.loadBundledSkillsConfig();
+    const defaults = this.loadSkillsDefaults(roots, bundledDefaults);
     const builtInSkillIds = this.listBuiltInSkillIds();
+    const alwaysEnabledIds = this.listAlwaysEnabledSkillIds();
+    const store = this.getStore();
     const skillMap = new Map<string, SkillRecord>();
 
-    orderedRoots.forEach(root => {
-      if (!fs.existsSync(root)) return;
-      const skillDirs = listSkillDirs(root);
-      skillDirs.forEach(dir => {
+    // 1. User / marketplace / kit-managed skills from `<userData>/SKILLs`.
+    // Reserved core built-in IDs are always served read-only from `bundledRoot`.
+    if (fs.existsSync(primaryRoot)) {
+      const userDirs = listSkillDirs(primaryRoot);
+      userDirs.forEach(dir => {
         const skillId = path.basename(dir);
-        if (root !== primaryRoot && RETIRED_BUNDLED_SKILL_IDS.has(skillId)) return;
-        if (skillId === ComputerUseSkillId.BuiltIn && !isComputerUseKitInstalled(this.getStore())) {
+        if (builtInSkillIds.has(skillId)) return;
+        if (skillId === ComputerUseSkillId.BuiltIn && !isComputerUseKitInstalled(store)) {
           return;
         }
-        const skill = this.parseSkillDir(dir, state, defaults, builtInSkillIds.has(skillId) || this.pluginSkillIds.has(skillId));
+        if (skillId === SkinPackSkillId.BuiltIn && !isSkinPackKitInstalled(store)) {
+          return;
+        }
+        const skill = this.parseSkillDir(dir, state, defaults, this.pluginSkillIds.has(skillId), false);
         if (!skill) return;
         skillMap.set(skill.id, skill);
       });
-    });
+    }
+
+    // 2. Read-only core built-in skills from app bundle (`Resources/SKILLs`).
+    if (bundledRoot && fs.existsSync(bundledRoot)) {
+      const bundledDirs = listSkillDirs(bundledRoot);
+      bundledDirs.forEach(dir => {
+        const skillId = path.basename(dir);
+        if (RETIRED_BUNDLED_SKILL_IDS.has(skillId)) return;
+        if (!builtInSkillIds.has(skillId)) return;
+        const skill = this.parseSkillDir(dir, state, defaults, true, alwaysEnabledIds.has(skillId));
+        if (!skill) return;
+        skillMap.set(skill.id, skill);
+      });
+    }
 
     const skills = Array.from(skillMap.values());
 
@@ -1964,6 +1936,9 @@ export class SkillManager {
   }
 
   isSkillEnabled(id: string): boolean {
+    if (this.isAlwaysEnabledSkillId(id)) {
+      return true;
+    }
     const state = this.loadSkillStateMap();
     if (state[id] !== undefined) {
       return state[id].enabled;
@@ -1973,6 +1948,9 @@ export class SkillManager {
   }
 
   setSkillEnabled(id: string, enabled: boolean): SkillRecord[] {
+    if (!enabled && this.isAlwaysEnabledSkillId(id)) {
+      throw new Error('Built-in skills cannot be disabled');
+    }
     const state = this.loadSkillStateMap();
     state[id] = { enabled };
     this.saveSkillStateMap(state);
@@ -1981,7 +1959,8 @@ export class SkillManager {
   }
 
   setSkillsEnabledBatch(ids: readonly string[], enabled: boolean): SkillRecord[] {
-    const cleanIds = [...new Set(ids.map(id => id.trim()).filter(Boolean))];
+    const cleanIds = [...new Set(ids.map(id => id.trim()).filter(Boolean))]
+      .filter(id => enabled || !this.isAlwaysEnabledSkillId(id));
     if (cleanIds.length === 0) {
       return this.listSkills();
     }
@@ -2097,7 +2076,11 @@ export class SkillManager {
     }
   }
 
-  async downloadSkill(source: string, signal?: AbortSignal): Promise<{
+  async downloadSkill(
+    source: string,
+    signal?: AbortSignal,
+    options?: SkillDownloadOptions,
+  ): Promise<{
     success: boolean;
     installedIds?: string[];
     skills?: SkillRecord[];
@@ -2143,7 +2126,7 @@ export class SkillManager {
         console.log('[SkillManager] downloadSkill: detected remote zip URL');
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), SkillTempDirPrefix.Zip));
         cleanupPath = tempRoot;
-        localSource = await downloadZipUrl(trimmed, tempRoot);
+        localSource = await downloadZipUrl(trimmed, tempRoot, options?.expectedSha256);
         installNameHints = {
           extractionRoots: [tempRoot, path.join(tempRoot, REMOTE_ZIP_EXTRACT_DIR)],
           sourceName: deriveZipUrlBaseName(trimmed),
@@ -2244,20 +2227,24 @@ export class SkillManager {
         return { success: false, error: t('skillErrNoSkillMd') };
       }
 
-      // Security scan before installation
+      // Security scan before installation (skipped only for main-process-verified official marketplace packages)
       let auditReport: SkillSecurityReport | null = null;
-      try {
-        console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
-        const reports = await scanMultipleSkillDirs(skillDirs);
-        auditReport = mergeReports(reports);
-        if (auditReport) {
-          console.log(`[SkillManager] Security scan complete: riskLevel=${auditReport.riskLevel}, score=${auditReport.riskScore}, findings=${auditReport.findings.length}, duration=${auditReport.scanDurationMs}ms`);
-          for (const f of auditReport.findings) {
-            console.log(`[SkillManager]   [${f.severity}] ${f.dimension} | ${f.ruleId} → ${f.file}${f.line ? ':' + f.line : ''}`);
+      if (options?.skipSecurityScan === true) {
+        console.log(`[SkillManager] Skipping client security scan for verified official marketplace package (${skillDirs.length} dir(s))`);
+      } else {
+        try {
+          console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
+          const reports = await scanMultipleSkillDirs(skillDirs);
+          auditReport = mergeReports(reports);
+          if (auditReport) {
+            console.log(`[SkillManager] Security scan complete: riskLevel=${auditReport.riskLevel}, score=${auditReport.riskScore}, findings=${auditReport.findings.length}, duration=${auditReport.scanDurationMs}ms`);
+            for (const f of auditReport.findings) {
+              console.log(`[SkillManager]   [${f.severity}] ${f.dimension} | ${f.ruleId} → ${f.file}${f.line ? ':' + f.line : ''}`);
+            }
           }
+        } catch (err) {
+          console.warn('[SkillManager] Security scan failed (non-blocking):', err);
         }
-      } catch (err) {
-        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
       }
 
       // If risk detected, cache for user confirmation instead of auto-installing
@@ -2290,9 +2277,9 @@ export class SkillManager {
         };
       }
 
-      // Safe or scan failed — install directly
-      console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
-      const installedIds = installSkillDirs(root, skillDirs, installNameHints);
+      // Safe, verified official marketplace package, or scan failed — install directly
+      console.log(`[SkillManager] Installing skill directly`);
+      const installedIds = installSkillDirs(root, skillDirs, installNameHints, this.listBuiltInSkillIds());
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2306,13 +2293,21 @@ export class SkillManager {
     }
   }
 
-  async upgradeSkill(skillId: string, downloadUrl: string): Promise<{
+  async upgradeSkill(
+    skillId: string,
+    downloadUrl: string,
+    options?: SkillDownloadOptions,
+  ): Promise<{
     success: boolean;
     skills?: SkillRecord[];
     error?: string;
     auditReport?: SkillSecurityReport;
     pendingInstallId?: string;
   }> {
+    if (this.isBuiltInSkillId(skillId)) {
+      return { success: false, error: 'Built-in skills cannot be upgraded from the marketplace' };
+    }
+
     // Prevent concurrent upgrades of the same skill
     if (this.upgradingSkillIds.has(skillId)) {
       return { success: false, error: `Skill "${skillId}" is already being upgraded` };
@@ -2332,19 +2327,25 @@ export class SkillManager {
 
     this.upgradingSkillIds.add(skillId);
     try {
-      return await this.performUpgradeDownload(skillId, downloadUrl, existingSkillDir);
+      return await this.performUpgradeDownload(skillId, downloadUrl, existingSkillDir, options);
     } finally {
       this.upgradingSkillIds.delete(skillId);
     }
   }
 
-  private async performUpgradeDownload(skillId: string, downloadUrl: string, existingSkillDir: string): Promise<{
+  private async performUpgradeDownload(
+    skillId: string,
+    downloadUrl: string,
+    existingSkillDir: string,
+    options?: SkillDownloadOptions,
+  ): Promise<{
     success: boolean;
     skills?: SkillRecord[];
     error?: string;
     auditReport?: SkillSecurityReport;
     pendingInstallId?: string;
-  }> {    let cleanupPath: string | null = null;
+  }> {
+    let cleanupPath: string | null = null;
     try {
       console.log(`[SkillManager] starting upgrade for skill "${skillId}"`);
       const root = this.ensureSkillsRoot();
@@ -2355,7 +2356,7 @@ export class SkillManager {
 
       let localSource: string;
       if (isRemoteZipUrl(downloadUrl)) {
-        localSource = await downloadZipUrl(downloadUrl, tempRoot);
+        localSource = await downloadZipUrl(downloadUrl, tempRoot, options?.expectedSha256);
       } else {
         const normalized = this.normalizeGitSource(downloadUrl);
         if (!normalized) {
@@ -2408,13 +2409,17 @@ export class SkillManager {
       // Find the matching skill dir for this ID
       const matchingSkillDir = skillDirs.find(d => normalizeFolderName(path.basename(d)) === skillId) || skillDirs[0];
 
-      // Security scan
+      // Security scan (skipped only for main-process-verified official marketplace packages)
       let auditReport: SkillSecurityReport | null = null;
-      try {
-        const reports = await scanMultipleSkillDirs([matchingSkillDir]);
-        auditReport = mergeReports(reports);
-      } catch (err) {
-        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+      if (options?.skipSecurityScan === true) {
+        console.log(`[SkillManager] Skipping client security scan for verified official marketplace upgrade "${skillId}"`);
+      } else {
+        try {
+          const reports = await scanMultipleSkillDirs([matchingSkillDir]);
+          auditReport = mergeReports(reports);
+        } catch (err) {
+          console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+        }
       }
 
       // If risk detected, cache for user confirmation
@@ -2543,6 +2548,7 @@ export class SkillManager {
         pending.root,
         pending.skillDirs,
         pending.installNameHints ?? { extractionRoots: [] },
+        this.listBuiltInSkillIds(),
       ));
     }
 
@@ -2716,7 +2722,8 @@ export class SkillManager {
     dir: string,
     state: SkillStateMap,
     defaults: Record<string, SkillDefaultConfig>,
-    isBuiltIn: boolean
+    isBuiltIn: boolean,
+    alwaysEnabled: boolean,
   ): SkillRecord | null {
     const skillFile = path.join(dir, SKILL_FILE_NAME);
     if (!fs.existsSync(skillFile)) return null;
@@ -2726,6 +2733,9 @@ export class SkillManager {
       const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
       const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
+      const disableModelInvocation = parseFrontmatterBoolean(frontmatter['disable-model-invocation']) === true;
+      const userInvocable = parseFrontmatterBoolean(frontmatter['user-invocable']) !== false;
+      const modelInvocable = !disableModelInvocation;
       const meta = frontmatter.metadata as Record<string, unknown> | undefined;
       const v = frontmatter.version ?? meta?.version;
       const version = typeof v === 'string' ? v : typeof v === 'number' ? String(v) : undefined;
@@ -2733,32 +2743,82 @@ export class SkillManager {
       const id = path.basename(dir);
       const prompt = content.trim();
       const defaultEnabled = defaults[id]?.enabled ?? true;
-      const enabled = state[id]?.enabled ?? defaultEnabled;
+      const canDisable = !alwaysEnabled;
+      const enabled = alwaysEnabled ? true : (state[id]?.enabled ?? defaultEnabled);
       const loadIssue = resolveSkillLoadIssue(frontmatter, invalidFrontmatter);
-      return { id, name, description, enabled, isOfficial, isBuiltIn, updatedAt, prompt, skillPath: skillFile, version, loadIssue };
+      return {
+        id,
+        name,
+        description,
+        enabled,
+        isOfficial,
+        isBuiltIn,
+        canDisable,
+        modelInvocable,
+        userInvocable,
+        updatedAt,
+        prompt,
+        skillPath: skillFile,
+        version,
+        loadIssue,
+      };
     } catch (error) {
       console.warn('[skills] Failed to parse skill:', dir, error);
       return null;
     }
   }
 
-  private listBuiltInSkillIds(): Set<string> {
+  private loadBundledSkillsConfig(): Record<string, SkillDefaultConfig> | null {
     const builtInRoot = this.getBundledSkillsRoot();
     if (!builtInRoot || !fs.existsSync(builtInRoot)) {
-      return new Set();
+      return null;
     }
     try {
       const configPath = path.join(builtInRoot, SKILLS_CONFIG_FILE);
       if (fs.existsSync(configPath)) {
-        const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (parsed?.defaults && typeof parsed.defaults === 'object') {
-          return new Set(Object.keys(parsed.defaults));
+        const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Partial<SkillsConfig>;
+        if (parsed?.defaults && typeof parsed.defaults === 'object' && !Array.isArray(parsed.defaults)) {
+          return parsed.defaults;
         }
       }
     } catch (error) {
       console.warn('[skills] Failed to parse skills.config.json for built-in skill list:', error);
     }
-    return new Set(listSkillDirs(builtInRoot).map(dir => path.basename(dir)));
+    return null;
+  }
+
+  listBuiltInSkillIds(): Set<string> {
+    const builtInRoot = this.getBundledSkillsRoot();
+    if (!builtInRoot || !fs.existsSync(builtInRoot)) {
+      return new Set();
+    }
+    const bundledDefaults = this.loadBundledSkillsConfig();
+    if (bundledDefaults) {
+      return new Set(Object.keys(bundledDefaults).filter(id => !RETIRED_BUNDLED_SKILL_IDS.has(id)));
+    }
+    return new Set(
+      listSkillDirs(builtInRoot)
+        .map(dir => path.basename(dir))
+        .filter(id => !RETIRED_BUNDLED_SKILL_IDS.has(id)),
+    );
+  }
+
+  listAlwaysEnabledSkillIds(): Set<string> {
+    const bundledDefaults = this.loadBundledSkillsConfig();
+    if (!bundledDefaults) {
+      return new Set();
+    }
+    const ids = new Set<string>();
+    for (const [id, entry] of Object.entries(bundledDefaults)) {
+      if (!RETIRED_BUNDLED_SKILL_IDS.has(id) && entry?.alwaysEnabled === true) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  isAlwaysEnabledSkillId(id: string): boolean {
+    return this.listAlwaysEnabledSkillIds().has(id);
   }
 
   private isBuiltInSkillId(id: string): boolean {
@@ -2783,11 +2843,14 @@ export class SkillManager {
     this.getStore().set(SKILL_STATE_KEY, map);
   }
 
-  private loadSkillsDefaults(roots: string[]): Record<string, SkillDefaultConfig> {
+  private loadSkillsDefaults(
+    roots: string[],
+    bundledDefaults?: Record<string, SkillDefaultConfig> | null,
+  ): Record<string, SkillDefaultConfig> {
     const merged: Record<string, SkillDefaultConfig> = {};
 
     // Load from roots in reverse order so higher priority roots override lower ones
-    // roots[0] is user directory (highest priority), roots[1] is app-bundled (lower priority)
+    // roots[0] is user directory (legacy defaults for soft-removed skills), roots[1] is app-bundled
     const reversedRoots = [...roots].reverse();
 
     for (const root of reversedRoots) {
@@ -2807,6 +2870,13 @@ export class SkillManager {
       }
     }
 
+    // Current bundled defaults always take precedence for core built-in metadata (e.g. alwaysEnabled, order).
+    if (bundledDefaults) {
+      for (const [id, settings] of Object.entries(bundledDefaults)) {
+        merged[id] = { ...merged[id], ...settings };
+      }
+    }
+
     return merged;
   }
 
@@ -2821,7 +2891,7 @@ export class SkillManager {
     return roots;
   }
 
-  private getBundledSkillsRoot(): string {
+  getBundledSkillsRoot(): string {
     if (app.isPackaged) {
       // In production, bundled SKILLs should be in Resources/SKILLs.
       const resourcesRoot = path.resolve(process.resourcesPath, SKILLS_DIR_NAME);
@@ -2839,10 +2909,27 @@ export class SkillManager {
     return path.resolve(projectRoot, SKILLS_DIR_NAME);
   }
 
+  private resolveSkillConfigDir(skillId: string): string {
+    if (skillId === CoreSkillId.Email) {
+      this.migrateLegacyEmailCredentials();
+      const emailConfigDir = this.getEmailConfigDir();
+      const legacyDir = path.join(this.getSkillsRoot(), CoreSkillId.Email);
+      const hasManagedConfig = fs.existsSync(path.join(emailConfigDir, 'accounts.json'))
+        || fs.existsSync(path.join(emailConfigDir, '.env'));
+      const hasLegacyConfig = fs.existsSync(path.join(legacyDir, 'accounts.json'))
+        || fs.existsSync(path.join(legacyDir, '.env'));
+      if (!hasManagedConfig && hasLegacyConfig) {
+        return legacyDir;
+      }
+      return emailConfigDir;
+    }
+    return this.resolveSkillDir(skillId);
+  }
+
   getSkillConfig(skillId: string): { success: boolean; config?: Record<string, string>; error?: string } {
     try {
-      const skillDir = this.resolveSkillDir(skillId);
-      const envPath = path.join(skillDir, '.env');
+      const configDir = this.resolveSkillConfigDir(skillId);
+      const envPath = path.join(configDir, '.env');
       if (!fs.existsSync(envPath)) {
         return { success: true, config: {} };
       }
@@ -2873,8 +2960,8 @@ export class SkillManager {
 
   getEmailAccountsConfig(skillId: string): { success: boolean; config?: EmailSkillAccountsConfig; error?: string } {
     try {
-      const skillDir = this.resolveSkillDir(skillId);
-      const accountsPath = path.join(skillDir, 'accounts.json');
+      const configDir = this.resolveSkillConfigDir(skillId);
+      const accountsPath = path.join(configDir, 'accounts.json');
       if (fs.existsSync(accountsPath)) {
         const parsed = JSON.parse(fs.readFileSync(accountsPath, 'utf8')) as Partial<EmailSkillAccountsConfig>;
         const config = this.normalizeEmailAccountsConfig(parsed);
@@ -2913,12 +3000,23 @@ export class SkillManager {
     }
   }
 
+  hasEnabledEmailAccount(): boolean {
+    const result = this.getEmailAccountsConfig(CoreSkillId.Email);
+    if (!result.success || !result.config) return false;
+    return result.config.accounts.some(account => account.enabled && Boolean(account.email?.trim()));
+  }
+
   setEmailAccountsConfig(skillId: string, config: EmailSkillAccountsConfig): { success: boolean; error?: string } {
     try {
-      const skillDir = this.resolveSkillDir(skillId);
+      const configDir = skillId === CoreSkillId.Email
+        ? this.getEmailConfigDir()
+        : this.resolveSkillDir(skillId);
+      fs.mkdirSync(configDir, { recursive: true });
       const normalized = this.normalizeEmailAccountsConfig(config);
-      const accountsPath = path.join(skillDir, 'accounts.json');
-      fs.writeFileSync(accountsPath, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
+      const accountsPath = path.join(configDir, 'accounts.json');
+      const tmpPath = `${accountsPath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
+      fs.renameSync(tmpPath, accountsPath);
       console.log('[skills] Saved email accounts config', {
         skillId,
         accountCount: normalized.accounts.length,
@@ -3066,8 +3164,11 @@ export class SkillManager {
 
   setSkillConfig(skillId: string, config: Record<string, string>): { success: boolean; error?: string } {
     try {
-      const skillDir = this.resolveSkillDir(skillId);
-      const envPath = path.join(skillDir, '.env');
+      const configDir = skillId === CoreSkillId.Email
+        ? this.getEmailConfigDir()
+        : this.resolveSkillDir(skillId);
+      fs.mkdirSync(configDir, { recursive: true });
+      const envPath = path.join(configDir, '.env');
       const lines = Object.entries(config)
         .filter(([key]) => key.trim())
         .map(([key, value]) => {
@@ -3330,8 +3431,10 @@ export class SkillManager {
   ): Promise<SkillScriptRunResult> {
     let lastResult: SkillScriptRunResult | null = null;
 
-    // Build base environment with user's shell PATH
+    // Build base environment with user's shell PATH and managed email config paths
     const baseEnv = buildSkillEnv();
+    baseEnv.EMAIL_ACCOUNTS_PATH = this.getEmailAccountsFilePath();
+    baseEnv.EMAIL_ENV_PATH = this.getEmailEnvFilePath();
 
     for (const runtime of this.getScriptRuntimeCandidates(baseEnv as NodeJS.ProcessEnv)) {
       const env: NodeJS.ProcessEnv = {

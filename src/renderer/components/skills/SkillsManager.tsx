@@ -319,7 +319,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
 
   const handleToggleSkill = async (skillId: string) => {
     const targetSkill = skills.find(skill => skill.id === skillId);
-    if (!targetSkill) return;
+    if (!targetSkill || targetSkill.canDisable === false) return;
     const marketplaceSkill = marketplaceSkills.find(skill => skill.id === skillId);
     const targetEnabled = !targetSkill.enabled;
     reportSkillAction('toggle_enabled', {
@@ -627,6 +627,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const getSkillInstallStatus = (marketplaceSkill: MarketplaceSkill): 'not_installed' | 'installed' | 'update_available' => {
     const installed = skills.find(s => s.id === marketplaceSkill.id);
     if (!installed) return 'not_installed';
+    if (installed.isBuiltIn) return 'installed';
     if (!marketplaceSkill.version) return 'installed';
     const localVersion = installed.version || '0.0.0';
     if (compareVersions(marketplaceSkill.version, localVersion) > 0) return 'update_available';
@@ -636,7 +637,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const updatableSkills = useMemo(() => {
     return marketplaceSkills.filter(ms => {
       const installed = skills.find(s => s.id === ms.id);
-      if (!installed || !ms.version) return false;
+      if (!installed || installed.isBuiltIn || !ms.version) return false;
       const localVersion = installed.version || '0.0.0';
       return compareVersions(ms.version, localVersion) > 0;
     });
@@ -1075,9 +1076,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
     const displayName = skillService.getLocalizedSkillName(skill.id, skill.name);
     const marketplaceSkill = marketplaceSkills.find(m => m.id === skill.id);
     const hasUpdate = Boolean(
-      marketplaceSkill?.version
+      !skill.isBuiltIn
+      && marketplaceSkill?.version
       && compareVersions(marketplaceSkill.version, skill.version || '0.0.0') > 0,
     );
+    const isAlwaysEnabled = skill.canDisable === false;
+    const menuItems = buildInstalledSkillMenuItems(skill);
     return (
       <div
         key={skill.id}
@@ -1101,17 +1105,26 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             {displayName}
           </div>
           {/* Reveal the management menu on hover or keyboard focus;
-              keep the enable switch visible at rest. */}
+              keep the enable switch visible at rest, or show an always-enabled
+              pill for core built-in skills that cannot be disabled. */}
           <div className="flex flex-shrink-0 items-center gap-1">
-            <div className={`flex items-center gap-1 ${CARD_ACTION_REVEAL_CLASS}`}>
-              <CardOverflowMenu items={buildInstalledSkillMenuItems(skill)} />
-            </div>
-            <CardToggle
-              isOn={skill.enabled}
-              label={i18nService.t(skill.enabled ? 'disable' : 'enable')}
-              disabled={readOnly}
-              onToggle={() => handleToggleSkill(skill.id)}
-            />
+            {menuItems.length > 0 && (
+              <div className={`flex items-center gap-1 ${CARD_ACTION_REVEAL_CLASS}`}>
+                <CardOverflowMenu items={menuItems} />
+              </div>
+            )}
+            {isAlwaysEnabled ? (
+              <span className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary">
+                {i18nService.t('skillAlwaysEnabled')}
+              </span>
+            ) : (
+              <CardToggle
+                isOn={skill.enabled}
+                label={i18nService.t(skill.enabled ? 'disable' : 'enable')}
+                disabled={readOnly}
+                onToggle={() => handleToggleSkill(skill.id)}
+              />
+            )}
           </div>
         </div>
 
@@ -1816,7 +1829,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                     return <div className={`mt-1 truncate ${MANAGEMENT_BODY_TEXT} text-secondary`}>{author}</div>;
                   })()}
                 </div>
-                {onUseSkill && selectedSkill.enabled && (
+                {onUseSkill && selectedSkill.enabled && selectedSkill.userInvocable !== false && (
                   <button
                     type="button"
                     onClick={() => handleUseSkill(selectedSkill)}
@@ -1891,21 +1904,29 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               </div>
             </div>
 
-            {/* Footer is the management strip: the labelled switch says what it
-                toggles, and delete stays quiet until you reach for it. */}
+            {/* Footer is the management strip: core built-in skills display an
+                always-enabled badge, while user skills show toggle and delete. */}
             <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border px-6 py-3">
-              <div className="flex items-center gap-2.5">
-                <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
-                <CardToggle
-                  isOn={selectedSkill.enabled}
-                  label={i18nService.t(selectedSkill.enabled ? 'disable' : 'enable')}
-                  disabled={readOnly}
-                  onToggle={() => {
-                    handleToggleSkill(selectedSkill.id);
-                    setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
-                  }}
-                />
-              </div>
+              {selectedSkill.canDisable === false ? (
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-surface-raised px-2.5 py-1 text-xs font-medium text-secondary">
+                    {i18nService.t('skillAlwaysEnabled')}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2.5">
+                  <span className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>{i18nService.t('enable')}</span>
+                  <CardToggle
+                    isOn={selectedSkill.enabled}
+                    label={i18nService.t(selectedSkill.enabled ? 'disable' : 'enable')}
+                    disabled={readOnly}
+                    onToggle={() => {
+                      handleToggleSkill(selectedSkill.id);
+                      setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
+                    }}
+                  />
+                </div>
+              )}
               {!readOnly && !selectedSkill.isBuiltIn && (
                 <button
                   type="button"

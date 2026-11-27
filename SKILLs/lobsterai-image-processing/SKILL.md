@@ -3,6 +3,7 @@ name: lobsterai-image-processing
 description: 处理已有图片，支持擦除水印和文字、增强画质、人像美化、修复老照片，以及抠出前景并交付透明 PNG。
 official: true
 version: 1.3.0
+user-invocable: false
 ---
 
 # LobsterAI 图片处理

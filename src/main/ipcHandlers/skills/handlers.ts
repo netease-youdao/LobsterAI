@@ -1,17 +1,69 @@
 import { ipcMain } from 'electron';
 
 import { createAuthRequiredIpcError } from '../../libs/authAccessPolicy';
+import { MarketplaceTrustRegistry } from '../../skills/marketplaceTrust';
 import type { SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;
   getSkillStoreUrl: () => string;
+  fetchMarketplaceText?: (url: string) => Promise<string>;
   onSkillsPolicyChanged?: () => Promise<void> | void;
   isAuthGateBlocked?: () => boolean;
 }
 
+const fetchMarketplaceOverHttps = async (url: string): Promise<string> => {
+  const https = await import('https');
+  return new Promise<string>((resolve, reject) => {
+    const req = https.get(url, { timeout: 10000 }, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        res.resume();
+        return;
+      }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => { body += chunk; });
+      res.on('end', () => resolve(body));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+  });
+};
+
 export function registerSkillHandlers(deps: SkillHandlerDeps): void {
-  const { getSkillManager, getSkillStoreUrl, onSkillsPolicyChanged, isAuthGateBlocked } = deps;
+  const {
+    getSkillManager,
+    getSkillStoreUrl,
+    fetchMarketplaceText = fetchMarketplaceOverHttps,
+    onSkillsPolicyChanged,
+    isAuthGateBlocked,
+  } = deps;
+  const marketplaceTrust = new MarketplaceTrustRegistry();
+  let lastCatalogUrl = '';
+
+  const loadMarketplaceCatalog = async (): Promise<string> => {
+    const url = getSkillStoreUrl();
+    if (!url) {
+      throw new Error('Skill marketplace URL is not configured');
+    }
+    const data = await fetchMarketplaceText(url);
+    lastCatalogUrl = url;
+    marketplaceTrust.updateFromRawResponse(data);
+    return data;
+  };
+
+  const ensureMarketplaceTrustLoaded = async (): Promise<void> => {
+    const url = getSkillStoreUrl();
+    if (!url) return;
+    if (marketplaceTrust.isLoaded() && lastCatalogUrl === url) return;
+    try {
+      await loadMarketplaceCatalog();
+    } catch (error) {
+      console.warn('[SkillMarketplace] Failed to refresh trust catalog before install:', error);
+    }
+  };
 
   ipcMain.handle('skills:list', () => {
     try {
@@ -51,12 +103,36 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
     if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
-    return getSkillManager().downloadSkill(source);
+    if (typeof source === 'string' && /^https:\/\//i.test(source.trim())) {
+      await ensureMarketplaceTrustLoaded();
+    }
+    const trust = typeof source === 'string'
+      ? marketplaceTrust.resolveTrustedDownload(source)
+      : { trusted: false };
+    return getSkillManager().downloadSkill(
+      source,
+      undefined,
+      trust.trusted
+        ? { skipSecurityScan: true, expectedSha256: trust.expectedSha256 }
+        : undefined,
+    );
   });
 
   ipcMain.handle('skills:upgrade', async (_event, skillId: string, downloadUrl: string) => {
     if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
-    return getSkillManager().upgradeSkill(skillId, downloadUrl);
+    if (typeof downloadUrl === 'string' && /^https:\/\//i.test(downloadUrl.trim())) {
+      await ensureMarketplaceTrustLoaded();
+    }
+    const trust = typeof downloadUrl === 'string'
+      ? marketplaceTrust.resolveTrustedDownload(downloadUrl, skillId)
+      : { trusted: false };
+    return getSkillManager().upgradeSkill(
+      skillId,
+      downloadUrl,
+      trust.trusted
+        ? { skipSecurityScan: true, expectedSha256: trust.expectedSha256 }
+        : undefined,
+    );
   });
 
   ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
@@ -93,16 +169,28 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     return getSkillManager().getSkillConfig(skillId);
   });
 
-  ipcMain.handle('skills:setConfig', (_event, skillId: string, config: Record<string, string>) => {
-    return getSkillManager().setSkillConfig(skillId, config);
+  ipcMain.handle('skills:setConfig', async (_event, skillId: string, config: Record<string, string>) => {
+    const result = getSkillManager().setSkillConfig(skillId, config);
+    if (result.success) {
+      await Promise.resolve(onSkillsPolicyChanged?.()).catch((syncError: unknown) => {
+        console.warn('[skills] Failed to sync skill policy after config change:', syncError);
+      });
+    }
+    return result;
   });
 
   ipcMain.handle('skills:getEmailAccountsConfig', (_event, skillId: string) => {
     return getSkillManager().getEmailAccountsConfig(skillId);
   });
 
-  ipcMain.handle('skills:setEmailAccountsConfig', (_event, skillId: string, config: Parameters<SkillManager['setEmailAccountsConfig']>[1]) => {
-    return getSkillManager().setEmailAccountsConfig(skillId, config);
+  ipcMain.handle('skills:setEmailAccountsConfig', async (_event, skillId: string, config: Parameters<SkillManager['setEmailAccountsConfig']>[1]) => {
+    const result = getSkillManager().setEmailAccountsConfig(skillId, config);
+    if (result.success) {
+      await Promise.resolve(onSkillsPolicyChanged?.()).catch((syncError: unknown) => {
+        console.warn('[skills] Failed to sync skill policy after email accounts update:', syncError);
+      });
+    }
+    return result;
   });
 
   ipcMain.handle('skills:testEmailAccountConnectivity', async (
@@ -125,23 +213,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     const url = getSkillStoreUrl();
     console.log(`[SkillMarketplace] fetching from: ${url}`);
     try {
-      const https = await import('https');
-      const data = await new Promise<string>((resolve, reject) => {
-        const req = https.get(url, { timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            res.resume();
-            return;
-          }
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => { body += chunk; });
-          res.on('end', () => resolve(body));
-          res.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
-      });
+      const data = await loadMarketplaceCatalog();
       return { success: true, data };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch skill marketplace' };
