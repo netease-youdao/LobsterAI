@@ -16,6 +16,7 @@ import {
   ImApprovalRelay,
   parseImApprovalReply,
 } from './imApprovalRelay';
+import { IMCoworkHandler } from './imCoworkHandler';
 
 class FakeRelayRuntime extends EventEmitter {
   respondToPermission = vi.fn(async (requestId: string, _result: PermissionResult) => {
@@ -262,6 +263,77 @@ describe('ImApprovalRelay', () => {
       { behavior: 'allow' },
     );
 
+    relay.dispose();
+  });
+
+  test('keeps DSH approval pending past 60s when co-registered with IMCoworkHandler and times out at 300s', () => {
+    vi.useFakeTimers();
+    const runtime = new FakeRelayRuntime();
+    const sendReply = vi.fn(async () => ({ delivered: true }));
+    const relay = new ImApprovalRelay({ runtime, sendReply });
+
+    const mapping = {
+      imConversationId: 'qa-user',
+      platform: 'popo',
+      coworkSessionId: 'session-1',
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+    };
+    const coworkHandler = new IMCoworkHandler({
+      coworkRuntime: runtime as never,
+      coworkStore: {
+        getSession: (id: string) => (id === 'session-1' ? { id: 'session-1', messages: [] } : null),
+      } as never,
+      imStore: {
+        listSessionMappings: () => [mapping],
+        getSessionMappingByCoworkSessionId: (id: string) => (id === 'session-1' ? mapping : null),
+      } as never,
+    });
+
+    const queueKey = 'popo:default:qa-user:main';
+    relay.registerActiveRoute({
+      sessionId: 'session-1',
+      queueKey,
+      platform: 'popo',
+      instanceId: 'default',
+      chatId: 'qa-user',
+      chatType: 'direct',
+    });
+
+    const requestId = `${DSH_APPROVAL_REQUEST_ID_PREFIX}race-check`;
+    runtime.emit('permissionRequest', 'session-1', {
+      requestId,
+      toolName: 'write',
+      toolInput: { filePath: '/outside/file.txt' },
+    });
+
+    expect(relay.hasPendingApproval(queueKey)).toBe(true);
+    expect(sendReply).toHaveBeenCalledTimes(1);
+
+    // Must NOT prematurely deny or send "resolved on desktop" at 60s (legacy timer).
+    vi.advanceTimersByTime(60_000);
+    expect(relay.hasPendingApproval(queueKey)).toBe(true);
+    expect(runtime.respondToPermission).not.toHaveBeenCalled();
+    expect(sendReply).toHaveBeenCalledTimes(1);
+
+    // Must remain pending up to 299s.
+    vi.advanceTimersByTime(239_000);
+    expect(relay.hasPendingApproval(queueKey)).toBe(true);
+    expect(runtime.respondToPermission).not.toHaveBeenCalled();
+
+    // Auto-denies cleanly at 300s with the timeout notice (not desktop-handled notice).
+    vi.advanceTimersByTime(1_000);
+    expect(relay.hasPendingApproval(queueKey)).toBe(false);
+    expect(runtime.respondToPermission).toHaveBeenCalledTimes(1);
+    expect(runtime.respondToPermission).toHaveBeenCalledWith(
+      requestId,
+      expect.objectContaining({ behavior: 'deny' }),
+    );
+    expect(sendReply).toHaveBeenLastCalledWith(expect.objectContaining({
+      text: '⏱️ 确认已超时，本次操作已自动拒绝。',
+    }));
+
+    coworkHandler.destroy();
     relay.dispose();
   });
 });
