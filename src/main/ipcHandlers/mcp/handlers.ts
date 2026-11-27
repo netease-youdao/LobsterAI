@@ -19,7 +19,7 @@ import {
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { connectCliAccount } from '../../mcp/cliMarketplaceLogin';
-import { getPkulawResource, marketplaceOAuthProvider, runMarketplaceLogin } from '../../mcp/marketplaceOAuth';
+import { marketplaceOAuthProvider, PKULAW_RESOURCE, runMarketplaceLogin } from '../../mcp/marketplaceOAuth';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthClientCredentials,
@@ -72,16 +72,14 @@ export function cancelAllMcpOAuthLogins(): void {
   for (const controller of cliLogins.values()) controller.abort();
 }
 
-// Test and production use different PKULaw realms and gateways. Drop the previous realm's
-// credentials before publishing the new gateway to DSH.
-export function syncPkulawEnvironment(runtime: McpRuntime, oauth: McpOAuthManager): void {
+// Migrate the retired test gateway and clear credentials when switching LobsterAI environments.
+export function syncPkulawEnvironment(runtime: McpRuntime, oauth: McpOAuthManager, environmentChanged = false): void {
   const store = runtime.getStore();
-  const url = getPkulawResource();
   for (const server of store.listServers()) {
-    if (server.registryId !== 'pkulaw' || server.url === url) continue;
+    if (server.registryId !== 'pkulaw' || (!environmentChanged && server.url === PKULAW_RESOURCE)) continue;
     cancelMcpOAuthLogin(server.id);
     oauth.deleteToken(server.id);
-    store.updateServer(server.id, { url });
+    if (server.url !== PKULAW_RESOURCE) store.updateServer(server.id, { url: PKULAW_RESOURCE });
   }
 }
 
@@ -172,7 +170,7 @@ function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpS
     if (!normalized.ok) {
       throw new Error(INVALID_URL_ERROR);
     }
-    return { ...data, url: data.registryId === 'pkulaw' ? getPkulawResource() : normalized.url };
+    return { ...data, url: data.registryId === 'pkulaw' ? PKULAW_RESOURCE : normalized.url };
   }
   return data;
 }
@@ -689,7 +687,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     try {
       const provider = marketplaceOAuthProvider(server.registryId);
       if (provider) {
-        if (server.url !== provider.resource()) throw new Error('Invalid marketplace MCP endpoint');
+        if (server.url !== provider.resource) throw new Error('Invalid marketplace MCP endpoint');
         const sessionKey = deps.getAuthSessionKey?.();
         const getAccessToken = () => sessionKey && deps.getAuthSessionKey?.() === sessionKey
           ? deps.getAuthTokens?.()?.accessToken : undefined;

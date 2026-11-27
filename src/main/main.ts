@@ -4774,7 +4774,7 @@ if (!gotTheLock) {
       }
       refreshEndpointsTestMode(getStore());
       if (dshBootstrap && previousAppConfig?.app?.testMode !== nextAppConfig?.app?.testMode) {
-        syncPkulawEnvironment(getMcpRuntime(), dshBootstrap.mcpOAuthManager);
+        syncPkulawEnvironment(getMcpRuntime(), dshBootstrap.mcpOAuthManager, true);
       }
       const proxyChanged = previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy;
       if (proxyChanged && getDshBootstrap().getEngineStatus().phase === 'running') {

@@ -1,25 +1,21 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { getServerApiBaseUrl, isTestModeEnabled } from '../libs/endpoints';
+import { getServerApiBaseUrl } from '../libs/endpoints';
 import type { McpOAuthClientCredentials, McpOAuthManager } from './mcpOAuthManager';
 
 export const TDX_RESOURCE = 'https://txmcp.tdx.com.cn:3001/txmcp';
 export const GITHUB_RESOURCE = 'https://api.githubcopilot.com/mcp/';
+export const PKULAW_RESOURCE = 'https://apim-gateway.pkulaw.com/mcp-law-agg/1.0.0/mcp';
 const GITHUB_AUTHORIZE = 'https://github.com/login/oauth/authorize';
 const TDX_ISSUER = 'https://auth.tdx.com.cn';
 const READ_SCOPE = 'mcp.read';
 
 const PROVIDERS = {
-  tdx: { id: 'tdx', name: '通达信', resource: () => TDX_RESOURCE },
-  'connector-github': { id: 'github', name: 'GitHub', resource: () => GITHUB_RESOURCE },
-  pkulaw: { id: 'pkulaw', name: '北大法宝', resource: getPkulawResource },
+  tdx: { id: 'tdx', name: '通达信', resource: TDX_RESOURCE },
+  'connector-github': { id: 'github', name: 'GitHub', resource: GITHUB_RESOURCE },
+  pkulaw: { id: 'pkulaw', name: '北大法宝', resource: PKULAW_RESOURCE },
 } as const;
-
-export function getPkulawResource(): string {
-  const host = isTestModeEnabled() ? 'test-apim-gateway.pkulaw.com' : 'apim-gateway.pkulaw.com';
-  return `https://${host}/mcp-law-agg/1.0.0/mcp`;
-}
 
 export function marketplaceOAuthProvider(registryId?: string) {
   if (!registryId || !Object.hasOwn(PROVIDERS, registryId)) return undefined;
@@ -138,8 +134,7 @@ function beginGitHubLogin(session: MarketplaceSession): { url: string; verifier:
 }
 
 function beginPkulawLogin(options: LoginOptions, session: MarketplaceSession): string {
-  const host = isTestModeEnabled() ? 'testcas.pkulaw.com' : 'cas.pkulaw.com';
-  const issuer = `https://${host}/auth/realms/fabao/protocol/openid-connect`;
+  const issuer = 'https://cas.pkulaw.com/auth/realms/fabao/protocol/openid-connect';
   if (!session.clientId || session.authorizationEndpoint !== issuer + '/auth' || session.tokenEndpoint !== issuer + '/token') {
     throw new Error('北大法宝授权端点与当前环境不符，请检查服务端配置');
   }
