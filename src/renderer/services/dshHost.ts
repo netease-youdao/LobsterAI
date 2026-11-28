@@ -2,6 +2,16 @@
 // HMR-backed plugin management, and on-demand DSH Web View.
 
 import {
+  type ModelThinkingConfig,
+  ModelThinkingLevel,
+  type ModelThinkingOption,
+  OpenClawThinkingLevel,
+  parseModelThinkingLevel,
+  parseOpenClawThinkingLevel,
+} from '@shared/providers/modelThinking';
+
+import {
+  DEFAULT_DSH_AGENT_PRESET_ID,
   DEFAULT_DSH_PERMISSION_PRESET,
   type DshPermissionPreset,
   type DshPluginApplicationStatus,
@@ -13,13 +23,72 @@ import {
   type DshPluginUpdateOutcomeKind,
   type DshPluginUpdateStep,
 } from '../../shared/dshEngine/hostConstants';
+import type { Model } from '../store/slices/modelSlice';
 
 export const DSH_PERMISSION_PRESET_CHANGED_EVENT = 'dsh:permissionPresetChanged';
 export const DSH_PLUGINS_CHANGED_EVENT = 'dsh:pluginsChanged';
 export const DSH_PLUGIN_ORDER_CHANGED_EVENT = 'dsh:pluginOrderChanged';
 export const DSH_OPEN_EMBEDDED_PLUGIN_EVENT = 'dsh:openEmbeddedPlugin';
+export const DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT = 'dsh:agentPresetSettingsChanged';
 export const DSH_PLUGIN_ORDER_STORAGE_KEY = 'dsh.plugins.displayOrder';
 export const DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY = 'dsh.plugins.installRegistry';
+export const DSH_AGENT_PRESET_SETTINGS_STORAGE_KEY = 'dsh.plugins.agentPresetSettings';
+
+export interface DshAgentPresetSettings {
+  enabled: boolean;
+  defaultPresetId: string;
+}
+
+export const DEFAULT_DSH_AGENT_PRESET_SETTINGS: DshAgentPresetSettings = {
+  enabled: false,
+  defaultPresetId: DEFAULT_DSH_AGENT_PRESET_ID,
+};
+
+export function sanitizeDshAgentPresetSettings(value: unknown): DshAgentPresetSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ...DEFAULT_DSH_AGENT_PRESET_SETTINGS };
+  }
+  const record = value as Record<string, unknown>;
+  const enabled = record.enabled === true;
+  const rawDefaultPresetId = typeof record.defaultPresetId === 'string'
+    ? record.defaultPresetId.trim()
+    : '';
+  return {
+    enabled,
+    defaultPresetId: rawDefaultPresetId || DEFAULT_DSH_AGENT_PRESET_ID,
+  };
+}
+
+export function dispatchDshAgentPresetSettingsChanged(settings: DshAgentPresetSettings): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+    return;
+  }
+  const sanitized = sanitizeDshAgentPresetSettings(settings);
+  window.dispatchEvent(new CustomEvent(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, { detail: sanitized }));
+}
+
+export async function loadDshAgentPresetSettings(): Promise<DshAgentPresetSettings> {
+  try {
+    const raw = await window.electron?.store?.get?.(DSH_AGENT_PRESET_SETTINGS_STORAGE_KEY);
+    return sanitizeDshAgentPresetSettings(raw);
+  } catch (error) {
+    console.warn('[dshHost] failed to load agent preset settings:', error);
+    return { ...DEFAULT_DSH_AGENT_PRESET_SETTINGS };
+  }
+}
+
+export async function saveDshAgentPresetSettings(
+  settings: Partial<DshAgentPresetSettings>,
+): Promise<DshAgentPresetSettings> {
+  const sanitized = sanitizeDshAgentPresetSettings(settings);
+  dispatchDshAgentPresetSettingsChanged(sanitized);
+  try {
+    await window.electron?.store?.set?.(DSH_AGENT_PRESET_SETTINGS_STORAGE_KEY, sanitized);
+  } catch (error) {
+    console.warn('[dshHost] failed to save agent preset settings:', error);
+  }
+  return sanitized;
+}
 
 export interface DshEmbeddedPluginTarget {
   name: string;
@@ -410,9 +479,141 @@ export interface DshPluginChangedPayload {
   reason?: string;
 }
 
+export interface DshPluginModelReasoningEffort {
+  id: string;
+  name?: string;
+  description?: string;
+}
+
+export interface DshPluginModelEntry {
+  id: string;
+  name: string;
+  providerId: string;
+  providerName: string;
+  description?: string;
+  badge?: string;
+  reasoningEfforts?: DshPluginModelReasoningEffort[];
+  defaultReasoningEffort?: string;
+}
+
+export interface DshPluginModelGroup {
+  providerId: string;
+  providerName: string;
+  models: DshPluginModelEntry[];
+}
+
+export interface DshPluginModelFailure {
+  providerId: string;
+  providerName: string;
+  message: string;
+}
+
+export interface DshPluginModelsResult {
+  ok: boolean;
+  groups: DshPluginModelGroup[];
+  models: DshPluginModelEntry[];
+  failures: DshPluginModelFailure[];
+  fetchedAt: number;
+  error?: string;
+}
+
+export interface DshAgentPresetInfo {
+  id: string;
+  name?: string;
+  description?: string;
+  order?: number;
+  broken?: string;
+  isDefault: boolean;
+}
+
+export interface DshAgentPresetsResult {
+  ok: boolean;
+  presets: DshAgentPresetInfo[];
+  usablePresets: DshAgentPresetInfo[];
+  hasThirdPartyPresets: boolean;
+  defaultPresetId: string;
+  error?: string;
+}
+
+export interface DshPluginSkillEntry {
+  name: string;
+  description: string;
+  provider: string;
+  source?: string;
+  path?: string;
+  modelInvocable: boolean;
+  userInvocable: boolean;
+}
+
+export interface DshPluginSkillsResult {
+  ok: boolean;
+  skills: DshPluginSkillEntry[];
+  error?: string;
+}
+
+export function buildDshPluginModelThinkingConfig(
+  efforts: readonly DshPluginModelReasoningEffort[] | undefined,
+  defaultEffort?: string,
+): ModelThinkingConfig | undefined {
+  if (!efforts || efforts.length === 0) return undefined;
+  const options: ModelThinkingOption[] = [];
+  const seenLevels = new Set<ModelThinkingLevel>();
+
+  for (const effort of efforts) {
+    const level = parseModelThinkingLevel(effort.id);
+    if (!level || seenLevels.has(level)) continue;
+    const openclawLevel = level === ModelThinkingLevel.Max
+      ? OpenClawThinkingLevel.XHigh
+      : parseOpenClawThinkingLevel(level);
+    if (!openclawLevel) continue;
+    seenLevels.add(level);
+    options.push({ level, openclawLevel });
+  }
+
+  if (options.length === 0) return undefined;
+  if (options.length === 1 && options[0]?.level === ModelThinkingLevel.Off) return undefined;
+
+  const parsedDefault = parseModelThinkingLevel(defaultEffort);
+  const defaultLevel = parsedDefault && seenLevels.has(parsedDefault)
+    ? parsedDefault
+    : options[0]!.level;
+
+  return { options, defaultLevel };
+}
+
+export function mapDshPluginModelsToStoreModels(
+  entries: readonly DshPluginModelEntry[],
+): Model[] {
+  return entries.map((entry) => {
+    const thinkingConfig = buildDshPluginModelThinkingConfig(
+      entry.reasoningEfforts,
+      entry.defaultReasoningEffort,
+    );
+    return {
+      id: entry.id,
+      name: entry.name,
+      provider: entry.providerName,
+      providerKey: entry.providerId,
+      openClawProviderId: entry.providerId,
+      isDshPluginModel: true,
+      ...(entry.badge ? { dshPluginBadge: entry.badge } : {}),
+      ...(entry.description ? { description: entry.description } : {}),
+      ...(thinkingConfig ? { supportsThinking: true, thinkingConfig } : {}),
+    };
+  });
+}
+
 export const dshHostService = {
   getStatus(): Promise<DshHostStatusSnapshot | null> {
     return window.electron.dshHost.getStatus();
+  },
+
+  onConnectionChanged(listener: () => void): () => void {
+    const subscribe = window.electron?.dshHost?.onConnectionChanged;
+    if (typeof subscribe !== 'function') {
+      return () => undefined;
+    }
+    return subscribe(listener);
   },
 
   async restart(): Promise<{ ok: boolean; error?: string }> {
@@ -443,6 +644,45 @@ export const dshHostService = {
     plugins: DshPluginEntry[];
   }> {
     return window.electron.dshHost.listPlugins();
+  },
+
+  listPluginModels(options?: { forceRefresh?: boolean }): Promise<DshPluginModelsResult> {
+    const invoke = window.electron?.dshHost?.listPluginModels;
+    if (typeof invoke !== 'function') {
+      return Promise.resolve({
+        ok: false,
+        groups: [],
+        models: [],
+        failures: [],
+        fetchedAt: Date.now(),
+      });
+    }
+    return invoke(options);
+  },
+
+  listAgentPresets(): Promise<DshAgentPresetsResult> {
+    const invoke = window.electron?.dshHost?.listAgentPresets;
+    if (typeof invoke !== 'function') {
+      return Promise.resolve({
+        ok: false,
+        presets: [],
+        usablePresets: [],
+        hasThirdPartyPresets: false,
+        defaultPresetId: 'lobsterai',
+      });
+    }
+    return invoke();
+  },
+
+  listPluginSkills(options?: { cwd?: string }): Promise<DshPluginSkillsResult> {
+    const invoke = window.electron?.dshHost?.listPluginSkills;
+    if (typeof invoke !== 'function') {
+      return Promise.resolve({
+        ok: false,
+        skills: [],
+      });
+    }
+    return invoke(options);
   },
 
   inspectPlugin(request: string | DshPluginInspectRequest): Promise<DshPluginInspectResult> {

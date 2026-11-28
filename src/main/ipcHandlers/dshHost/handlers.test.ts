@@ -1548,4 +1548,134 @@ describe('registerDshHostHandlers live HMR Typert RPC path', () => {
       error: 'DSH host is not ready',
     });
   });
+
+  test('ListPluginModels returns filtered plugin models when host is ready and fails soft when offline', async () => {
+    let hostReady = true;
+    const listPluginModels = vi.fn(async () => ({
+      groups: [
+        {
+          providerId: 'our-free-model',
+          providerName: 'Our Free Model',
+          models: [
+            {
+              id: 'deepseek-v4.1-flash',
+              name: 'DeepSeek V4.1 Flash',
+              providerId: 'our-free-model',
+              providerName: 'Our Free Model',
+            },
+          ],
+        },
+      ],
+      models: [
+        {
+          id: 'deepseek-v4.1-flash',
+          name: 'DeepSeek V4.1 Flash',
+          providerId: 'our-free-model',
+          providerName: 'Our Free Model',
+        },
+      ],
+      failures: [],
+      fetchedAt: 1000,
+    }));
+    const manager = {
+      isReady: () => hostReady,
+      listPluginModels,
+    } as unknown as DshHostManager;
+
+    registerDshHostHandlers({
+      getHostManager: () => manager,
+      getRuntimeDir: () => '/tmp/runtime',
+      getExecutablePath: () => '/tmp/electron',
+    });
+
+    const readyRes = await registeredHandlers.get(DshHostIpc.ListPluginModels)!({}, { forceRefresh: true });
+    expect(readyRes).toMatchObject({
+      ok: true,
+      fetchedAt: 1000,
+      models: [{ id: 'deepseek-v4.1-flash', providerId: 'our-free-model' }],
+    });
+    expect(listPluginModels).toHaveBeenCalledWith({ forceRefresh: true });
+
+    hostReady = false;
+    const offlineRes = await registeredHandlers.get(DshHostIpc.ListPluginModels)!({});
+    expect(offlineRes).toMatchObject({ ok: false, groups: [], models: [], failures: [] });
+  });
+
+  test('ListAgentPresets and ListPluginSkills filter, sort, and fail soft when host is offline', async () => {
+    let hostReady = true;
+    const listAgentPresets = vi.fn(async () => [
+      { id: 'pi-plus', name: 'Pi+模式', order: 6, isDefault: false },
+      { id: 'standard', name: 'standard', order: 1, isDefault: false },
+      { id: 'broken-mode', name: 'Broken', order: 1, broken: 'missing', isDefault: false },
+      { id: 'lobsterai', name: 'LobsterAI', order: 0, isDefault: true },
+      { id: 'pi', name: 'Pi 模式', order: 5, isDefault: false },
+    ]);
+    const listPluginSkills = vi.fn(async () => [
+      {
+        name: 'guizang-page',
+        description: 'Page design skill',
+        provider: 'guizang-design',
+        modelInvocable: true,
+        userInvocable: true,
+      },
+    ]);
+    const manager = {
+      isReady: () => hostReady,
+      listAgentPresets,
+      listPluginSkills,
+    } as unknown as DshHostManager;
+
+    registerDshHostHandlers({
+      getHostManager: () => manager,
+      getRuntimeDir: () => '/tmp/runtime',
+      getExecutablePath: () => '/tmp/electron',
+    });
+
+    const presetRes = await registeredHandlers.get(DshHostIpc.ListAgentPresets)!({});
+    expect(presetRes).toMatchObject({
+      ok: true,
+      hasThirdPartyPresets: true,
+      defaultPresetId: 'lobsterai',
+    });
+    expect(
+      (presetRes as { usablePresets: Array<{ id: string }> }).usablePresets.map((p) => p.id),
+    ).toEqual(['lobsterai', 'standard', 'pi', 'pi-plus']);
+
+    // Built-in DSH developer presets alone do not count as third-party presets.
+    listAgentPresets.mockResolvedValueOnce([
+      { id: 'lobsterai', name: 'LobsterAI', order: 0, isDefault: true },
+      { id: 'standard', name: 'standard', order: 1, isDefault: false },
+      { id: 'ptc', name: 'ptc', order: 2, isDefault: false },
+    ]);
+    expect(await registeredHandlers.get(DshHostIpc.ListAgentPresets)!({})).toMatchObject({
+      ok: true,
+      hasThirdPartyPresets: false,
+    });
+
+    const skillRes = await registeredHandlers.get(DshHostIpc.ListPluginSkills)!({}, { cwd: '/tmp/proj' });
+    expect(skillRes).toEqual({
+      ok: true,
+      skills: [
+        {
+          name: 'guizang-page',
+          description: 'Page design skill',
+          provider: 'guizang-design',
+          modelInvocable: true,
+          userInvocable: true,
+        },
+      ],
+    });
+    expect(listPluginSkills).toHaveBeenCalledWith('/tmp/proj');
+
+    hostReady = false;
+    expect(await registeredHandlers.get(DshHostIpc.ListAgentPresets)!({})).toMatchObject({
+      ok: false,
+      usablePresets: [],
+      hasThirdPartyPresets: false,
+    });
+    expect(await registeredHandlers.get(DshHostIpc.ListPluginSkills)!({})).toEqual({
+      ok: false,
+      skills: [],
+    });
+  });
 });

@@ -78,11 +78,19 @@ export interface BuiltLegacySessionSeedLog {
   events: DshV4SessionEvent[];
 }
 
+export interface SeededLegacySessionInfo {
+  coworkSessionId: string;
+  dshSessionId: string;
+  maxSeq: number;
+  cwd?: string;
+}
+
 export interface LegacySessionSeedingResult {
   sessionsPreSeeded: number;
   sessionsPreservedForLazyBridge: number;
   createdSessionDirs: string[];
   errors: Array<{ sessionId: string; error: string }>;
+  cancelled?: boolean;
 }
 
 /**
@@ -919,6 +927,217 @@ export function seedLegacySessionsToDsh(options: {
       );
       result.errors.push({ sessionId: session.id, error: message });
       result.sessionsPreservedForLazyBridge += 1;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Non-blocking, chunked variant of `seedLegacySessionsToDsh` used to backfill
+ * pre-seeder historical `cowork_sessions` (for installations that migrated to
+ * DSH v2 before pre-seeding existed) newest-first without blocking the main
+ * thread. Calls `onSessionSeeded` after each session so callers can record
+ * device-local `synced_seq` bindings immediately and prevent duplicate sync.
+ */
+export async function backfillLegacySessionsToDshAsync(options: {
+  db: Database.Database;
+  userDataDir: string;
+  nowMs?: number;
+  batchSize?: number;
+  onSessionSeeded?: (info: SeededLegacySessionInfo) => void;
+  isCancelled?: () => boolean;
+}): Promise<LegacySessionSeedingResult> {
+  const { db, userDataDir } = options;
+  const nowMs = options.nowMs ?? Date.now();
+  const batchSize = Math.max(1, Math.min(options.batchSize ?? 15, 100));
+  const result: LegacySessionSeedingResult = {
+    sessionsPreSeeded: 0,
+    sessionsPreservedForLazyBridge: 0,
+    createdSessionDirs: [],
+    errors: [],
+    cancelled: false,
+  };
+
+  if (!tableExists(db, 'cowork_sessions')) return result;
+
+  const sessionCols = getTableColumns(db, 'cowork_sessions');
+  const msgCols = getTableColumns(db, 'cowork_messages');
+  if (
+    !sessionCols.has('id')
+    || !sessionCols.has('claude_session_id')
+    || !msgCols.has('id')
+    || !msgCols.has('session_id')
+    || !msgCols.has('type')
+    || !msgCols.has('content')
+  ) {
+    return result;
+  }
+
+  const selectSessionCols = [
+    'id',
+    'claude_session_id',
+    sessionCols.has('title') ? 'title' : 'NULL AS title',
+    sessionCols.has('cwd') ? 'cwd' : 'NULL AS cwd',
+    sessionCols.has('created_at') ? 'created_at' : 'NULL AS created_at',
+  ].join(', ');
+  const sessionOrderBy = sessionCols.has('updated_at')
+    ? 'ORDER BY updated_at DESC, created_at DESC, id ASC'
+    : sessionCols.has('created_at')
+      ? 'ORDER BY created_at DESC, id ASC'
+      : 'ORDER BY id ASC';
+
+  const legacySessions = db
+    .prepare(
+      `SELECT ${selectSessionCols}
+       FROM cowork_sessions
+       WHERE claude_session_id IS NULL
+          OR (claude_session_id NOT LIKE 'dsh:%' AND claude_session_id NOT LIKE 'session-%')
+       ${sessionOrderBy}`,
+    )
+    .all() as Array<{
+      id: string;
+      claude_session_id: string | null;
+      title: string | null;
+      cwd: string | null;
+      created_at: number | null;
+    }>;
+
+  if (legacySessions.length === 0) return result;
+
+  const selectMsgCols = [
+    'id',
+    'type',
+    'content',
+    msgCols.has('metadata') ? 'metadata' : 'NULL AS metadata',
+    msgCols.has('created_at') ? 'created_at' : 'NULL AS created_at',
+  ].join(', ');
+  const msgOrderBy = msgCols.has('sequence') && msgCols.has('created_at')
+    ? 'ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC'
+    : msgCols.has('sequence')
+      ? 'ORDER BY COALESCE(sequence, 2147483647) ASC, ROWID ASC'
+      : msgCols.has('created_at')
+        ? 'ORDER BY created_at ASC, ROWID ASC'
+        : 'ORDER BY ROWID ASC';
+
+  const selectMessagesStmt = db.prepare(
+    `SELECT ${selectMsgCols} FROM cowork_messages WHERE session_id = ? ${msgOrderBy}`,
+  );
+  const capsuleCols = getTableColumns(db, 'cowork_session_capsules');
+  const selectCapsuleStmt =
+    capsuleCols.has('session_id') && capsuleCols.has('capsule_json')
+      ? db.prepare('SELECT capsule_json FROM cowork_session_capsules WHERE session_id = ?')
+      : null;
+  const checkCurrentSessionStmt = db.prepare(
+    'SELECT claude_session_id FROM cowork_sessions WHERE id = ?',
+  );
+  const updateSessionIdStmt = db.prepare(
+    'UPDATE cowork_sessions SET claude_session_id = ? WHERE id = ? AND (claude_session_id IS NULL OR claude_session_id NOT LIKE \'dsh:%\')',
+  );
+
+  const sessionsRoot = resolveDshSessionsRoot(userDataDir);
+
+  for (let offset = 0; offset < legacySessions.length; offset += batchSize) {
+    if (options.isCancelled?.()) {
+      result.cancelled = true;
+      break;
+    }
+
+    const batch = legacySessions.slice(offset, offset + batchSize);
+    for (const session of batch) {
+      if (options.isCancelled?.()) {
+        result.cancelled = true;
+        break;
+      }
+      let createdDirForSession: string | null = null;
+      try {
+        const current = checkCurrentSessionStmt.get(session.id) as { claude_session_id: string | null } | undefined;
+        if (!current || isAlreadyDshSessionId(current.claude_session_id)) {
+          continue;
+        }
+        const rawMessages = selectMessagesStmt.all(session.id) as Array<{
+          id: string;
+          type: string;
+          content: string;
+          metadata: string | null;
+          created_at: number | null;
+        }>;
+
+        let continuityCapsule: CoworkContinuityCapsule | null = null;
+        if (selectCapsuleStmt) {
+          const capRow = selectCapsuleStmt.get(session.id) as { capsule_json?: string } | undefined;
+          const parsedCap = safeParseJsonObject(capRow?.capsule_json);
+          if (parsedCap) {
+            continuityCapsule = parsedCap as unknown as CoworkContinuityCapsule;
+          }
+        }
+
+        const dshSessionId = randomUUID();
+        const messages: LegacySessionMessageInput[] = rawMessages.map((row) => ({
+          id: row.id,
+          type: row.type,
+          content: row.content ?? '',
+          metadata: safeParseJsonObject(row.metadata),
+          createdAt: row.created_at,
+        }));
+
+        const built = buildLegacySessionSeedLog({
+          dshSessionId,
+          title: session.title,
+          cwd: session.cwd,
+          createdAt: session.created_at ?? nowMs,
+          messages,
+          continuityCapsule,
+        });
+
+        if (!built) {
+          result.sessionsPreservedForLazyBridge += 1;
+          continue;
+        }
+
+        const sessionDirPath = resolveDshSessionDir(sessionsRoot, built.header.cwd, dshSessionId);
+        const logFilePath = resolveDshSessionLogPath(sessionsRoot, built.header.cwd, dshSessionId);
+        const encoded = encodeDshV4SessionZstd(built.header, built.events);
+
+        fs.mkdirSync(sessionDirPath, { recursive: true, mode: 0o700 });
+        createdDirForSession = sessionDirPath;
+
+        const tmpPath = `${logFilePath}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+        fs.writeFileSync(tmpPath, encoded, { mode: 0o600 });
+        fs.renameSync(tmpPath, logFilePath);
+
+        const updateRes = updateSessionIdStmt.run(`${DSH_SESSION_ID_PREFIX}${dshSessionId}`, session.id);
+        if (updateRes.changes === 0) {
+          // Session was concurrently bound by a live turn; remove unused seed file.
+          fs.rmSync(sessionDirPath, { recursive: true, force: true });
+          continue;
+        }
+
+        const maxSeq = built.events.length > 0 ? built.events[built.events.length - 1].seq : -1;
+        options.onSessionSeeded?.({
+          coworkSessionId: session.id,
+          dshSessionId,
+          maxSeq,
+          cwd: built.header.cwd,
+        });
+        result.createdSessionDirs.push(sessionDirPath);
+        result.sessionsPreSeeded += 1;
+      } catch (error) {
+        if (createdDirForSession) {
+          try {
+            fs.rmSync(createdDirForSession, { recursive: true, force: true });
+          } catch {
+            // best-effort cleanup
+          }
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({ sessionId: session.id, error: message });
+        result.sessionsPreservedForLazyBridge += 1;
+      }
+    }
+
+    if (offset + batchSize < legacySessions.length && !result.cancelled) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
 

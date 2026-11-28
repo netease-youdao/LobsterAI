@@ -4,6 +4,7 @@ import {
   CheckIcon,
   ExclamationTriangleIcon,
   PlusIcon,
+  PuzzlePieceIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +14,11 @@ import { useDispatch, useSelector } from 'react-redux';
 import type { SkillSecurityReport as SkillSecurityReportData } from '../../../main/libs/skillSecurity/skillSecurityTypes';
 import { ENABLE_OPENCLAW_SKILL_SYNC } from '../../../shared/featureFlags';
 import { isHostnameOnDomain } from '../../../shared/url/hostname';
+import {
+  DSH_PLUGINS_CHANGED_EVENT,
+  dshHostService,
+  type DshPluginSkillEntry,
+} from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -94,6 +100,43 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
   const skills = useSelector((state: RootState) => state.skill.skills);
 
   const [skillSearchQuery, setSkillSearchQuery] = useState('');
+  const [dshPluginSkills, setDshPluginSkills] = useState<DshPluginSkillEntry[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    const loadPluginSkills = async () => {
+      try {
+        const res = await dshHostService.listPluginSkills();
+        if (active && res?.ok) {
+          setDshPluginSkills(res.skills);
+        }
+      } catch {
+        // Best-effort read-only display.
+      }
+    };
+    void loadPluginSkills();
+    const offConn = dshHostService.onConnectionChanged(() => void loadPluginSkills());
+    const offPlugins = dshHostService.onPluginsChanged(() => void loadPluginSkills());
+    const onLocalChange = () => void loadPluginSkills();
+    window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, onLocalChange);
+    return () => {
+      active = false;
+      offConn();
+      offPlugins();
+      window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, onLocalChange);
+    };
+  }, []);
+
+  const filteredDshPluginSkills = useMemo(() => {
+    const query = skillSearchQuery.trim().toLowerCase();
+    if (!query) return dshPluginSkills;
+    return dshPluginSkills.filter(
+      (skill) =>
+        skill.name.toLowerCase().includes(query)
+        || skill.description.toLowerCase().includes(query)
+        || skill.provider.toLowerCase().includes(query),
+    );
+  }, [dshPluginSkills, skillSearchQuery]);
   const [skillDownloadSource, setSkillDownloadSource] = useState('');
   const [skillActionError, setSkillActionError] = useState('');
   const [isDownloadingSkill, setIsDownloadingSkill] = useState(false);
@@ -1482,6 +1525,49 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             {mySkills.map((skill) => renderInstalledSkillCard(skill, false))}
           </div>
         )
+      )}
+
+      {((activeTab === SkillTab.Mine && !isSkillSearchActive) || (isInstalledTab && isSkillSearchActive))
+        && filteredDshPluginSkills.length > 0 && (
+        <div className="mt-6">
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <div>
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                <PuzzlePieceIcon className="h-4 w-4 text-secondary" />
+                <span>{i18nService.t('dshPluginSkillsSectionTitle')}</span>
+                <span className="text-xs font-normal text-secondary">({filteredDshPluginSkills.length})</span>
+              </h3>
+              <p className={`mt-0.5 ${MANAGEMENT_META_TEXT} text-secondary`}>
+                {i18nService.t('dshPluginSkillsSectionHint')}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+            {filteredDshPluginSkills.map((skill) => (
+              <div
+                key={`${skill.provider}::${skill.name}`}
+                className="flex flex-col justify-between rounded-2xl border border-border bg-surface p-4"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold text-foreground" title={skill.name}>
+                      {skill.name}
+                    </span>
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium text-indigo-600 dark:text-indigo-300">
+                      <PuzzlePieceIcon className="h-3 w-3 shrink-0" />
+                      <span className="max-w-[120px] truncate">{skill.provider}</span>
+                    </span>
+                  </div>
+                  {skill.description && (
+                    <p className={`mt-2 line-clamp-3 ${MANAGEMENT_BODY_TEXT} text-secondary`}>
+                      {skill.description}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {activeTab === SkillTab.BuiltIn && !isSkillSearchActive && (

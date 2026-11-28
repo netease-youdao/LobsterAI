@@ -1112,6 +1112,7 @@ interface IElectronAPI {
       agentId?: string;
       modelOverride?: string;
       modelPresetId?: ModelPresetId;
+      dshAgentPreset?: string;
       thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection;
@@ -2544,6 +2545,71 @@ interface IElectronAPI {
       cliShimPath?: string | null;
       hmrAvailable?: boolean;
       plugins: Array<DshHostPluginEntry>;
+    }>;
+    listPluginModels: (options?: { forceRefresh?: boolean }) => Promise<{
+      ok: boolean;
+      groups: Array<{
+        providerId: string;
+        providerName: string;
+        models: Array<{
+          id: string;
+          name: string;
+          providerId: string;
+          providerName: string;
+          description?: string;
+          badge?: string;
+          reasoningEfforts?: Array<{ id: string; name?: string; description?: string }>;
+          defaultReasoningEffort?: string;
+        }>;
+      }>;
+      models: Array<{
+        id: string;
+        name: string;
+        providerId: string;
+        providerName: string;
+        description?: string;
+        badge?: string;
+        reasoningEfforts?: Array<{ id: string; name?: string; description?: string }>;
+        defaultReasoningEffort?: string;
+      }>;
+      failures: Array<{ providerId: string; providerName: string; message: string }>;
+      fetchedAt: number;
+      error?: string;
+    }>;
+    listAgentPresets: () => Promise<{
+      ok: boolean;
+      presets: Array<{
+        id: string;
+        name?: string;
+        description?: string;
+        order?: number;
+        broken?: string;
+        isDefault: boolean;
+      }>;
+      usablePresets: Array<{
+        id: string;
+        name?: string;
+        description?: string;
+        order?: number;
+        broken?: string;
+        isDefault: boolean;
+      }>;
+      hasThirdPartyPresets: boolean;
+      defaultPresetId: string;
+      error?: string;
+    }>;
+    listPluginSkills: (options?: { cwd?: string }) => Promise<{
+      ok: boolean;
+      skills: Array<{
+        name: string;
+        description: string;
+        provider: string;
+        source?: string;
+        path?: string;
+        modelInvocable: boolean;
+        userInvocable: boolean;
+      }>;
+      error?: string;
     }>;
     inspectPlugin: (
       request: string | { spec: string; registry?: string | null },

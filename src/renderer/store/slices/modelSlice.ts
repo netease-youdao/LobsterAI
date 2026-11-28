@@ -38,6 +38,8 @@ export interface Model {
   contextWindowOptions?: number[];
   maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
+  isDshPluginModel?: boolean; // 是否为 DSH 第三方插件注册的模型
+  dshPluginBadge?: string; // DSH 插件模型附带标签
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
   explicitContextCache?: boolean; // 是否支持服务端显式上下文缓存
   description?: string; // 模型能力简介
@@ -63,13 +65,16 @@ export function getModelIdentityKey(model: Pick<Model, 'id' | 'providerKey' | 'i
 }
 
 export function isSameModelIdentity(
-  modelA: Pick<Model, 'id' | 'providerKey' | 'isServerModel'>,
-  modelB: Pick<Model, 'id' | 'providerKey' | 'isServerModel'>
+  modelA: Pick<Model, 'id' | 'providerKey' | 'isServerModel' | 'isDshPluginModel'>,
+  modelB: Pick<Model, 'id' | 'providerKey' | 'isServerModel' | 'isDshPluginModel'>
 ): boolean {
   if (modelA.id !== modelB.id) {
     return false;
   }
   if (isServerModelIdentity(modelA) !== isServerModelIdentity(modelB)) {
+    return false;
+  }
+  if (Boolean(modelA.isDshPluginModel) !== Boolean(modelB.isDshPluginModel)) {
     return false;
   }
   if (modelA.providerKey && modelB.providerKey) {
@@ -219,9 +224,10 @@ const modelSlice = createSlice({
       delete state.selectedModelByAgent[action.payload];
     },
     setAvailableModels: (state, action: PayloadAction<Model[]>) => {
-      // 保留已有的服务端模型，只更新用户自配模型（与 setServerModels 对称）
+      // 保留已有的服务端模型和 DSH 插件模型，只更新用户自配模型
       const serverModels = state.availableModels.filter(m => m.isServerModel);
-      state.availableModels = [...serverModels, ...action.payload];
+      const pluginModels = state.availableModels.filter(m => m.isDshPluginModel);
+      state.availableModels = [...serverModels, ...action.payload, ...pluginModels];
       // 更新导出的 availableModels
       availableModels = state.availableModels;
       // 同步 defaultSelectedModel
@@ -236,9 +242,9 @@ const modelSlice = createSlice({
     },
     setServerModels: (state, action: PayloadAction<Model[]>) => {
       state.serverModelLoadStatus = ServerModelLoadStatus.Ready;
-      // 服务端模型放前面，自配模型保留在后面
-      const userModels = state.availableModels.filter(m => !m.isServerModel);
-      state.availableModels = [...action.payload, ...userModels];
+      // 服务端模型放前面，自配模型和 DSH 插件模型保留在后面
+      const nonServerModels = state.availableModels.filter(m => !m.isServerModel);
+      state.availableModels = [...action.payload, ...nonServerModels];
       availableModels = state.availableModels;
       // 同步 defaultSelectedModel（优先选择 accessible 的模型）
       if (state.availableModels.length > 0) {
@@ -262,6 +268,28 @@ const modelSlice = createSlice({
       // 同步 per-agent 选中模型
       syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
     },
+    setDshPluginModels: (state, action: PayloadAction<Model[]>) => {
+      // 保留服务端模型与用户自配模型，只更新 DSH 插件模型
+      const nonPluginModels = state.availableModels.filter(m => !m.isDshPluginModel);
+      state.availableModels = [...nonPluginModels, ...action.payload];
+      availableModels = state.availableModels;
+      if (state.availableModels.length > 0) {
+        state.defaultSelectedModel = selectPreferredAccessibleModel(
+          state.availableModels,
+          state.defaultSelectedModel,
+        );
+      }
+      syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
+    },
+    clearDshPluginModels: (state) => {
+      state.availableModels = state.availableModels.filter(m => !m.isDshPluginModel);
+      availableModels = state.availableModels;
+      if (state.defaultSelectedModel.isDshPluginModel && state.availableModels.length > 0) {
+        state.defaultSelectedModel = state.availableModels.find(isModelAccessible)
+          ?? state.defaultSelectedModel;
+      }
+      syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
+    },
   },
 });
 
@@ -273,5 +301,7 @@ export const {
   setAvailableModels,
   setServerModels,
   clearServerModels,
+  setDshPluginModels,
+  clearDshPluginModels,
 } = modelSlice.actions;
 export default modelSlice.reducer;

@@ -1,5 +1,6 @@
 import {
   ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
   Cog6ToothIcon,
   ExclamationTriangleIcon,
   PuzzlePieceIcon,
@@ -257,6 +258,17 @@ export const DshEmbeddedPluginView: React.FC<DshEmbeddedPluginViewProps> = ({
             className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
           >
             <ArrowPathIcon className={`h-4 w-4 ${showLoadingOverlay ? 'animate-spin' : ''}`} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void dshHostService.openEcosystemView()}
+            title={t('dshPluginsEmbeddedOpenFullView')}
+            aria-label={t('dshPluginsEmbeddedOpenFullView')}
+            className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-xs text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+          >
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline">{t('dshPluginsEmbeddedOpenFullView')}</span>
           </button>
 
           {onManagePlugins && (

@@ -23,6 +23,41 @@ export {
 };
 
 export const DEFAULT_AGENT_ID = 'main';
+export const DEFAULT_LOBSTER_AGENT_PRESET_ID = 'lobsterai';
+
+/**
+ * Returns true when the effective DSH agent preset is LobsterAI's default
+ * preset (or unavailable). Non-default third-party presets (such as
+ * `dsh-pi-mode`'s `pi` / `pi-plus`) own their own minimalist prompt identity.
+ */
+export function isDefaultLobsterAgentPreset(presetId) {
+  if (typeof presetId !== 'string') return true;
+  const trimmed = presetId.trim();
+  return trimmed.length === 0 || trimmed === DEFAULT_LOBSTER_AGENT_PRESET_ID;
+}
+
+/**
+ * Fail-soft lookup of the active DSH agent preset for a system-prompt assembly.
+ */
+export function resolveAssemblyAgentPresetId(ctx, assemblyCtx) {
+  try {
+    const registry = ctx?.get?.('agentPresets');
+    if (!registry) return undefined;
+    const agentCtx = assemblyCtx?.agent?.ctx;
+    if (agentCtx && typeof registry.composedPreset === 'function') {
+      const composed = registry.composedPreset(agentCtx);
+      if (typeof composed === 'string' && composed.trim()) return composed.trim();
+    }
+    const session = assemblyCtx?.agent?.session;
+    if (session && typeof registry.presetForSession === 'function') {
+      const recorded = registry.presetForSession(session);
+      if (typeof recorded === 'string' && recorded.trim()) return recorded.trim();
+    }
+  } catch {
+    // Fail-soft across future DSH upgrades.
+  }
+  return undefined;
+}
 export const LOBSTERAI_SKILL_RANK = 260;
 export const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const WEB_SEARCH_SKILL_ID = 'web-search';

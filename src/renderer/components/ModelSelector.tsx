@@ -5,6 +5,7 @@ import {
   ClockIcon,
   GiftIcon,
   LockClosedIcon,
+  PuzzlePieceIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import {
@@ -22,6 +23,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { getProviderIcon, ProviderIconId } from '../providers/uiRegistry';
 import { authService } from '../services/auth';
+import { dshHostService, mapDshPluginModelsToStoreModels } from '../services/dshHost';
 import { getPortalPricingUrl } from '../services/endpoints';
 import { i18nService, type LanguageType } from '../services/i18n';
 import { modelPresetName } from '../services/modelPresets';
@@ -31,7 +33,7 @@ import {
 } from '../services/modelThinkingLevelMemory';
 import { RootState } from '../store';
 import type { Model, ModelCustomTag } from '../store/slices/modelSlice';
-import { getModelIdentityKey, isSameModelIdentity, ServerModelLoadStatus, setSelectedModel } from '../store/slices/modelSlice';
+import { getModelIdentityKey, isSameModelIdentity, ServerModelLoadStatus, setDshPluginModels, setSelectedModel } from '../store/slices/modelSlice';
 import { AccountConnectionNotice } from './AccountConnectionNotice';
 import { getAccountConnectionState, getModelConnectionState } from './accountConnectionState';
 import Modal from './common/Modal';
@@ -117,8 +119,12 @@ export type CascadeSide = typeof CascadeSide[keyof typeof CascadeSide];
 export const ModelSelectorGroup = {
   Server: 'server',
   User: 'user',
+  DshPlugin: 'dsh-plugin',
 } as const;
 type ModelSelectorGroup = typeof ModelSelectorGroup[keyof typeof ModelSelectorGroup];
+
+const DSH_PLUGIN_MODELS_LAZY_REFRESH_TTL_MS = 10_000;
+let lastDshPluginModelsLazyRefreshAt = 0;
 
 export interface ModelSelectorSections {
   primaryModels: Model[];
@@ -466,6 +472,7 @@ export function canConfigureModelThinking(
     | 'accessible'
     | 'busy'
     | 'agenticReady'
+    | 'isDshPluginModel'
     | 'isServerModel'
     | 'presetId'
     | 'requestCapabilities'
@@ -475,18 +482,18 @@ export function canConfigureModelThinking(
 ): boolean {
   return !!model?.thinkingConfig
     && !model.presetId
-    && supportsLobsterAIRequestOptionsV1(model.requestCapabilities)
+    && (model.isDshPluginModel === true || supportsLobsterAIRequestOptionsV1(model.requestCapabilities))
     && model.accessible !== false
     && model.busy !== true
     && !isModelAgenticBlocked(model);
 }
 
 export function supportsConfigurableModelThinkingProtocol(
-  model: Pick<Model, 'presetId' | 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
+  model: Pick<Model, 'isDshPluginModel' | 'presetId' | 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
 ): boolean {
   return !!model?.thinkingConfig
     && !model.presetId
-    && supportsLobsterAIRequestOptionsV1(model.requestCapabilities);
+    && (model.isDshPluginModel === true || supportsLobsterAIRequestOptionsV1(model.requestCapabilities));
 }
 
 /**
@@ -643,10 +650,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     ? { ...selectedValue, busy: currentModelMetadata.busy, accessible: currentModelMetadata.accessible,
       contextWindow: currentModelMetadata.contextWindow, contextWindowOptions: currentModelMetadata.contextWindowOptions }
     : selectedValue, [selectedValue, currentModelMetadata]);
+  const isPluginModelSelected = selectedModel?.isDshPluginModel === true;
   const isCustomModelSelected = Boolean(selectedModel?.providerKey
     && !selectedModel.isServerModel
+    && !selectedModel.isDshPluginModel
     && selectedModel.providerKey !== ProviderName.LobsteraiServer);
-  const customProviderName = isCustomModelSelected
+  const customProviderName = isCustomModelSelected || isPluginModelSelected
     ? resolveCustomModelProviderName(selectedModel, currentModelMetadata)
     : '';
   const showCustomProviderName = Boolean(customProviderName) && !hideCustomProviderName;
@@ -654,7 +663,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const serverModels = availableModels.filter(m => m.isServerModel && (allowPresets || !m.presetId))
     .map(model => model.presetId && model.presetId === selectedModel?.presetId
       ? { ...selectedModel, costMultiplier: model.costMultiplier } : model);
-  const userModels = availableModels.filter(m => !m.isServerModel);
+  const userModels = availableModels.filter(m => !m.isServerModel && !m.isDshPluginModel);
+  const dshPluginModels = availableModels.filter(m => m.isDshPluginModel === true);
   const modelGroups = [
     ...(serverModels.length > 0
       ? [{ key: ModelSelectorGroup.Server, label: i18nService.t('modelGroupServer') }]
@@ -662,31 +672,45 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     ...(userModels.length > 0
       ? [{ key: ModelSelectorGroup.User, label: i18nService.t('modelGroupUser') }]
       : []),
+    ...(dshPluginModels.length > 0
+      ? [{ key: ModelSelectorGroup.DshPlugin, label: i18nService.t('modelGroupDshPlugin') }]
+      : []),
   ];
-  const shouldShowGroupTabs = serverModels.length > 0;
-  const isGroupAvailable = (group: ModelSelectorGroup): boolean => (
-    group === ModelSelectorGroup.Server ? serverModels.length > 0 : userModels.length > 0
-  );
+  const shouldShowGroupTabs = serverModels.length > 0 || modelGroups.length > 1;
+  const isGroupAvailable = (group: ModelSelectorGroup): boolean => {
+    if (group === ModelSelectorGroup.Server) return serverModels.length > 0;
+    if (group === ModelSelectorGroup.DshPlugin) return dshPluginModels.length > 0;
+    return userModels.length > 0;
+  };
   const getModelGroup = (model: Model | null): ModelSelectorGroup | null => {
     if (!model) return null;
-    return model.isServerModel ? ModelSelectorGroup.Server : ModelSelectorGroup.User;
+    if (model.isServerModel) return ModelSelectorGroup.Server;
+    if (model.isDshPluginModel) return ModelSelectorGroup.DshPlugin;
+    return ModelSelectorGroup.User;
   };
   const selectedModelGroup = getModelGroup(selectedModel);
   const showCurrentModelFooter = shouldShowGroupTabs && selectedModel !== null && selectedModelGroup !== null;
   const getPreferredGroup = (): ModelSelectorGroup => {
     const selectedGroup = getModelGroup(selectedModel);
     if (selectedGroup && isGroupAvailable(selectedGroup)) return selectedGroup;
-    return serverModels.length > 0 ? ModelSelectorGroup.Server : ModelSelectorGroup.User;
+    if (serverModels.length > 0) return ModelSelectorGroup.Server;
+    if (userModels.length > 0) return ModelSelectorGroup.User;
+    return ModelSelectorGroup.DshPlugin;
   };
   const visibleGroup = isGroupAvailable(activeGroup) ? activeGroup : getPreferredGroup();
   const visibleModels = shouldShowGroupTabs
-    ? (visibleGroup === ModelSelectorGroup.Server ? serverModels : userModels)
+    ? (visibleGroup === ModelSelectorGroup.Server
+      ? serverModels
+      : visibleGroup === ModelSelectorGroup.DshPlugin
+        ? dshPluginModels
+        : userModels)
     : availableModels;
   const visibleSections = partitionModelSelectorModels(visibleModels);
   // Keep the list height identical across tabs so switching never resizes the dropdown.
   const largestGroupRowCount = Math.max(
     countVisibleModelSelectorRows(serverModels, moreModelsExpanded),
     countVisibleModelSelectorRows(userModels, moreModelsExpanded),
+    countVisibleModelSelectorRows(dshPluginModels, moreModelsExpanded),
   ) + (defaultLabel ? 1 : 0);
   const stableListMinHeight = shouldShowGroupTabs
     ? Math.min(largestGroupRowCount * MODEL_ITEM_HEIGHT + LIST_VERTICAL_PADDING, LIST_MAX_HEIGHT)
@@ -703,7 +727,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectedModelUnavailableFallbackLogKeyRef = React.useRef('');
   const triggerMaxWidthClass = triggerMaxWidthClassName
     ?? (compact
-      ? (showCustomProviderName ? 'max-w-[320px]' : isCustomModelSelected ? 'max-w-[260px]' : 'max-w-[220px]')
+      ? (showCustomProviderName ? 'max-w-[320px]' : (isCustomModelSelected || isPluginModelSelected) ? 'max-w-[260px]' : 'max-w-[220px]')
       : (showCustomProviderName ? 'max-w-[340px]' : 'max-w-[280px]'));
   const triggerClassName = iconOnly
     ? 'relative h-8 w-8 shrink-0 justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30'
@@ -719,7 +743,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const triggerIconClassName = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
   const resolveModelIconProviderKey = (model: Model): string => {
     const providerKey = model.providerKey?.trim();
-    if (providerKey && providerKey !== ProviderName.LobsteraiServer) return providerKey;
+    if (providerKey && providerKey !== ProviderName.LobsteraiServer && !model.isDshPluginModel) return providerKey;
 
     const searchableText = `${model.presetId ? modelPresetName(model.presetId) : model.name} ${model.id}`;
     return MODEL_ICON_PROVIDER_HINTS.find(({ pattern }) => pattern.test(searchableText))?.providerName
@@ -746,6 +770,28 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   React.useEffect(() => {
     if (isOpen && isLoggedIn) void authService.refreshServerModels();
   }, [isOpen, isLoggedIn]);
+
+  // Lazy-refresh third-party DSH plugin models (10s TTL) when the picker opens so
+  // accounts/channels newly enabled inside a plugin panel appear without restart.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const now = Date.now();
+    if (now - lastDshPluginModelsLazyRefreshAt < DSH_PLUGIN_MODELS_LAZY_REFRESH_TTL_MS) return;
+    lastDshPluginModelsLazyRefreshAt = now;
+    let active = true;
+    void dshHostService
+      .listPluginModels()
+      .then((res) => {
+        if (!active || !res?.ok) return;
+        dispatch(setDshPluginModels(mapDshPluginModelsToStoreModels(res.models)));
+      })
+      .catch(() => {
+        // Best-effort refresh; keep existing plugin models on transient errors.
+      });
+    return () => {
+      active = false;
+    };
+  }, [dispatch, isOpen]);
 
   // Refresh at campaign boundaries while the picker remains open.
   React.useEffect(() => {
@@ -1452,6 +1498,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
               {!iconOnlyBadges && <span className="truncate">{i18nService.t('modelSelectorAgenticVerifyingBadge')}</span>}
             </span>
           )}
+          {!model.presetId && model.isDshPluginModel && model.dshPluginBadge && (
+            <span
+              className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-indigo-500/10 px-1.5 py-0.5 text-[10px] leading-none text-indigo-600 dark:text-indigo-300"
+              title={model.dshPluginBadge}
+            >
+              {model.dshPluginBadge}
+            </span>
+          )}
           {!model.presetId && model.customTag && (
             <span
               className="inline-flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] leading-none"
@@ -1482,7 +1536,35 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   // The server orders models by entitlement before applying busy availability.
   // Preserve that order so a service outage cannot move a model to the bottom.
-  const renderModelRows = (models: Model[]) => models.map(renderModelItem);
+  const renderModelRows = (models: Model[]) => {
+    if (visibleGroup !== ModelSelectorGroup.DshPlugin) {
+      return models.map(renderModelItem);
+    }
+    const grouped: Array<{ providerKey: string; providerLabel: string; items: Model[] }> = [];
+    for (const model of models) {
+      const key = model.providerKey || model.provider || '';
+      const last = grouped[grouped.length - 1];
+      if (last && last.providerKey === key) {
+        last.items.push(model);
+      } else {
+        grouped.push({
+          providerKey: key,
+          providerLabel: model.provider || key,
+          items: [model],
+        });
+      }
+    }
+    return grouped.map((section, index) => (
+      <div key={section.providerKey || `plugin-group-${index}`} className={index > 0 ? 'mt-1.5' : undefined}>
+        {section.providerLabel && (
+          <div className="px-2.5 pb-1 pt-1 text-[11px] font-medium leading-4 text-secondary">
+            {section.providerLabel}
+          </div>
+        )}
+        {section.items.map(renderModelItem)}
+      </div>
+    ));
+  };
 
   const renderMoreModelsSection = () => {
     if (visibleSections.moreModels.length === 0) return null;
@@ -1774,6 +1856,25 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           {(iconOnly || selectedModel?.isServerModel) && (
             <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
               {selectedModel ? renderProviderIcon(selectedModel) : <CustomProviderIcon className={MODEL_ICON_CLASS_NAME} />}
+            </span>
+          )}
+          {!iconOnly && isPluginModelSelected && (
+            <span
+              className="inline-flex h-5 shrink-0 items-center gap-1 rounded-md bg-indigo-500/[0.09] px-1.5 text-[11px] font-medium leading-none text-indigo-700 ring-1 ring-inset ring-indigo-600/[0.12] dark:bg-indigo-400/[0.12] dark:text-indigo-200 dark:ring-indigo-300/[0.18]"
+              title={customProviderName
+                ? `${i18nService.t('modelGroupDshPlugin')} · ${customProviderName}`
+                : i18nService.t('modelGroupDshPlugin')}
+            >
+              <span className="flex shrink-0 items-center" aria-hidden="true">
+                <PuzzlePieceIcon className="h-3 w-3" />
+              </span>
+              <span className="shrink-0">{i18nService.t('modelSourceDshPlugin')}</span>
+              {showCustomProviderName && (
+                <>
+                  <span className="shrink-0 opacity-50" aria-hidden="true">·</span>
+                  <span className="min-w-0 max-w-[80px] truncate">{customProviderName}</span>
+                </>
+              )}
             </span>
           )}
           {!iconOnly && isCustomModelSelected && (

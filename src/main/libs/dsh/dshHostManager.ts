@@ -46,6 +46,10 @@ import type {
 import { EMAIL_SKILL_CONFIG_DIR_NAME } from '../../../shared/skills/constants';
 import { DSH_NODE_EXEC_ARGV, DSH_RUNTIME_ENTRY_RELPATH } from '../dshRuntime';
 import {
+  type DshPluginModelCatalogSnapshot,
+  extractDshPluginModels,
+} from './dshPluginModelCatalog';
+import {
   buildIsolatedDshBaseEnv,
   type DshNodeToolchain,
   ensureAppOwnedProfile,
@@ -144,6 +148,12 @@ export interface DshHostAgentSkillSummary {
   description?: string;
 }
 
+export interface DshWorkspaceSessionRef {
+  sessionId: string;
+  cwd: string;
+  updatedAt?: number;
+}
+
 export interface DshHostAgentSpec {
   id: string;
   name: string;
@@ -198,6 +208,7 @@ export interface DshHostSessionContext {
   agentId?: string;
   coworkSessionId?: string;
   traceId?: string;
+  requestId?: string;
   workspaceDir?: string;
   allowedSkillIds?: string[] | null;
   selectedSkillIds?: string[] | null;
@@ -625,12 +636,21 @@ export class DshHostManager extends EventEmitter {
     providers: DshHostProviderSpec[];
     virtualAliases?: Record<string, { provider: string; model: string }>;
   } | null = null;
+  private syncedProviderIds = new Set<string>();
+  private knownPluginModelProviderIds = new Set<string>();
+  private pluginModelsCache: DshPluginModelCatalogSnapshot | null = null;
+  private pluginModelsInFlight: Promise<DshPluginModelCatalogSnapshot> | null = null;
+  private static readonly PLUGIN_MODELS_CACHE_TTL_MS = 10_000;
   private lastMcpServers: DshHostMcpServerSpec[] | null = null;
   private lastSkillsPolicy: DshHostSkillsPolicy | null = null;
   private lastMemoryPolicy: DshHostMemoryPolicy | null = null;
   private lastWebAccessPolicy: DshHostWebAccessPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
-  private lastAgentSync: { agents: DshHostAgentSpec[]; workspaceDirectories?: string[] } | null = null;
+  private lastAgentSync: {
+    agents: DshHostAgentSpec[];
+    workspaceDirectories?: string[];
+    knownSessions?: DshWorkspaceSessionRef[];
+  } | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
   private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
   private readonly lastSessionPermissionPresets = new Map<string, DshPermissionPreset>();
@@ -791,6 +811,7 @@ export class DshHostManager extends EventEmitter {
       await (this.restartPromise ?? this.startPromise)?.catch((): void => undefined);
       await this.stopProcessOnly();
       await this.stopBridgeServer();
+      this.invalidatePluginModelsCache();
       this.setDisconnectedAt(null);
       this.setPhase(DshHostPhase.Stopped);
     })().finally(() => { this.stopPromise = null; });
@@ -799,11 +820,109 @@ export class DshHostManager extends EventEmitter {
 
   // ── Live Host Sync Operations ──────────────────────────────────────────────
 
+  invalidatePluginModelsCache(): void {
+    this.pluginModelsCache = null;
+    this.pluginModelsInFlight = null;
+  }
+
+  getSyncedProviderIds(): ReadonlySet<string> {
+    return this.syncedProviderIds;
+  }
+
+  hasSyncedProviders(): boolean {
+    return this.lastProvidersPayload !== null;
+  }
+
+  isKnownPluginModelProvider(providerId: string): boolean {
+    const normalized = providerId.trim().toLowerCase();
+    return normalized.length > 0 && this.knownPluginModelProviderIds.has(normalized);
+  }
+
+  async listPluginModels(options?: { forceRefresh?: boolean }): Promise<DshPluginModelCatalogSnapshot> {
+    if (!this.isReady()) {
+      return { groups: [], models: [], failures: [], fetchedAt: Date.now() };
+    }
+    const forceRefresh = options?.forceRefresh === true;
+    const now = Date.now();
+    if (
+      !forceRefresh
+      && this.pluginModelsCache
+      && now - this.pluginModelsCache.fetchedAt < DshHostManager.PLUGIN_MODELS_CACHE_TTL_MS
+    ) {
+      return this.pluginModelsCache;
+    }
+    if (!forceRefresh && this.pluginModelsInFlight) {
+      return this.pluginModelsInFlight;
+    }
+
+    const fetchTask = (async (): Promise<DshPluginModelCatalogSnapshot> => {
+      const rawCatalog = await this.getClient().getModelCatalog();
+      const snapshot = extractDshPluginModels(rawCatalog, this.syncedProviderIds, {
+        fetchedAt: Date.now(),
+      });
+      for (const group of snapshot.groups) {
+        this.knownPluginModelProviderIds.add(group.providerId.toLowerCase());
+      }
+      this.pluginModelsCache = snapshot;
+      return snapshot;
+    })().finally(() => {
+      if (this.pluginModelsInFlight === fetchTask) {
+        this.pluginModelsInFlight = null;
+      }
+    });
+
+    this.pluginModelsInFlight = fetchTask;
+    return fetchTask;
+  }
+
+  async listAgentPresets(): Promise<Array<{
+    id: string;
+    name?: string;
+    description?: string;
+    order?: number;
+    broken?: string;
+    isDefault: boolean;
+  }>> {
+    if (!this.isReady()) return [];
+    const res = await this.getClient().listAgentPresets();
+    return Array.isArray(res?.presets) ? res.presets : [];
+  }
+
+  async listPluginSkills(cwd?: string): Promise<Array<{
+    name: string;
+    description: string;
+    provider: string;
+    source?: string;
+    path?: string;
+    modelInvocable: boolean;
+    userInvocable: boolean;
+  }>> {
+    if (!this.isReady()) return [];
+    const res = await this.getClient().callOps<{
+      skills?: Array<{
+        name: string;
+        description: string;
+        provider: string;
+        source?: string;
+        path?: string;
+        modelInvocable: boolean;
+        userInvocable: boolean;
+      }>;
+    }>(DshOpsAction.ListPluginSkills, cwd ? { cwd } : {});
+    return Array.isArray(res?.skills) ? res.skills : [];
+  }
+
   async syncProviders(payload: {
     providers: DshHostProviderSpec[];
     virtualAliases?: Record<string, { provider: string; model: string }>;
   }): Promise<Record<string, unknown>> {
     this.lastProvidersPayload = payload;
+    this.syncedProviderIds = new Set(
+      payload.providers
+        .map((provider) => provider.id.trim())
+        .filter((id) => id.length > 0),
+    );
+    this.invalidatePluginModelsCache();
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncProviders, payload);
   }
@@ -845,18 +964,34 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.SyncHostTools, { tools });
   }
 
-  async syncAgents(agents: DshHostAgentSpec[], workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
-    const payload = { agents, workspaceDirectories };
+  async syncAgents(
+    agents: DshHostAgentSpec[],
+    workspaceDirectories?: string[],
+    knownSessions?: DshWorkspaceSessionRef[],
+  ): Promise<Record<string, unknown>> {
+    const payload = {
+      agents,
+      workspaceDirectories,
+      ...(knownSessions ? { knownSessions } : {}),
+    };
     this.lastAgentSync = payload;
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncAgents, payload);
   }
 
-  async refreshAgentWorkspaces(workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
+  async refreshAgentWorkspaces(
+    workspaceDirectories?: string[],
+    knownSessions?: DshWorkspaceSessionRef[],
+  ): Promise<Record<string, unknown>> {
     if (!this.lastAgentSync) return { skipped: true };
     const payload = {
       agents: this.lastAgentSync.agents,
       workspaceDirectories: workspaceDirectories ?? this.lastAgentSync.workspaceDirectories,
+      ...(knownSessions !== undefined
+        ? { knownSessions }
+        : this.lastAgentSync.knownSessions
+          ? { knownSessions: this.lastAgentSync.knownSessions }
+          : {}),
     };
     this.lastAgentSync = payload;
     if (!this.isReady()) return { deferred: true };
@@ -1012,6 +1147,7 @@ export class DshHostManager extends EventEmitter {
       });
       client.on?.('remote:plugin-manager/changed', (change: unknown) => {
         if (this.client !== client) return;
+        this.invalidatePluginModelsCache();
         this.emit('pluginsChanged', change && typeof change === 'object' ? change : {});
       });
       await client.connect(launchUrl);

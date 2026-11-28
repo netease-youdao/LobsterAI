@@ -36,6 +36,15 @@ export const CoworkSessionStatusValue = {
 } as const;
 export type CoworkSessionStatus = typeof CoworkSessionStatusValue[keyof typeof CoworkSessionStatusValue];
 
+export const CoworkSessionSource = {
+  Desktop: 'desktop',
+  Im: 'im',
+  Scheduled: 'scheduled',
+  DshExternal: 'dsh-external',
+  Cloud: 'cloud',
+} as const;
+export type CoworkSessionSource = typeof CoworkSessionSource[keyof typeof CoworkSessionSource];
+
 /**
  * Machine-readable codes on failed session start/continue IPC results. The
  * paired `error` text is already localized and must be shown as-is.

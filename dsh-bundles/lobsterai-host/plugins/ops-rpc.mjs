@@ -27,7 +27,11 @@ import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
 import { canonicalizeProviderId } from './model-bridge-helpers.mjs';
-import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
+import {
+  mergeBoundSessionContext,
+  resolveFallbackAgentContextForExternalSession,
+  VALID_PERMISSION_PRESETS,
+} from './ops-rpc-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
 
@@ -328,20 +332,29 @@ export function apply(ctx) {
     }
   }
 
-  // Ensure every newly attached/created session inherits LobsterAI's active permission preset
+  // Ensure every newly attached/created session inherits LobsterAI's active permission preset,
+  // external top-level sessions receive a default Agent context fallback (persona/skills/memory),
   // and top-level sessions attach to their matching DSH workspace group.
   ctx.on('agent/created', ({ agent }) => {
     if (!agent?.session) return;
     const sid = agent.id || agent.session.id;
-    const bound = sid ? state.sessionContexts.get(sid) : undefined;
+    let bound = sid ? state.sessionContexts.get(sid) : undefined;
+    const isTopLevel = agent.session.header?.origin !== 'subagent';
+    const sessionCwd = typeof agent.session.header?.cwd === 'string' ? agent.session.header.cwd : '';
+    if (sid && isTopLevel && !bound) {
+      bound = resolveFallbackAgentContextForExternalSession(state, sessionCwd);
+      state.sessionContexts.set(sid, bound);
+      state.invalidateSkills?.();
+      state.reconcileToolDisclosure?.(sid);
+    }
     const targetPreset = typeof bound?.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(bound.permissionPreset)
       ? bound.permissionPreset
       : state.defaultPermissionPreset;
     if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
       applyPermissionPresetToAgent(agent, targetPreset, { notifyPolicyChange: false });
     }
-    if (sid && agent.session.header?.origin !== 'subagent' && typeof agent.session.header?.cwd === 'string') {
-      void attachSessionToWorkspace(ctx, sid, agent.session.header.cwd);
+    if (sid && isTopLevel && sessionCwd) {
+      void attachSessionToWorkspace(ctx, sid, sessionCwd);
     }
   });
 
@@ -522,8 +535,10 @@ export function apply(ctx) {
             state.agentOrder = nextOrder;
             state.invalidateSkills?.();
             let workspaceSync;
-            if (Array.isArray(p.workspaceDirectories)) {
-              workspaceSync = await syncAgentWorkspaces(p.workspaceDirectories).catch(error => {
+            if (Array.isArray(p.workspaceDirectories) || Array.isArray(p.knownSessions)) {
+              const dirs = Array.isArray(p.workspaceDirectories) ? p.workspaceDirectories : [];
+              const knownSessions = Array.isArray(p.knownSessions) ? p.knownSessions : undefined;
+              workspaceSync = await syncAgentWorkspaces(dirs, knownSessions).catch(error => {
                 ctx.logger.warn('[LobsterAgentWorkspaces] Failed to sync Agent workspaces:', error);
                 return undefined;
               });
@@ -694,6 +709,39 @@ export function apply(ctx) {
                 searchPolicy: state.searchPolicy,
               },
             });
+          }
+
+          case 'listPluginSkills': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const cwd = typeof p.cwd === 'string' && p.cwd.trim() ? p.cwd.trim() : undefined;
+            const skillRegistry = ctx.get('skills');
+            if (!skillRegistry || typeof skillRegistry.list !== 'function') {
+              return jsonResponse({ ok: true, result: { skills: [] } });
+            }
+            const rawSkills = await skillRegistry.list(cwd ? { cwd } : {});
+            const seen = new Set();
+            const skills = [];
+            for (const skill of Array.isArray(rawSkills) ? rawSkills : []) {
+              if (!skill || typeof skill !== 'object') continue;
+              const provider = typeof skill.provider === 'string' ? skill.provider.trim() : '';
+              if (!provider || provider === 'lobsterai-skills') continue;
+              const skillName = typeof skill.name === 'string' ? skill.name.trim() : '';
+              if (!skillName) continue;
+              const dedupeKey = `${provider}::${skillName}`;
+              if (seen.has(dedupeKey)) continue;
+              seen.add(dedupeKey);
+              skills.push({
+                name: skillName,
+                description: typeof skill.description === 'string' ? skill.description : '',
+                provider,
+                ...(typeof skill.source === 'string' && skill.source ? { source: skill.source } : {}),
+                ...(typeof skill.path === 'string' && skill.path ? { path: skill.path } : {}),
+                modelInvocable: skill.invocation?.modelInvocable !== false,
+                userInvocable: skill.invocation?.userInvocable !== false,
+              });
+            }
+            skills.sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
+            return jsonResponse({ ok: true, result: { skills } });
           }
 
           case 'deleteSessionFiles': {

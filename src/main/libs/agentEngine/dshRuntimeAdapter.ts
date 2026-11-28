@@ -28,7 +28,10 @@ import type {
   CoworkBtwSubmitResponse,
 } from '../../../shared/cowork/btw';
 import { CoworkBtwStatus } from '../../../shared/cowork/btw';
-import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  CoworkSessionSource,
+} from '../../../shared/cowork/constants';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import {
@@ -45,6 +48,7 @@ import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cow
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import { DECISION_EVALUATE_TOOL_NAME } from '../../../shared/decisionModel/constants';
 import {
+  DEFAULT_DSH_AGENT_PRESET_ID,
   DEFAULT_DSH_PERMISSION_PRESET,
   DSH_APPROVAL_REQUEST_ID_PREFIX,
   DSH_HTML_RENDER_TOOL,
@@ -112,6 +116,7 @@ import {
   type CoworkContinuityCapsule,
   formatCoworkContinuityCapsuleBridge,
 } from './coworkContinuityCapsule';
+import type { DshExternalSessionSync } from './dshExternalSessionSync';
 import { DshMessageEditCoordinator } from './dshMessageEdit';
 import { toPersistedMediaReferences } from './messageEditMedia';
 import type {
@@ -135,9 +140,12 @@ export interface DshAdapterSessionRecord {
   status?: CoworkSessionStatus;
   title?: string;
   agentId?: string;
+  imPlatform?: string | null;
+  source?: CoworkSessionSource | null;
   claudeSessionId?: string | null;
   executionMode?: string;
   permissionPreset?: DshPermissionPreset | null;
+  dshAgentPreset?: string | null;
   modelOverride?: string | null;
   modelPresetId?: string | null;
   thinkingLevel?: string | null;
@@ -190,6 +198,7 @@ export interface DshModelSelection {
   reasoningEffort?: string;
   modelPresetId?: string | null;
   contextWindow?: number;
+  isDshPluginModel?: boolean;
 }
 
 export type DshReadBrowserAnnotationAsset = (identity: {
@@ -894,8 +903,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly pendingCancels = new Map<string, Promise<void>>();
   private readonly lastCancelledTurnBySession = new Map<string, CancelledTurnRecord>();
   private readonly dshToCoworkSession = new Map<string, string>();
+  private readonly internalDshSessionIds = new Set<string>();
   private readonly pendingInteractions = new Map<string, PendingInteraction>();
   private readonly btwAbortControllers = new Map<string, AbortController>();
+  private externalSessionSync: DshExternalSessionSync | null = null;
   private readonly sessionAllowedScopes = new Map<string, Set<string>>();
   private readonly sessionPermissionPresets = new Map<string, DshPermissionPreset>();
   private readonly sessionUnlockedCapabilities = new Map<string, Set<DshProgressiveCapability>>();
@@ -1091,8 +1102,49 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       if (ownerId === sessionId) this.dshToCoworkSession.delete(nativeId);
     }
     const nativeId = this.resolveExistingDshSessionId(sessionId);
-    if (nativeId) this.dshToCoworkSession.set(nativeId, sessionId);
+    if (nativeId) {
+      this.dshToCoworkSession.set(nativeId, sessionId);
+      this.externalSessionSync?.recordLocalBinding(sessionId, nativeId);
+    }
     this.sessionResolvedContextTokens.delete(sessionId);
+  }
+
+  setExternalSessionSync(sync: DshExternalSessionSync | null): void {
+    this.externalSessionSync = sync;
+    if (sync && this.wiredClient) {
+      sync.attachClient(this.wiredClient);
+    }
+  }
+
+  isLocallyActiveTurn(coworkSessionId: string): boolean {
+    return this.activeTurns.has(coworkSessionId) || this.startingTurns.has(coworkSessionId);
+  }
+
+  isInternalDshSession(dshSessionId: string): boolean {
+    const sid = stripDshSessionPrefix(dshSessionId).trim();
+    if (!sid) return false;
+    return (
+      this.internalDshSessionIds.has(sid)
+      || Boolean(this.sideChatManager?.resolveSideChatOwner(sid))
+      || Boolean(this.subagentSessions?.getOwningSessionId(sid))
+    );
+  }
+
+  registerDshSessionMapping(dshSessionId: string, coworkSessionId: string): void {
+    const sid = stripDshSessionPrefix(dshSessionId).trim();
+    if (!sid || !coworkSessionId) return;
+    this.dshToCoworkSession.set(sid, coworkSessionId);
+  }
+
+  private trackInternalDshSessionId(dshSessionId: string): void {
+    const sid = stripDshSessionPrefix(dshSessionId).trim();
+    if (!sid) return;
+    this.internalDshSessionIds.add(sid);
+    while (this.internalDshSessionIds.size > 200) {
+      const oldest = this.internalDshSessionIds.values().next().value;
+      if (typeof oldest === 'string') this.internalDshSessionIds.delete(oldest);
+      else break;
+    }
   }
 
   async submitSteer(
@@ -1153,6 +1205,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.flushTurnBuffersForSteer(activeTurn);
 
     const clientTimeZone = resolveLocalTimeZone();
+    this.externalSessionSync?.recordLocalRequestId(dshSessionId, requestId);
+    // Keep DSH's active session context aligned with this steer requestId so
+    // `lobster-model-bridge` never misclassifies a desktop steer as an external turn.
+    await this.hostManager.bindSessionContext({
+      sessionId: dshSessionId,
+      requestId,
+    }).catch((): void => undefined);
     await client.promptSession({
       sessionId: dshSessionId,
       requestId,
@@ -1315,7 +1374,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         }
         await selectModelWithReasoningFallback(this.hostManager.getClient(), {
           sessionId: dshSessionId,
-          provider: canonicalizeDshProviderId(selection.provider),
+          provider: selection.isDshPluginModel ? selection.provider : canonicalizeDshProviderId(selection.provider),
           model: selection.model,
           reasoningEffort: resolvedEffort,
         });
@@ -1489,7 +1548,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
     if (!dshSessionId) {
       const priorMessages = [...(session.messages ?? [])];
-      const created = await client.createSession({ cwd: session.cwd });
+      const requestedAgentPreset = session.dshAgentPreset?.trim();
+      const created = await client.createSession({
+        cwd: session.cwd,
+        ...(requestedAgentPreset && requestedAgentPreset !== DEFAULT_DSH_AGENT_PRESET_ID
+          ? { agentPreset: requestedAgentPreset }
+          : {}),
+      });
       dshSessionId = created.sessionId;
       this.store.updateSession(sessionId, {
         claudeSessionId: formatStoredDshSessionId(dshSessionId),
@@ -1551,11 +1616,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const modelSelection = this.resolveModelSelection
         ? await this.resolveModelSelection(sessionId, session.modelOverride)
         : null;
-      registerLlmUsageContext(llmTrace.traceId, sessionId, translated.line, {
-        title: session.title,
-        modelPresetId: session.modelPresetId ?? undefined,
-        resolvedModelId: modelSelection?.model,
-      });
+      if (!modelSelection?.isDshPluginModel) {
+        registerLlmUsageContext(llmTrace.traceId, sessionId, translated.line, {
+          title: session.title,
+          modelPresetId: session.modelPresetId ?? undefined,
+          resolvedModelId: modelSelection?.model,
+        });
+      }
 
       const agentId = session.agentId || 'main';
       const allowedSkillIds = this.resolveAllowedSkillIds
@@ -1707,6 +1774,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       try {
         const forked = await client.forkSession({ sessionId: sourceDshId });
         const btwSessionId = forked.sessionId;
+        this.trackInternalDshSessionId(btwSessionId);
         const chunks: string[] = [];
         const followStream = client.followSession<Record<string, unknown>>(
           {
@@ -1846,6 +1914,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   stopAllSessions(): void {
     this.stopProjectionControlStream();
+    this.externalSessionSync?.stopAllPassiveFollows();
     this.sideChatManager?.stopAll();
     const ids = new Set([
       ...this.activeTurns.keys(),
@@ -1961,6 +2030,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   onSessionDeleted(sessionId: string): void {
     this.stopSession(sessionId);
+    this.externalSessionSync?.handleCoworkSessionDeleted(sessionId);
     void this.sideChatManager?.deleteSideChatsForParent(sessionId).catch((): void => undefined);
     this.lastCancelledTurnBySession.delete(sessionId);
     this.sessionAllowedScopes.delete(sessionId);
@@ -2087,6 +2157,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     }
 
     this.startProjectionControlStream(client);
+    this.externalSessionSync?.attachClient(client);
   }
 
   private resolveCoworkSessionIdForDshSession(dshSessionId: string): string | null {
@@ -2123,6 +2194,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       for (const [dshSessionId, block] of Object.entries(projections)) {
         const blockRec = asPlainRecord(block);
         const values = asPlainRecord(blockRec?.values);
+        if (typeof values?.title === 'string') {
+          this.externalSessionSync?.handleTitleProjection(dshSessionId, values.title, { isBaseline: true });
+        }
         if (this.cacheContextUsageProjectionValues(dshSessionId, values)) {
           this.emitContextUsageFromLiveProjection(dshSessionId);
         }
@@ -2136,6 +2210,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       let relevantChanged = false;
       for (const entry of frame.changes) {
         if (!entry || typeof entry.key !== 'string') continue;
+        if (entry.key === 'title') {
+          this.externalSessionSync?.handleTitleProjection(frame.sessionId, entry.val, { isBaseline: false });
+        }
         if (CONTEXT_USAGE_PROJECTION_KEYS.has(entry.key)) {
           updates[entry.key] = entry.val;
           relevantChanged = true;
@@ -2222,6 +2299,18 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const coworkSessionId = this.dshToCoworkSession.get(evt.agentId)
       ?? this.subagentSessions?.getOwningSessionId(evt.agentId);
     if (!coworkSessionId) {
+      return Promise.resolve({ kind: 'next' });
+    }
+
+    // When a turn is driven by an external DSH client (e.g., dsh-pocket),
+    // yield approval / question waterfalls so the driving client handles them.
+    if (
+      !this.activeTurns.has(coworkSessionId)
+      && (
+        this.externalSessionSync?.hasActivePassiveFollow(evt.agentId)
+        || this.externalSessionSync?.hasActivePassiveFollowForCoworkSession(coworkSessionId)
+      )
+    ) {
       return Promise.resolve({ kind: 'next' });
     }
 
@@ -2579,11 +2668,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         this.emit('messageUpdate', sessionId, turnUserMessage.id, turnUserMessage.content, modelMetadata);
       }
 
-      registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
-        title: session.title,
-        modelPresetId: effectiveModelPresetId,
-        resolvedModelId: effectiveResolvedModelId,
-      });
+      if (!modelSelection?.isDshPluginModel) {
+        registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
+          title: session.title,
+          modelPresetId: effectiveModelPresetId,
+          resolvedModelId: effectiveResolvedModelId,
+        });
+      }
 
       // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
       // a legacy OpenClaw session for the first time.
@@ -2592,8 +2683,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       let dshSessionId = existingDshSessionId;
       let lazyBridgePrefix = '';
       if (!dshSessionId) {
+        const requestedAgentPreset = session.dshAgentPreset?.trim();
         const created = await client.createSession({
           cwd: params.workspaceRoot || session.cwd,
+          ...(requestedAgentPreset && requestedAgentPreset !== DEFAULT_DSH_AGENT_PRESET_ID
+            ? { agentPreset: requestedAgentPreset }
+            : {}),
         });
         if (abortController.signal.aborted) return;
         dshSessionId = created.sessionId;
@@ -2601,6 +2696,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           this.sessionUnlockedCapabilities.delete(sessionId);
           if (session.claudeSessionId && isDshBackedSessionId(session.claudeSessionId)) {
             const previousId = stripDshSessionPrefix(session.claudeSessionId);
+            this.trackInternalDshSessionId(previousId);
+            this.externalSessionSync?.stopPassiveFollow(previousId);
             this.dshToCoworkSession.delete(previousId);
             this.liveProjectionsByDshSession.delete(previousId);
           }
@@ -2619,6 +2716,17 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       this.dshToCoworkSession.set(dshSessionId, sessionId);
+      this.externalSessionSync?.stopPassiveFollow(dshSessionId);
+      this.externalSessionSync?.recordLocalBinding(
+        sessionId,
+        dshSessionId,
+        session.scheduledTaskId
+          ? CoworkSessionSource.Scheduled
+          : session.imPlatform
+            ? CoworkSessionSource.Im
+            : (session.source ?? CoworkSessionSource.Desktop),
+      );
+      this.externalSessionSync?.recordLocalRequestId(dshSessionId, requestId);
 
       const goalPrompt = isGoalCommandPrompt(prompt);
       const baseSystemPrompt = params.systemPrompt ?? session.systemPrompt ?? '';
@@ -2703,6 +2811,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         agentId,
         coworkSessionId: sessionId,
         traceId: llmTrace.traceId,
+        requestId,
         workspaceDir: params.workspaceRoot || session.cwd,
         userQuestionsDisabled: session.userQuestionsDisabled,
         ...(goalToolsEnabled ? { goalToolsEnabled: true } : {}),
@@ -2737,7 +2846,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
             ?? (persistedThinking || undefined));
         await selectModelWithReasoningFallback(client, {
           sessionId: dshSessionId,
-          provider: canonicalizeDshProviderId(modelSelection.provider),
+          provider: modelSelection.isDshPluginModel
+            ? modelSelection.provider
+            : canonicalizeDshProviderId(modelSelection.provider),
           model: modelSelection.model,
           reasoningEffort: resolvedEffort,
         });
@@ -3259,6 +3370,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     if (frame.type === 'event' || (typeof frame.type === 'string' && frame.type.includes('/'))) {
       const ev = (frame.type === 'event' ? frame.event : frame) as Record<string, unknown> | undefined;
       if (!ev || typeof ev !== 'object') return false;
+      if (typeof ev.seq === 'number') {
+        this.externalSessionSync?.recordCommittedSeq(turn.dshSessionId, ev.seq);
+      }
       const evType = typeof ev.type === 'string' ? ev.type : '';
       const data = (ev.data as Record<string, unknown> | undefined) ?? {};
       const eventTurnNumber = typeof data.turn === 'number' ? data.turn : null;

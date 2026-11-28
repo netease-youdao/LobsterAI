@@ -736,4 +736,69 @@ describe('DshTypertClient', () => {
 
     await client.close();
   });
+
+  test('calls agentPresets/list RPC and returns preset metadata', async () => {
+    const fakeWs = new FakeWebSocket();
+    let seenMethod = '';
+
+    const requester: DshHttpRequester = async (url, options) => {
+      if (url.includes('/connect?')) {
+        return {
+          status: 204,
+          headers: { 'set-cookie': 'dsh_session=preset-sess; HttpOnly' },
+          body: '',
+        };
+      }
+      if (url.endsWith('/api/agentPresets/list')) {
+        const parsed = JSON.parse(options.body ?? '{}') as { rpcId: string; method: string };
+        seenMethod = parsed.method;
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            type: 'server-response',
+            rpcId: parsed.rpcId,
+            result: {
+              ok: true,
+              value: {
+                presets: [
+                  { id: 'lobsterai', name: 'LobsterAI', isDefault: true },
+                  { id: 'pi', name: 'Pi', description: 'Minimal coding agent', order: 10, isDefault: false },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      return { status: 404, headers: {}, body: 'not found' };
+    };
+
+    const client = new DshTypertClient({
+      requester,
+      webSocketFactory: () => {
+        queueMicrotask(() => {
+          fakeWs.triggerOpen();
+          queueMicrotask(() => {
+            const openEvents = fakeWs.sent.find((m) => m.endpoint === '$events');
+            fakeWs.triggerMessage({
+              type: 'item',
+              streamId: openEvents!.streamId,
+              value: { type: 'ready', clientId: 'c-preset', host: { home: '/tmp' } },
+            });
+          });
+        });
+        return fakeWs;
+      },
+    });
+
+    await client.connect('http://127.0.0.1:41234/?token=tok');
+    const result = await client.listAgentPresets();
+    expect(seenMethod).toBe('agentPresets/list');
+    expect(result.presets).toEqual([
+      { id: 'lobsterai', name: 'LobsterAI', isDefault: true },
+      { id: 'pi', name: 'Pi', description: 'Minimal coding agent', order: 10, isDefault: false },
+    ]);
+
+    await client.close();
+  });
 });

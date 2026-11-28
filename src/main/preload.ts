@@ -819,6 +819,7 @@ contextBridge.exposeInMainWorld('electron', {
       agentId?: string;
       modelOverride?: string;
       modelPresetId?: ModelPresetId;
+      dshAgentPreset?: string;
       thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
@@ -1958,6 +1959,11 @@ contextBridge.exposeInMainWorld('electron', {
     openEcosystemView: (routeHash?: string) => ipcRenderer.invoke(DshHostIpc.OpenEcosystemView, routeHash),
     closeEcosystemView: () => ipcRenderer.invoke(DshHostIpc.CloseEcosystemView),
     listPlugins: () => ipcRenderer.invoke(DshHostIpc.ListPlugins),
+    listPluginModels: (options?: { forceRefresh?: boolean }) =>
+      ipcRenderer.invoke(DshHostIpc.ListPluginModels, options),
+    listAgentPresets: () => ipcRenderer.invoke(DshHostIpc.ListAgentPresets),
+    listPluginSkills: (options?: { cwd?: string }) =>
+      ipcRenderer.invoke(DshHostIpc.ListPluginSkills, options),
     inspectPlugin: (request: string | { spec: string; registry?: string | null }) =>
       ipcRenderer.invoke(DshHostIpc.InspectPlugin, request),
     installPlugin: (

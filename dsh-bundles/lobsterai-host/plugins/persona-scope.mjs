@@ -16,9 +16,11 @@ import {
   buildWebSearchRoutingGuidance,
   DEFAULT_AGENT_ID,
   discoverLobsterSkills,
+  isDefaultLobsterAgentPreset,
   MEMORY_WRITE_POLICY_PROMPT,
   parseSkillFrontmatter,
   readTextCached,
+  resolveAssemblyAgentPresetId,
   SIDE_CHAT_RUNTIME_CONTEXT_PROMPT,
 } from './persona-helpers.mjs';
 import {
@@ -36,10 +38,15 @@ export function apply(ctx) {
 
   // A child's persona can replace deployment:persona-prefix. The host identity
   // must still precede that persona and the editable workspace documents.
+  // Third-party agent presets (e.g. `pi` / `pi-plus`) own their own identity.
   ctx.systemPrompt.section({
     name: 'lobsterai:host-identity',
     order: -500,
-    text: 'You are LobsterAI, a desktop AI assistant running on the LobsterAI DSH host.',
+    text: (assemblyCtx) => (
+      isDefaultLobsterAgentPreset(resolveAssemblyAgentPresetId(ctx, assemblyCtx))
+        ? 'You are LobsterAI, a desktop AI assistant running on the LobsterAI DSH host.'
+        : ''
+    ),
   });
 
   // 1. Register workspace persona & long-term memory system prompt section.
@@ -51,12 +58,15 @@ export function apply(ctx) {
       const sessionId = resolveSessionId(assemblyCtx?.scope)
         ?? resolveSessionId(assemblyCtx?.agent);
       const bound = resolveSessionContext(ctx, state, sessionId);
-      const agentId = bound && typeof bound.agentId === 'string'
-        ? bound.agentId
-        : DEFAULT_AGENT_ID;
       const customSystemPrompt = bound && typeof bound.customSystemPrompt === 'string'
         ? bound.customSystemPrompt
         : '';
+      if (!isDefaultLobsterAgentPreset(resolveAssemblyAgentPresetId(ctx, assemblyCtx))) {
+        return customSystemPrompt.trim();
+      }
+      const agentId = bound && typeof bound.agentId === 'string'
+        ? bound.agentId
+        : DEFAULT_AGENT_ID;
       const workspaceDir = resolveSessionWorkspaceDir(
         ctx,
         state,

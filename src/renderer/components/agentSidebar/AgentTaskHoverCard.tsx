@@ -79,6 +79,7 @@ interface AgentTaskHoverCardProps {
   forkGitBranch?: string | null;
   indicator: AgentSidebarIndicator;
   isScheduledTask: boolean;
+  isExternalDshSession?: boolean;
   imPlatformLabel?: string | null;
   meta: AgentTaskHoverCardMeta;
 }
@@ -91,6 +92,7 @@ const AgentTaskHoverCard: React.FC<AgentTaskHoverCardProps> = ({
   forkGitBranch,
   indicator,
   isScheduledTask,
+  isExternalDshSession = false,
   imPlatformLabel,
   meta,
 }) => {
@@ -124,7 +126,8 @@ const AgentTaskHoverCard: React.FC<AgentTaskHoverCardProps> = ({
         : null;
   const sourceLabel = isScheduledTask
     ? i18nService.t('myAgentSidebarScheduledTask')
-    : imPlatformLabel || null;
+    : imPlatformLabel
+      || (isExternalDshSession ? i18nService.t('myAgentSidebarExternalDshTask') : null);
 
   return createPortal(
     <div

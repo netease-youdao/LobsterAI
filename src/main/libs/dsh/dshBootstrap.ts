@@ -26,9 +26,15 @@ import type {
 } from '../../../scheduledTask/types';
 import { type CleanupCapabilityKind } from '../../../shared/contextCleanup/constants';
 import {
+  CoworkIpcChannel,
+  CoworkSessionSource,
+  CoworkSessionStatusValue,
+} from '../../../shared/cowork/constants';
+import {
   DSH_ECOSYSTEM_PARTITION,
   DSH_PERMISSION_PRESET_KV_KEY,
   DSH_PROFILE_DIR_NAME,
+  DSH_SESSION_ID_PREFIX,
   DshHostPhase,
   type DshPermissionPreset,
   type DshProgressiveCapability,
@@ -70,10 +76,15 @@ import {
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
+import { backfillLegacySessionsToDshAsync } from '../../migration/legacySessionSeeder';
 import {
   LobsterScheduler,
   type LobsterSchedulerRunResult,
 } from '../../scheduledTask/lobsterScheduler';
+import {
+  DshExternalSessionSync,
+  type DshExternalSyncCoworkStorePort,
+} from '../agentEngine/dshExternalSessionSync';
 import {
   type DshCoworkStorePort,
   type DshModelSelection,
@@ -113,6 +124,7 @@ import {
   DshHostManager,
   type DshHostStatus,
   type DshHostWebAccessPolicy,
+  type DshWorkspaceSessionRef,
   resolveBundledDshPaths,
 } from './dshHostManager';
 import { resolveInitialDshPermissionPreset } from './dshPermissionPresetStorage';
@@ -126,6 +138,7 @@ import {
 import { executeDshScheduledTask } from './dshScheduledTurn';
 import { DshSideChatManager, type DshSideChatTurnFinishedEvent } from './dshSideChatManager';
 import { DshSubagentSessions } from './dshSubagentSessions';
+import { LocalDshSessionBindingStore } from './localDshSessionBindingStore';
 
 export interface DshCompatEngineStatus {
   phase: OpenClawEnginePhase;
@@ -192,6 +205,12 @@ export interface DshBootstrapOptions {
   skillsDir: string;
   emailConfigDir?: string;
   coworkStore: DshCoworkStorePort & {
+    createSession?: CoworkStore['createSession'];
+    addExternalMessage?: DshExternalSyncCoworkStorePort['addMessage'];
+    updateExternalSession?: DshExternalSyncCoworkStorePort['updateSession'];
+    hasMessage?: CoworkStore['hasMessage'];
+    getMaxMessageTimestamp?: CoworkStore['getMaxMessageTimestamp'];
+    listAgents?: CoworkStore['listAgents'];
     forkSession?: (options: CoworkForkSessionOptions) => CoworkSession;
     prepareScheduledTaskSession?: CoworkStore['prepareScheduledTaskSession'];
     getScheduledRunSummary?: CoworkStore['getScheduledRunSummary'];
@@ -220,6 +239,13 @@ export interface DshBootstrapOptions {
   onMcpOAuthNeedsReauth?: (serverIds: string[]) => void;
   onStatusChange?: (status: DshCompatEngineStatus, hostStatus: DshHostStatus) => void;
   onSideChatTurnFinished?: (event: DshSideChatTurnFinishedEvent) => void;
+  onRegisterExternalTurnUsage?: (params: {
+    traceId: string;
+    coworkSessionId: string;
+    userMessage: string;
+    title?: string;
+  }) => void;
+  onSettleExternalTurnUsage?: (coworkSessionId: string) => void;
   /** Optional runtime/bundle path override (useful in tests). */
   runtimePaths?: {
     runtimeDir: string;
@@ -422,6 +448,7 @@ function resolveBundledNpmBinDir(): string | undefined {
 }
 
 const DSH_CACHED_SHELL_PATH_KV_KEY = 'dsh_cached_shell_path_v1';
+const LEGACY_SESSIONS_BACKFILL_KV_KEY = 'engine.migration.v2.legacySessionsBackfillV1';
 const DSH_CLEAN_SHUTDOWN_MARKER_FILENAME = 'clean-shutdown.json';
 const FIRST_LAUNCH_SHELL_PATH_TIMEOUT_MS = 1_500;
 
@@ -525,6 +552,8 @@ export class DshBootstrap {
   readonly hostManager: DshHostManager;
   readonly channelsBridge: DshChannelsBridge;
   readonly runtimeAdapter: DshRuntimeAdapter;
+  readonly localDshBindingStore: LocalDshSessionBindingStore;
+  readonly externalSessionSync: DshExternalSessionSync | null;
   readonly subagentSessions: DshSubagentSessions;
   readonly sideChatStore: CoworkSideChatStore;
   readonly sideChatManager: DshSideChatManager;
@@ -712,6 +741,116 @@ export class DshBootstrap {
         }
       },
     });
+
+    this.localDshBindingStore = new LocalDshSessionBindingStore(options.db);
+    try {
+      const backfilled = this.localDshBindingStore.backfillFromCoworkSessions();
+      if (backfilled > 0) {
+        console.log(`[DshBootstrap] Backfilled ${backfilled} local DSH session binding(s)`);
+      }
+    } catch (error) {
+      console.warn('[DshBootstrap] Failed to backfill local DSH session bindings:', error);
+    }
+
+    if (typeof options.coworkStore.createSession === 'function') {
+      const createSessionFn = options.coworkStore.createSession;
+      const externalStorePort: DshExternalSyncCoworkStorePort = {
+        getSession: (sessionId, messageLimit) => {
+          const s = options.coworkStore.getSession(sessionId, messageLimit);
+          if (!s) return null;
+          return {
+            id: s.id,
+            title: s.title ?? '',
+            claudeSessionId: s.claudeSessionId ?? null,
+            status: s.status ?? CoworkSessionStatusValue.Idle,
+            cwd: s.cwd,
+            agentId: s.agentId ?? 'main',
+            source: s.source ?? null,
+          };
+        },
+        getSessionIdByClaudeSessionId: options.coworkStore.getSessionIdByClaudeSessionId,
+        createSession: (
+          title,
+          cwd,
+          systemPrompt,
+          executionMode,
+          activeSkillIds,
+          agentId,
+          modelOverride,
+          createOptions,
+        ) => createSessionFn(
+          title,
+          cwd,
+          systemPrompt,
+          executionMode,
+          activeSkillIds,
+          agentId,
+          modelOverride,
+          createOptions,
+        ),
+        addMessage: (sessionId, message, timestamp, addOptions) => (
+          options.coworkStore.addExternalMessage
+            ? options.coworkStore.addExternalMessage(sessionId, message, timestamp, addOptions)
+            : options.coworkStore.addMessage(sessionId, message)
+        ),
+        updateMessageContent: (sessionId, messageId, content, metadata) => {
+          options.coworkStore.updateMessageContent(sessionId, messageId, content, metadata);
+        },
+        updateSession: (sessionId, updates, updateOptions) => {
+          if (options.coworkStore.updateExternalSession) {
+            options.coworkStore.updateExternalSession(sessionId, updates, updateOptions);
+          } else {
+            options.coworkStore.updateSession(sessionId, updates);
+          }
+        },
+        hasMessage: options.coworkStore.hasMessage,
+        getMaxMessageTimestamp: options.coworkStore.getMaxMessageTimestamp,
+        listAgents: options.coworkStore.listAgents,
+      };
+      this.externalSessionSync = new DshExternalSessionSync({
+        coworkStore: externalStorePort,
+        bindingStore: this.localDshBindingStore,
+        runtimeBridge: {
+          isLocallyActiveTurn: (coworkSessionId) => this.runtimeAdapter.isLocallyActiveTurn(coworkSessionId),
+          isInternalDshSession: (dshSessionId) => (
+            this.runtimeAdapter.isInternalDshSession(dshSessionId)
+            || this.isArchivedMessageVersionDshSession(dshSessionId)
+          ),
+          registerDshSessionMapping: (dshSessionId, coworkSessionId) => {
+            this.runtimeAdapter.registerDshSessionMapping(dshSessionId, coworkSessionId);
+          },
+          emitMessage: (sessionId, message) => {
+            this.runtimeAdapter.emit('message', sessionId, message);
+          },
+          emitMessageUpdate: (sessionId, messageId, content, metadata) => {
+            this.runtimeAdapter.emit('messageUpdate', sessionId, messageId, content, metadata);
+          },
+          emitSessionStatus: (sessionId, status) => {
+            this.runtimeAdapter.emit('sessionStatus', sessionId, status);
+          },
+          emitComplete: (sessionId, claudeSessionId) => {
+            this.runtimeAdapter.emit('complete', sessionId, claudeSessionId);
+          },
+          emitError: (sessionId, error) => {
+            this.runtimeAdapter.emit('error', sessionId, error);
+          },
+          notifySessionsChanged: (sessionIds) => {
+            this.broadcastSessionsChanged(sessionIds);
+          },
+          registerExternalTurnUsageContext: (params) => {
+            options.onRegisterExternalTurnUsage?.(params);
+          },
+          settleExternalTurnUsage: (coworkSessionId) => {
+            options.onSettleExternalTurnUsage?.(coworkSessionId);
+          },
+        },
+        getDefaultCwd: options.getDefaultCwd,
+        getDefaultTitle: () => t('dshExternalSessionDefaultTitle'),
+      });
+      this.runtimeAdapter.setExternalSessionSync(this.externalSessionSync);
+    } else {
+      this.externalSessionSync = null;
+    }
 
     const combinedAllowRules: ApprovalAllowRulePort = {
       isToolAllowedAlways: (params) => (
@@ -937,6 +1076,141 @@ export class DshBootstrap {
         // ignore destroyed windows
       }
     }
+  }
+
+  private broadcastSessionsChanged(sessionIds: string[]): void {
+    if (sessionIds.length === 0 || typeof BrowserWindow?.getAllWindows !== 'function') return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds });
+      } catch {
+        // ignore destroyed windows
+      }
+    }
+  }
+
+  private isArchivedMessageVersionDshSession(dshSessionId: string): boolean {
+    const trimmed = dshSessionId.trim();
+    if (!trimmed) return false;
+    try {
+      const table = this.options.db
+        .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'cowork_message_versions'")
+        .get();
+      if (!table) return false;
+      const row = this.options.db
+        .prepare('SELECT 1 AS found FROM cowork_message_versions WHERE active = 0 AND snapshot_json LIKE ? LIMIT 1')
+        .get(`%"dsh:${trimmed}"%`);
+      return row !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  listActiveDshSessionsForWorkspaceSync(): DshWorkspaceSessionRef[] {
+    try {
+      const table = this.options.db
+        .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'cowork_sessions'")
+        .get();
+      if (!table) return [];
+      const rows = this.options.db
+        .prepare(
+          `SELECT claude_session_id, cwd, updated_at
+           FROM cowork_sessions
+           WHERE claude_session_id LIKE ?
+             AND cwd IS NOT NULL
+             AND TRIM(cwd) != ''
+           ORDER BY updated_at DESC`,
+        )
+        .all(`${DSH_SESSION_ID_PREFIX}%`) as Array<{
+          claude_session_id: string;
+          cwd: string;
+          updated_at: number | null;
+        }>;
+      const refs: DshWorkspaceSessionRef[] = [];
+      for (const row of rows) {
+        const sid = row.claude_session_id.slice(DSH_SESSION_ID_PREFIX.length).trim();
+        const cwd = row.cwd.trim();
+        if (!sid || !cwd) continue;
+        refs.push({
+          sessionId: sid,
+          cwd,
+          ...(typeof row.updated_at === 'number' ? { updatedAt: row.updated_at } : {}),
+        });
+      }
+      return refs;
+    } catch {
+      return [];
+    }
+  }
+
+  async refreshAgentWorkspacesWithSessions(
+    workspaceDirectories?: string[],
+  ): Promise<Record<string, unknown>> {
+    return this.hostManager.refreshAgentWorkspaces(
+      workspaceDirectories,
+      this.listActiveDshSessionsForWorkspaceSync(),
+    );
+  }
+
+  syncSessionTitleToDsh(coworkSessionId: string, title: string): void {
+    const trimmedTitle = title.trim();
+    if (!coworkSessionId || !trimmedTitle || !this.hostManager.isReady()) return;
+    const dshSessionId =
+      this.localDshBindingStore.getByCoworkSessionId(coworkSessionId)?.dshSessionId
+      ?? this.runtimeAdapter.resolveExistingDshSessionId(coworkSessionId);
+    if (!dshSessionId) return;
+    try {
+      void this.hostManager.getClient().renameSession(dshSessionId, trimmedTitle).catch((): void => undefined);
+    } catch {
+      // Best-effort title sync when client is transitioning.
+    }
+  }
+
+  private scheduleOneShotLegacySessionBackfill(startGeneration: number): void {
+    if (this.kvStorage.get(LEGACY_SESSIONS_BACKFILL_KV_KEY)) return;
+    const isCancelled = () => startGeneration !== this.lifecycleGeneration;
+    void backfillLegacySessionsToDshAsync({
+      db: this.options.db,
+      userDataDir: this.options.userDataDir,
+      isCancelled,
+      onSessionSeeded: ({ coworkSessionId, dshSessionId, maxSeq }) => {
+        try {
+          this.localDshBindingStore.upsertBinding({
+            coworkSessionId,
+            dshSessionId,
+            syncedSeq: maxSeq,
+            origin: CoworkSessionSource.Desktop,
+          });
+        } catch {
+          // Best-effort binding record; backfill remains idempotent.
+        }
+      },
+    }).then(async (res) => {
+      if (res.cancelled || isCancelled()) return;
+      try {
+        this.kvStorage.set(
+          LEGACY_SESSIONS_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: new Date().toISOString(),
+            sessionsPreSeeded: res.sessionsPreSeeded,
+            sessionsPreservedForLazyBridge: res.sessionsPreservedForLazyBridge,
+          }),
+        );
+      } catch {
+        // DB may have closed during rapid shutdown.
+      }
+      if (res.sessionsPreSeeded > 0) {
+        console.log(
+          `[MigrationV2] backfilled ${res.sessionsPreSeeded} legacy Cowork session(s) into DSH`,
+        );
+        if (this.hostManager.isReady()) {
+          await this.refreshAgentWorkspacesWithSessions().catch((): void => undefined);
+        }
+      }
+    }).catch((error) => {
+      console.warn('[MigrationV2] background legacy session backfill failed:', error);
+    });
   }
 
   private notifyNeedsReauthMcpIds(needsReauthIds: string[], reason: string): void {
@@ -1176,6 +1450,7 @@ export class DshBootstrap {
       this.started = true;
       this.startingInProgress = false;
       this.emitStatusChange();
+      this.scheduleOneShotLegacySessionBackfill(startGeneration);
       return this.getEngineStatus();
     } catch (error) {
       this.startingInProgress = false;
@@ -1245,6 +1520,7 @@ export class DshBootstrap {
       this.started = true;
       this.startingInProgress = false;
       this.emitStatusChange();
+      this.scheduleOneShotLegacySessionBackfill(this.lifecycleGeneration);
       return this.getEngineStatus();
     } catch (error) {
       this.startingInProgress = false;
@@ -1270,6 +1546,7 @@ export class DshBootstrap {
     this.mcpOAuthRefreshScheduler.stop();
     this.scheduler.stop();
     this.closeEcosystemWindow();
+    this.externalSessionSync?.detachClient();
     this.runtimeAdapter.stopAllSessions();
     try {
       await this.hostManager.stop();
@@ -1291,6 +1568,7 @@ export class DshBootstrap {
     this.mcpOAuthRefreshScheduler.stop();
     this.scheduler.stop();
     this.closeEcosystemWindow();
+    this.externalSessionSync?.dispose();
     this.runtimeAdapter.stopAllSessions();
     this.bridgeWiring.dispose();
     try {
@@ -1345,7 +1623,8 @@ export class DshBootstrap {
         const workspaceDirectories = [...new Set(input.agents.map(
           agent => agent.workingDirectory || this.options.getDefaultCwd(agent.id),
         ))];
-        coreSyncTasks.push(this.hostManager.syncAgents(input.agents, workspaceDirectories));
+        const knownSessions = this.listActiveDshSessionsForWorkspaceSync();
+        coreSyncTasks.push(this.hostManager.syncAgents(input.agents, workspaceDirectories, knownSessions));
       }
 
       let needsReauthIds: string[] = [];

@@ -2,14 +2,21 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { DshPermissionPreset } from '../../shared/dshEngine/hostConstants';
 import {
+  DEFAULT_DSH_AGENT_PRESET_SETTINGS,
   dispatchOpenEmbeddedPlugin,
+  DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT,
+  DSH_AGENT_PRESET_SETTINGS_STORAGE_KEY,
   DSH_OPEN_EMBEDDED_PLUGIN_EVENT,
   DSH_PERMISSION_PRESET_CHANGED_EVENT,
   DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY,
   DSH_PLUGINS_CHANGED_EVENT,
   dshHostService,
+  loadDshAgentPresetSettings,
   loadDshPluginInstallRegistry,
+  mapDshPluginModelsToStoreModels,
+  sanitizeDshAgentPresetSettings,
   sanitizePersistedInstallRegistryChoice,
+  saveDshAgentPresetSettings,
   saveDshPluginInstallRegistry,
   shouldApplyPermissionPresetEvent,
 } from './dshHost';
@@ -326,5 +333,160 @@ describe('dshHostService plugin operations', () => {
     });
     expect(sanitizePersistedInstallRegistryChoice({ kind: 'custom', url: '   ' })).toBeNull();
     expect(sanitizePersistedInstallRegistryChoice('invalid')).toBeNull();
+  });
+
+  test('maps DSH plugin models to store models with thinking config and handles listPluginModels gracefully', async () => {
+    const mapped = mapDshPluginModelsToStoreModels([
+      {
+        id: 'deepseek-v4.1-flash',
+        name: 'DeepSeek V4.1 Flash',
+        providerId: 'our-free-model',
+        providerName: 'Our Free Model',
+        description: 'Free route',
+        badge: 'Free',
+        defaultReasoningEffort: 'high',
+        reasoningEfforts: [{ id: 'low' }, { id: 'high' }],
+      },
+    ]);
+    expect(mapped).toEqual([
+      {
+        id: 'deepseek-v4.1-flash',
+        name: 'DeepSeek V4.1 Flash',
+        provider: 'Our Free Model',
+        providerKey: 'our-free-model',
+        openClawProviderId: 'our-free-model',
+        isDshPluginModel: true,
+        dshPluginBadge: 'Free',
+        description: 'Free route',
+        supportsThinking: true,
+        thinkingConfig: {
+          defaultLevel: 'high',
+          options: [
+            { level: 'low', openclawLevel: 'low' },
+            { level: 'high', openclawLevel: 'high' },
+          ],
+        },
+      },
+    ]);
+
+    // Missing preload method fails soft without throwing.
+    vi.stubGlobal('window', { electron: { dshHost: {} } });
+    expect(await dshHostService.listPluginModels()).toMatchObject({ ok: false, models: [], groups: [] });
+
+    const listPluginModels = vi.fn(async () => ({
+      ok: true,
+      groups: [],
+      models: [],
+      failures: [],
+      fetchedAt: 99,
+    }));
+    vi.stubGlobal('window', { electron: { dshHost: { listPluginModels } } });
+    expect(await dshHostService.listPluginModels({ forceRefresh: true })).toMatchObject({
+      ok: true,
+      fetchedAt: 99,
+    });
+    expect(listPluginModels).toHaveBeenCalledWith({ forceRefresh: true });
+  });
+
+  test('forwards listAgentPresets and listPluginSkills and fails soft when unavailable', async () => {
+    vi.stubGlobal('window', { electron: { dshHost: {} } });
+    expect(await dshHostService.listAgentPresets()).toMatchObject({
+      ok: false,
+      presets: [],
+      usablePresets: [],
+      hasThirdPartyPresets: false,
+    });
+    expect(await dshHostService.listPluginSkills()).toMatchObject({
+      ok: false,
+      skills: [],
+    });
+
+    const listAgentPresets = vi.fn(async () => ({
+      ok: true,
+      presets: [
+        { id: 'lobsterai', name: 'LobsterAI', isDefault: true },
+        { id: 'pi', name: 'Pi', isDefault: false },
+      ],
+      usablePresets: [
+        { id: 'lobsterai', name: 'LobsterAI', isDefault: true },
+        { id: 'pi', name: 'Pi', isDefault: false },
+      ],
+      hasThirdPartyPresets: true,
+      defaultPresetId: 'lobsterai',
+    }));
+    const listPluginSkills = vi.fn(async () => ({
+      ok: true,
+      skills: [
+        {
+          name: 'design-audit',
+          description: 'Review UI design',
+          provider: 'dsh-guizang-design',
+          modelInvocable: true,
+          userInvocable: true,
+        },
+      ],
+    }));
+
+    vi.stubGlobal('window', { electron: { dshHost: { listAgentPresets, listPluginSkills } } });
+
+    const presetsRes = await dshHostService.listAgentPresets();
+    expect(listAgentPresets).toHaveBeenCalledTimes(1);
+    expect(presetsRes.ok).toBe(true);
+    expect(presetsRes.hasThirdPartyPresets).toBe(true);
+
+    const skillsRes = await dshHostService.listPluginSkills({ cwd: '/work/demo' });
+    expect(listPluginSkills).toHaveBeenCalledWith({ cwd: '/work/demo' });
+    expect(skillsRes.ok).toBe(true);
+    expect(skillsRes.skills).toHaveLength(1);
+  });
+
+  test('sanitizes, persists, and broadcasts DSH agent preset settings', async () => {
+    expect(sanitizeDshAgentPresetSettings(null)).toEqual(DEFAULT_DSH_AGENT_PRESET_SETTINGS);
+    expect(sanitizeDshAgentPresetSettings({ enabled: true, defaultPresetId: '  ' })).toEqual({
+      enabled: true,
+      defaultPresetId: 'lobsterai',
+    });
+
+    const dispatched: Array<{ type: string; detail: unknown }> = [];
+    const storeGet = vi.fn(async () => ({
+      enabled: true,
+      defaultPresetId: 'pi-plus',
+    }));
+    const storeSet = vi.fn(async () => undefined);
+
+    vi.stubGlobal('CustomEvent', class MockCustomEvent {
+      type: string;
+      detail: unknown;
+      constructor(type: string, init?: { detail?: unknown }) {
+        this.type = type;
+        this.detail = init?.detail;
+      }
+    });
+    vi.stubGlobal('window', {
+      electron: { store: { get: storeGet, set: storeSet } },
+      dispatchEvent: (event: { type: string; detail: unknown }) => {
+        dispatched.push(event);
+        return true;
+      },
+    });
+
+    expect(await loadDshAgentPresetSettings()).toEqual({
+      enabled: true,
+      defaultPresetId: 'pi-plus',
+    });
+    expect(storeGet).toHaveBeenCalledWith(DSH_AGENT_PRESET_SETTINGS_STORAGE_KEY);
+
+    const saved = await saveDshAgentPresetSettings({
+      enabled: true,
+      defaultPresetId: ' pi ',
+    });
+    expect(saved).toEqual({
+      enabled: true,
+      defaultPresetId: 'pi',
+    });
+    expect(storeSet).toHaveBeenCalledWith(DSH_AGENT_PRESET_SETTINGS_STORAGE_KEY, saved);
+    expect(dispatched).toEqual([
+      { type: DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, detail: saved },
+    ]);
   });
 });

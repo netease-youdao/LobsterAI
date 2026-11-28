@@ -47,6 +47,9 @@ import {
 } from './promptPrefixDiagnostics';
 
 const PROXY_BIND_HOST = '127.0.0.1';
+const DSH_EXTERNAL_SESSION_HEADER = 'x-lobsterai-dsh-session';
+const LOBSTER_SESSION_HEADER = 'x-lobsterai-session';
+const EXTERNAL_USER_MESSAGE_HEADER = 'x-lobsterai-external-user-message';
 // Header names OpenAI-, Anthropic- and Google-style clients use for the provider key.
 const INBOUND_API_KEY_HEADERS = ['x-api-key', 'x-goog-api-key', 'api-key'] as const;
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -726,8 +729,18 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       writeAuthSessionChanged(res);
       return;
     }
-    if (usageContext && requestSessionKey && !requestTrace.generated) {
-      requestTrace.usageOrigin = { traceId: requestTrace.traceId, sessionId: usageContext.sessionId, owner: requestSessionKey };
+    if (requestSessionKey && !requestTrace.generated) {
+      if (usageContext) {
+        requestTrace.usageOrigin = { traceId: requestTrace.traceId, sessionId: usageContext.sessionId, owner: requestSessionKey };
+      } else {
+        const rawCoworkSession = req.headers[LOBSTER_SESSION_HEADER];
+        const coworkSessionId = typeof rawCoworkSession === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(rawCoworkSession.trim())
+          ? rawCoworkSession.trim()
+          : '';
+        if (coworkSessionId) {
+          requestTrace.usageOrigin = { traceId: requestTrace.traceId, sessionId: coworkSessionId, owner: requestSessionKey };
+        }
+      }
     }
     recordProxyRequestStarted(requestTrace, body.length);
     const parsedBody = parseJsonBody(body);
@@ -1436,6 +1449,29 @@ async function forwardRequest(
   };
 }
 
+function resolveFallbackExternalDshUsageHeaders(
+  incomingHeaders: http.IncomingHttpHeaders,
+  traceparent?: string,
+): Record<string, string> {
+  const parsed = traceparent ? parseLlmTraceparent(traceparent) : null;
+  if (!parsed) return {};
+  const rawDshSession = incomingHeaders[DSH_EXTERNAL_SESSION_HEADER];
+  const dshSessionId = typeof rawDshSession === 'string' ? rawDshSession.trim() : '';
+  if (!dshSessionId) return {};
+  const rawCoworkSession = incomingHeaders[LOBSTER_SESSION_HEADER];
+  const coworkSessionId = typeof rawCoworkSession === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(rawCoworkSession.trim())
+    ? rawCoworkSession.trim()
+    : '';
+  const sessionId = coworkSessionId || (`dsh:${dshSessionId}`).slice(0, 128);
+  const rawUserMessage = incomingHeaders[EXTERNAL_USER_MESSAGE_HEADER];
+  const encodedUserMessage = typeof rawUserMessage === 'string' ? rawUserMessage.trim() : '';
+  return {
+    [LlmUsageHeader.Session]: sessionId,
+    [LlmUsageHeader.Turn]: parsed.traceId,
+    ...(encodedUserMessage ? { [LlmUsageHeader.UserMessage]: encodedUserMessage } : {}),
+  };
+}
+
 function buildUpstreamRequestHeaders(
   accessToken: string,
   incomingHeaders: http.IncomingHttpHeaders,
@@ -1444,6 +1480,10 @@ function buildUpstreamRequestHeaders(
   traceparent?: string,
   requestModel?: unknown,
 ): Record<string, string> {
+  const registeredUsageHeaders = getLlmUsageHeaders(traceparent, requestModel, sessionKeyGetter?.());
+  const usageHeaders = Object.keys(registeredUsageHeaders).length > 0
+    ? registeredUsageHeaders
+    : resolveFallbackExternalDshUsageHeaders(incomingHeaders, traceparent);
   const headers: Record<string, string> = {
     ...accountContextHeaders,
     'Authorization': `Bearer ${accessToken}`,
@@ -1451,7 +1491,7 @@ function buildUpstreamRequestHeaders(
     [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
     [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
     ...(traceparent ? { [LLM_TRACEPARENT_HEADER]: traceparent } : {}),
-    ...getLlmUsageHeaders(traceparent, requestModel, sessionKeyGetter?.()),
+    ...usageHeaders,
   };
 
   // Forward accept header for SSE streaming

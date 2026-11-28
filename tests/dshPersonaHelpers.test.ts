@@ -512,4 +512,61 @@ describe('persona-helpers', () => {
     );
     expect(disabledCopy.map(c => c.name).sort()).toEqual(['docx', 'docx-2']);
   });
+
+  test('detects default vs third-party agent presets fail-softly for prompt retreat', async () => {
+    const {
+      DEFAULT_LOBSTER_AGENT_PRESET_ID,
+      isDefaultLobsterAgentPreset,
+      resolveAssemblyAgentPresetId,
+    } = (await loadHelpers()) as PersonaHelpers & {
+      DEFAULT_LOBSTER_AGENT_PRESET_ID: string;
+      isDefaultLobsterAgentPreset: (presetId: unknown) => boolean;
+      resolveAssemblyAgentPresetId: (ctx: unknown, assemblyCtx: unknown) => string | undefined;
+    };
+
+    expect(DEFAULT_LOBSTER_AGENT_PRESET_ID).toBe('lobsterai');
+    expect(isDefaultLobsterAgentPreset(undefined)).toBe(true);
+    expect(isDefaultLobsterAgentPreset('')).toBe(true);
+    expect(isDefaultLobsterAgentPreset('  ')).toBe(true);
+    expect(isDefaultLobsterAgentPreset('lobsterai')).toBe(true);
+    expect(isDefaultLobsterAgentPreset('pi')).toBe(false);
+    expect(isDefaultLobsterAgentPreset('pi-plus')).toBe(false);
+
+    // Prefers composedPreset(agent.ctx) when available.
+    const ctxComposed = {
+      get: (key: string) => (key === 'agentPresets'
+        ? {
+            composedPreset: () => 'pi',
+            presetForSession: () => 'lobsterai',
+          }
+        : undefined),
+    };
+    expect(resolveAssemblyAgentPresetId(ctxComposed, { agent: { ctx: {}, session: {} } })).toBe('pi');
+
+    // Falls back to presetForSession(agent.session) when composedPreset returns empty/undefined.
+    const ctxSessionFallback = {
+      get: (key: string) => (key === 'agentPresets'
+        ? {
+            composedPreset: () => undefined,
+            presetForSession: () => 'pi-plus',
+          }
+        : undefined),
+    };
+    expect(resolveAssemblyAgentPresetId(ctxSessionFallback, { agent: { ctx: {}, session: {} } })).toBe('pi-plus');
+
+    // Fails soft when agentPresets service is absent or throws.
+    expect(resolveAssemblyAgentPresetId({ get: () => undefined }, { agent: {} })).toBeUndefined();
+    expect(
+      resolveAssemblyAgentPresetId(
+        {
+          get: () => ({
+            composedPreset: () => {
+              throw new Error('boom');
+            },
+          }),
+        },
+        { agent: { ctx: {} } },
+      ),
+    ).toBeUndefined();
+  });
 });

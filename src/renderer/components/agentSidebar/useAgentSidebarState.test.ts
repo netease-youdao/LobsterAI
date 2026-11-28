@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 
 import {
+  CoworkSessionSource,
   type CoworkSessionStatus,
   CoworkSessionStatusValue,
   type CoworkSessionSummary,
@@ -338,4 +339,24 @@ test('removeAgentSidebarAgentTaskPreviews preserves state when agent cache is mi
   };
 
   expect(removeAgentSidebarAgentTaskPreviews(previews, 'missing-agent')).toBe(previews);
+});
+
+test('toAgentSidebarTaskNode marks external DSH sessions and preserves source across pinned reconciliation', () => {
+  const extSession: CoworkSessionSummary = {
+    ...makeSession('ext-1', 100, 200, CoworkSessionStatusValue.Completed, true, 1),
+    source: CoworkSessionSource.DshExternal,
+  };
+  const desktopSession: CoworkSessionSummary = {
+    ...makeSession('desk-1', 100, 200),
+    source: CoworkSessionSource.Desktop,
+  };
+
+  expect(toAgentSidebarTaskNode(extSession, null, new Set(), new Set()).isExternalDshSession).toBe(true);
+  expect(toAgentSidebarTaskNode(desktopSession, null, new Set(), new Set()).isExternalDshSession).toBe(false);
+
+  const reconciled = reconcilePinnedSidebarSessions([extSession], [
+    { ...extSession, title: 'Renamed External', source: undefined },
+  ]);
+  expect(reconciled[0].title).toBe('Renamed External');
+  expect(reconciled[0].source).toBe(CoworkSessionSource.DshExternal);
 });

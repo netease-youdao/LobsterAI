@@ -107,6 +107,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
+    dshExternalSessionDefaultTitle: 'DSH 会话',
     coworkUnsentRetryUnavailable: '这条消息的状态已变化，请查看当前对话。',
     coworkEditUnsupported: '历史消息已改为从该消息新建分支会话，不再支持原地覆盖编辑。',
     coworkWorkspaceChangesTitle: '工作区变更',
@@ -200,6 +201,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorServerError: '服务端出现错误，请稍后重试。',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     serverModelMetadataUnavailable: '套餐模型信息暂不可用，请刷新后重试。',
+    dshPluginModelUnavailable: '所选插件模型（{model}）当前不可用，请检查对应插件状态或在模型选择器中切换其他模型。',
     serverModelRuntimeProfileUnsupported: '该套餐模型的任务兼容配置不受当前版本支持。',
     serverModelToolCallingUnavailable: '该模型尚未开放任务工具调用。',
     serverModelAgenticNotReady: '该模型正在进行任务能力验证，请稍后再试。',
@@ -584,6 +586,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',
+    dshExternalSessionDefaultTitle: 'DSH Session',
     coworkUnsentRetryUnavailable: 'This message has changed. Check the current conversation.',
     coworkEditUnsupported: 'In-place historical message editing has been replaced by forking a new session from any message.',
     coworkWorkspaceChangesTitle: 'Workspace changes',
@@ -697,6 +700,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Agent tool calling is not enabled for this model yet.',
     serverModelAgenticNotReady:
       'This model is still undergoing agent capability validation. Please try again later.',
+    dshPluginModelUnavailable:
+      'The selected plugin model ({model}) is currently unavailable. Check the plugin status or choose another model.',
     coworkErrorModelStreamEmptySseData:
       'Model stream format error: the model service returned an empty SSE data frame. Please retry later or check the current model proxy configuration.',
     coworkErrorModelStreamOnlyEmptySseData:

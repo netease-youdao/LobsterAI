@@ -961,7 +961,10 @@ export function resolveRequestTurnTraceId(request, bound) {
   if (purpose && TURN_TRACE_EXCLUDED_PURPOSES.has(purpose)) {
     return undefined;
   }
-  const rawTraceId = typeof bound?.traceId === 'string' ? bound.traceId.trim().toLowerCase() : '';
+  const candidate = bound?.externalTurnActive === true
+    ? bound.externalTurnTraceId
+    : bound?.traceId;
+  const rawTraceId = typeof candidate === 'string' ? candidate.trim().toLowerCase() : '';
   if (!rawTraceId || rawTraceId === INVALID_W3C_TRACE_ID || !W3C_TRACE_ID_RE.test(rawTraceId)) {
     return undefined;
   }
@@ -981,7 +984,15 @@ export function resolveRequestTurnTraceId(request, bound) {
  *   request?: { purpose?: unknown };
  *   headers: Headers;
  *   instanceId?: unknown;
- *   bound?: { coworkSessionId?: unknown; traceId?: unknown };
+ *   sessionId?: unknown;
+ *   bound?: {
+ *     coworkSessionId?: unknown;
+ *     dshSessionId?: unknown;
+ *     traceId?: unknown;
+ *     externalTurnActive?: unknown;
+ *     externalTurnTraceId?: unknown;
+ *     externalTurnUserText?: unknown;
+ *   };
  *   buildTraceParent: (traceId: string) => string;
  * }} params
  */
@@ -989,6 +1000,7 @@ export function applyLobsterRequestHeaders({
   request,
   headers,
   instanceId,
+  sessionId,
   bound,
   buildTraceParent,
 }) {
@@ -997,6 +1009,16 @@ export function applyLobsterRequestHeaders({
   }
   if (bound && typeof bound.coworkSessionId === 'string' && bound.coworkSessionId.length > 0) {
     headers.set('x-lobsterai-session', bound.coworkSessionId);
+  }
+  const dshSessionId =
+    (typeof bound?.dshSessionId === 'string' && bound.dshSessionId.trim())
+    || (typeof sessionId === 'string' && sessionId.trim())
+    || '';
+  if (bound?.externalTurnActive === true && dshSessionId) {
+    headers.set('x-lobsterai-dsh-session', dshSessionId);
+    if (typeof bound.externalTurnUserText === 'string' && bound.externalTurnUserText.length > 0) {
+      headers.set('x-lobsterai-external-user-message', encodeURIComponent(bound.externalTurnUserText));
+    }
   }
   if (!headers.has('traceparent')) {
     const turnTraceId = resolveRequestTurnTraceId(request, bound);

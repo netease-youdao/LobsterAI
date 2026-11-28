@@ -21,6 +21,7 @@ import {
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
 import { repairForkedSessionToolUseIds } from './libs/coworkForkToolUseIds';
+import { ensureLocalDshSessionBindingsTable } from './libs/dsh/localDshSessionBindingStore';
 import { migrateAgentCollaboration } from './migration/agentCollaborationMigration';
 
 type ChangePayload<T = unknown> = {
@@ -172,10 +173,13 @@ export class SqliteStore {
         fork_git_branch TEXT,
         fork_git_base_ref TEXT,
         goal_json TEXT,
+        source TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
     `);
+
+    ensureLocalDshSessionBindingsTable(this.db);
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cowork_messages (
@@ -518,6 +522,11 @@ export class SqliteStore {
 
       if (!colNames.includes('fork_workspace_path')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN fork_workspace_path TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('source')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN source TEXT;');
         this.didRunMigration = true;
       }
 
