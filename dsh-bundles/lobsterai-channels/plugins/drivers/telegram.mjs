@@ -1,3 +1,7 @@
+import {
+  isStrictDirectMessageAllowed,
+  isStrictGroupMessageAllowed,
+} from './access-policy.mjs';
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
 import {
   createTimeoutSignal,
@@ -10,6 +14,8 @@ import {
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const API_TIMEOUT_MS = 15_000;
 const GENERAL_TOPIC_ID = 1;
+const TELEGRAM_USER_PREFIX_RE = /^(?:tg|telegram|user):/i;
+const TELEGRAM_GROUP_PREFIX_RE = /^(?:tg|telegram|group|chat):/i;
 
 function acceptsGroupMessage(msg, bot, config) {
   if (config.groupPolicy === 'disabled') return false;
@@ -171,10 +177,22 @@ export class TelegramChannelDriver extends BaseChannelDriver {
 
   async handleMessage(msg, signal) {
     const senderId = String(msg.from?.id ?? '').trim();
-    const chatId = String(msg.chat?.id ?? '');
+    const chatId = String(msg.chat?.id ?? '').trim();
     const isGroup = msg.chat?.type !== 'private';
-    if (!chatId || !senderId || !this.isSenderAllowed(senderId)) return;
-    if (isGroup && !acceptsGroupMessage(msg, this.botInfo, this.config)) return;
+    if (!chatId || !senderId) return;
+    if (isGroup) {
+      const groupConfig = this.config.groups?.[chatId] ?? this.config.groups?.['*'];
+      if (!isStrictGroupMessageAllowed(this.config, {
+        groupCandidates: [chatId],
+        senderId,
+        groupConfig,
+        groupPrefixPattern: TELEGRAM_GROUP_PREFIX_RE,
+        senderPrefixPattern: TELEGRAM_USER_PREFIX_RE,
+      })) return;
+      if (!acceptsGroupMessage(msg, this.botInfo, this.config)) return;
+    } else if (!isStrictDirectMessageAllowed(this.config, senderId, TELEGRAM_USER_PREFIX_RE)) {
+      return;
+    }
 
     const { text, attachments } = await this.extractInboundPayload(msg, signal);
     if (!text && attachments.length === 0) return;

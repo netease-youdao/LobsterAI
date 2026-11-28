@@ -134,12 +134,27 @@ export interface TelegramOpenClawGroupConfig {
   systemPrompt?: string;
 }
 
+export const TelegramDmPolicy = {
+  Pairing: 'pairing',
+  Allowlist: 'allowlist',
+  Open: 'open',
+  Disabled: 'disabled',
+} as const;
+export type TelegramDmPolicy = typeof TelegramDmPolicy[keyof typeof TelegramDmPolicy];
+
+export const ImGroupPolicy = {
+  Allowlist: 'allowlist',
+  Open: 'open',
+  Disabled: 'disabled',
+} as const;
+export type ImGroupPolicy = typeof ImGroupPolicy[keyof typeof ImGroupPolicy];
+
 export interface TelegramOpenClawConfig {
   enabled: boolean;
   botToken: string;
-  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  dmPolicy: TelegramDmPolicy;
   allowFrom: string[];
-  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupPolicy: ImGroupPolicy;
   groupAllowFrom: string[];
   groups: Record<string, TelegramOpenClawGroupConfig>;
   historyLimit: number;
@@ -205,7 +220,7 @@ export interface DiscordOpenClawConfig {
   botToken: string;
   dmPolicy: DiscordDmPolicy;
   allowFrom: string[];
-  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupPolicy: ImGroupPolicy;
   groupAllowFrom: string[];
   guilds: Record<string, DiscordOpenClawGuildConfig>;
   historyLimit: number;
@@ -775,9 +790,9 @@ export const DEFAULT_FEISHU_OPENCLAW_CONFIG: FeishuOpenClawConfig = {
 export const DEFAULT_DISCORD_OPENCLAW_CONFIG: DiscordOpenClawConfig = {
   enabled: false,
   botToken: '',
-  dmPolicy: DiscordDmPolicy.Open,
+  dmPolicy: DiscordDmPolicy.Allowlist,
   allowFrom: [],
-  groupPolicy: 'allowlist',
+  groupPolicy: ImGroupPolicy.Allowlist,
   groupAllowFrom: [],
   guilds: { '*': { requireMention: true } },
   historyLimit: 50,
@@ -818,9 +833,9 @@ export const DEFAULT_NETEASE_BEE_CONFIG: NeteaseBeeChanConfig = {
 export const DEFAULT_TELEGRAM_OPENCLAW_CONFIG: TelegramOpenClawConfig = {
   enabled: false,
   botToken: '',
-  dmPolicy: 'open',
+  dmPolicy: TelegramDmPolicy.Allowlist,
   allowFrom: [],
-  groupPolicy: 'allowlist',
+  groupPolicy: ImGroupPolicy.Allowlist,
   groupAllowFrom: [],
   groups: { '*': { requireMention: true } },
   historyLimit: 50,

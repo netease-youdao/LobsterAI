@@ -1,6 +1,13 @@
-import { expect,test } from 'vitest';
+import { expect, test } from 'vitest';
 
 import { IMStore } from './imStore';
+import {
+  DEFAULT_DISCORD_OPENCLAW_CONFIG,
+  DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
+  DiscordDmPolicy,
+  ImGroupPolicy,
+  TelegramDmPolicy,
+} from './types';
 
 class FakeDb {
   private store: Map<string, string> = new Map();
@@ -452,4 +459,106 @@ test('IMStore preserves persisted Weixin credentials across partial or undefined
     baseUrl: 'https://sz.ilinkai.weixin.qq.com',
     userId: 'wxid_123@im.wechat',
   });
+});
+
+test('Telegram and Discord default to fail-closed allowlist policy', () => {
+  expect(DEFAULT_TELEGRAM_OPENCLAW_CONFIG.dmPolicy).toBe(TelegramDmPolicy.Allowlist);
+  expect(DEFAULT_TELEGRAM_OPENCLAW_CONFIG.groupPolicy).toBe(ImGroupPolicy.Allowlist);
+  expect(DEFAULT_DISCORD_OPENCLAW_CONFIG.dmPolicy).toBe(DiscordDmPolicy.Allowlist);
+  expect(DEFAULT_DISCORD_OPENCLAW_CONFIG.groupPolicy).toBe(ImGroupPolicy.Allowlist);
+});
+
+test('IMStore one-time migration hardens existing Telegram and Discord instances without touching domestic IM channels', () => {
+  const db = new FakeDb();
+  const seed = (key: string, value: Record<string, unknown>) => {
+    db.prepare('INSERT INTO im_config (key, value, updated_at) VALUES (?, ?, ?)').run(
+      key,
+      JSON.stringify(value),
+      1000,
+    );
+  };
+
+  seed('telegram:tg-1', {
+    instanceId: 'tg-1',
+    instanceName: 'Telegram Bot 1',
+    enabled: true,
+    botToken: 'tok-1',
+    dmPolicy: 'open',
+    allowFrom: [],
+    groupPolicy: 'open',
+    groupAllowFrom: [],
+  });
+  seed('telegram:tg-2', {
+    instanceId: 'tg-2',
+    instanceName: 'Telegram Bot 2',
+    enabled: true,
+    botToken: 'tok-2',
+    dmPolicy: 'disabled',
+    allowFrom: ['8322789714'],
+    groupPolicy: 'disabled',
+    groupAllowFrom: [],
+  });
+  seed('discord:dc-1', {
+    instanceId: 'dc-1',
+    instanceName: 'Discord Bot 1',
+    enabled: true,
+    botToken: 'dc-tok',
+    dmPolicy: 'pairing',
+    allowFrom: ['42'],
+    groupPolicy: 'open',
+    groupAllowFrom: ['80'],
+  });
+  seed('feishu:fs-1', {
+    instanceId: 'fs-1',
+    instanceName: 'Feishu Bot 1',
+    enabled: true,
+    appId: 'cli_a',
+    appSecret: 'sec_a',
+    dmPolicy: 'open',
+    allowFrom: [],
+    groupPolicy: 'open',
+    groupAllowFrom: [],
+  });
+  seed('weixin', {
+    enabled: true,
+    accountId: 'wx@im.bot',
+    dmPolicy: 'open',
+    allowFrom: [],
+    groupPolicy: 'open',
+    groupAllowFrom: [],
+  });
+
+  const store = new IMStore(db as unknown as ConstructorParameters<typeof IMStore>[0]);
+
+  expect(store.getTelegramInstanceConfig('tg-1')).toMatchObject({
+    dmPolicy: TelegramDmPolicy.Allowlist,
+    allowFrom: [],
+    groupPolicy: ImGroupPolicy.Allowlist,
+    groupAllowFrom: [],
+  });
+  expect(store.getTelegramInstanceConfig('tg-2')).toMatchObject({
+    dmPolicy: TelegramDmPolicy.Disabled,
+    allowFrom: ['8322789714'],
+    groupPolicy: ImGroupPolicy.Disabled,
+  });
+  expect(store.getDiscordInstanceConfig('dc-1')).toMatchObject({
+    dmPolicy: DiscordDmPolicy.Allowlist,
+    allowFrom: ['42'],
+    groupPolicy: ImGroupPolicy.Allowlist,
+    groupAllowFrom: ['80'],
+  });
+  // Domestic channels stay untouched
+  expect(store.getFeishuInstanceConfig('fs-1')).toMatchObject({
+    dmPolicy: 'open',
+    groupPolicy: 'open',
+  });
+  expect(store.getWeixinConfig()).toMatchObject({
+    dmPolicy: 'open',
+    groupPolicy: 'open',
+  });
+
+  // Explicit user change to 'open' after the one-time migration is preserved across restarts
+  store.setTelegramInstanceConfig('tg-1', { dmPolicy: TelegramDmPolicy.Open });
+  const reloadedStore = new IMStore(db as unknown as ConstructorParameters<typeof IMStore>[0]);
+  expect(reloadedStore.getTelegramInstanceConfig('tg-1')?.dmPolicy).toBe(TelegramDmPolicy.Open);
 });

@@ -750,7 +750,7 @@ export const DEFAULT_FEISHU_OPENCLAW_CONFIG: FeishuOpenClawConfig = {
 export const DEFAULT_DISCORD_OPENCLAW_CONFIG: DiscordOpenClawConfig = {
   enabled: false,
   botToken: '',
-  dmPolicy: 'open',
+  dmPolicy: 'allowlist',
   allowFrom: [],
   groupPolicy: 'allowlist',
   groupAllowFrom: [],
@@ -792,7 +792,7 @@ export const DEFAULT_NETEASE_BEE_CONFIG: NeteaseBeeChanConfig = {
 export const DEFAULT_TELEGRAM_OPENCLAW_CONFIG: TelegramOpenClawConfig = {
   enabled: false,
   botToken: '',
-  dmPolicy: 'open',
+  dmPolicy: 'allowlist',
   allowFrom: [],
   groupPolicy: 'allowlist',
   groupAllowFrom: [],

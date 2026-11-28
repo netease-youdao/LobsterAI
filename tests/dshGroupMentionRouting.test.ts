@@ -11,7 +11,10 @@ afterEach(() => vi.unstubAllGlobals());
 async function telegramDriver(config = {}) {
   const { TelegramChannelDriver } = await import(telegramModule);
   const onInbound = vi.fn();
-  const driver = new TelegramChannelDriver({ config, onInbound });
+  const driver = new TelegramChannelDriver({
+    config: { dmPolicy: 'open', groupPolicy: 'open', ...config },
+    onInbound,
+  });
   driver.setState('connected', null, { id: 50, username: 'Our_Bot' });
   return { driver, onInbound };
 }
@@ -70,7 +73,14 @@ test.each([
 ] as const)('Discord routes %s', async (_name, fields, accepted) => {
   const { DiscordChannelDriver } = await import(discordModule);
   const onInbound = vi.fn();
-  const driver = new DiscordChannelDriver({ config: { guilds: { '*': { requireMention: true }, '82': { requireMention: false } } }, onInbound });
+  const driver = new DiscordChannelDriver({
+    config: {
+      dmPolicy: 'open',
+      groupPolicy: 'open',
+      guilds: { '*': { requireMention: true }, '82': { requireMention: false } },
+    },
+    onInbound,
+  });
   driver.botUserId = '50';
   await driver.handleMessage({ ...discordMessage, ...fields });
   expect(onInbound).toHaveBeenCalledTimes(accepted ? 1 : 0);

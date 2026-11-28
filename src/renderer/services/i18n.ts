@@ -4875,6 +4875,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imTelegramDisableInstance: '禁用此实例',
     imTelegramTokenHint: '从 @BotFather 获取 Bot Token',
     imTelegramUserIdPlaceholder: '输入 Telegram User ID（如 tg:123456789）',
+    imTelegramAllowlistEmptyHint:
+      '当前私聊策略为「白名单」且白名单为空，所有私聊消息都会被静默拦截。请先在下方 Allow From 中添加你自己的 Telegram User ID（可通过 @userinfobot 获取）。',
     imDiscordClickToRename: '点击重命名',
     imDiscordDeleteInstance: '删除此实例',
     imDiscordEnableInstance: '启用此实例',
@@ -4883,6 +4885,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imDiscordUserIdPlaceholder: '输入 Discord User ID',
     imDiscordServerIdPlaceholder: '输入 Discord Server ID',
     imDiscordGuildIdPlaceholder: '输入 Guild ID 并回车',
+    imDiscordAllowlistEmptyHint:
+      '当前私聊策略为「白名单」且白名单为空，所有私聊消息都会被静默拦截。请先在下方 Allow From 中添加你自己的 Discord User ID（在 Discord 开启开发者模式后右键复制用户 ID）。',
+    imPublicBotOpenPolicyWarning:
+      '安全提示：开放模式允许公网任意陌生人向此机器人发消息并触发本机任务，存在高安全风险。强烈建议切换为「白名单」并仅添加你自己的 User ID。',
     imWecomCredentialHint: '从企业微信管理后台获取 Bot ID 和 Secret',
     imWecomUserIdPlaceholder: '输入企业微信 User ID',
     imWecomBotIdPlaceholder: '您的 Bot ID',
@@ -10692,6 +10698,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imTelegramDisableInstance: 'Disable this instance',
     imTelegramTokenHint: 'Get Bot Token from @BotFather',
     imTelegramUserIdPlaceholder: 'Enter Telegram User ID (e.g. tg:123456789)',
+    imTelegramAllowlistEmptyHint:
+      'DM policy is set to Allowlist with no allowed users, so all direct messages are silently blocked. Add your own Telegram User ID (available via @userinfobot) under Allow From below.',
     imDiscordClickToRename: 'Click to rename',
     imDiscordDeleteInstance: 'Delete this instance',
     imDiscordEnableInstance: 'Enable this instance',
@@ -10700,6 +10708,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imDiscordUserIdPlaceholder: 'Enter Discord User ID',
     imDiscordServerIdPlaceholder: 'Enter Discord Server ID',
     imDiscordGuildIdPlaceholder: 'Enter Guild ID and press Enter',
+    imDiscordAllowlistEmptyHint:
+      'DM policy is set to Allowlist with no allowed users, so all direct messages are silently blocked. Add your own Discord User ID (enable Developer Mode, then copy your User ID) under Allow From below.',
+    imPublicBotOpenPolicyWarning:
+      'Security warning: Open mode lets anyone on the internet message this bot and trigger tasks on your machine. Strongly recommend switching to Allowlist and adding only your own User ID.',
     imWecomCredentialHint: 'Get Bot ID and Secret from WeCom Admin Console',
     imWecomUserIdPlaceholder: 'Enter WeCom User ID',
     imWecomBotIdPlaceholder: 'Your Bot ID',

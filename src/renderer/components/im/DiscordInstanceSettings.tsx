@@ -114,12 +114,21 @@ const DiscordInstanceSettings: React.FC<DiscordInstanceSettingsProps> = ({
   const [guildIdInput, setGuildIdInput] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState(instance.instanceName);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    () => instance.dmPolicy === 'allowlist' && instance.allowFrom.length === 0,
+  );
 
   // Sync nameValue when instance changes
   React.useEffect(() => {
     setNameValue(instance.instanceName);
     setEditingName(false);
   }, [instance.instanceId, instance.instanceName]);
+
+  React.useEffect(() => {
+    if (instance.dmPolicy === 'allowlist' && instance.allowFrom.length === 0) {
+      setAdvancedOpen(true);
+    }
+  }, [instance.instanceId, instance.dmPolicy, instance.allowFrom.length]);
 
   const handleNameBlur = () => {
     setEditingName(false);
@@ -252,8 +261,24 @@ const DiscordInstanceSettings: React.FC<DiscordInstanceSettingsProps> = ({
         </p>
       </div>
 
+      {/* Security / Allowlist Guidance */}
+      {instance.dmPolicy === 'allowlist' && instance.allowFrom.length === 0 && (
+        <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+          {i18nService.t('imDiscordAllowlistEmptyHint')}
+        </div>
+      )}
+      {instance.dmPolicy === 'open' && instance.allowFrom.length === 0 && (
+        <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+          {i18nService.t('imPublicBotOpenPolicyWarning')}
+        </div>
+      )}
+
       {/* Advanced Settings (collapsible) */}
-      <details className="group">
+      <details
+        className="group"
+        open={advancedOpen}
+        onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+      >
         <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
           {i18nService.t('imAdvancedSettings')}
         </summary>
@@ -272,10 +297,10 @@ const DiscordInstanceSettings: React.FC<DiscordInstanceSettingsProps> = ({
               }}
               className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
             >
-              <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
               <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
-              <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
               <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
+              <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+              <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
             </select>
           </div>
 
