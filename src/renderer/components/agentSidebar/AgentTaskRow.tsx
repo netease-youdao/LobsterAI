@@ -1,5 +1,5 @@
 import { ShareIcon } from '@heroicons/react/20/solid';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, PuzzlePieceIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -104,6 +104,8 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   const imPlatformLogo = task.isScheduledTask ? null : getIMSessionPlatformLogo(task.imPlatform);
   const imPlatformLabel = task.isScheduledTask ? null : getIMSessionPlatformLabel(task.imPlatform);
   const imPlatformIconClassName = task.isScheduledTask ? null : getIMSessionPlatformIconClassName(task.imPlatform);
+  const showExternalDshIcon = Boolean(task.isExternalDshSession) && !task.isScheduledTask && !imPlatformLogo;
+  const externalDshTaskLabel = showExternalDshIcon ? i18nService.t('myAgentSidebarExternalDshTask') : null;
   // Keep a legacy prefix visible while editing so users can deliberately retain
   // or remove the heuristic marker. Persisted markers do not depend on the title.
   const editableTitle = task.isScheduledTask && hasLegacyScheduledTaskTitle(task.title)
@@ -574,6 +576,18 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               />
             </span>
           )}
+          {showExternalDshIcon && externalDshTaskLabel && (
+            <span
+              className={`inline-flex h-4 w-4 shrink-0 items-center justify-center ${
+                isSelectionDisabled ? 'text-foreground/30' : 'text-secondary'
+              }`}
+              role="img"
+              title={externalDshTaskLabel}
+              aria-label={externalDshTaskLabel}
+            >
+              <PuzzlePieceIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+          )}
           <span
             className={`min-w-0 flex-1 ${isActivityRow ? 'flex flex-col gap-0.5' : 'truncate'}`}
             onDoubleClick={handleTitleDoubleClick}
@@ -706,6 +720,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           forkGitBranch={task.forkGitBranch}
           indicator={task.indicator}
           isScheduledTask={task.isScheduledTask}
+          isExternalDshSession={Boolean(task.isExternalDshSession)}
           imPlatformLabel={imPlatformLabel}
           meta={hoverMeta}
         />

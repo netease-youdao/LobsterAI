@@ -30,6 +30,7 @@ export interface AgentSidebarTaskNode {
   cwd?: string;
   forkGitBranch?: string | null;
   imPlatform?: Platform | null;
+  isExternalDshSession?: boolean;
   updatedAt: number;
   createdAt: number;
   indicator: AgentSidebarIndicator;

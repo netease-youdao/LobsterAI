@@ -18,6 +18,7 @@ import {
   ArrowPathIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CpuChipIcon,
   EllipsisHorizontalIcon,
   ExclamationTriangleIcon,
   FolderOpenIcon,
@@ -29,8 +30,11 @@ import {
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  DEFAULT_DSH_AGENT_PRESET_SETTINGS,
   dispatchOpenEmbeddedPlugin,
+  DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT,
   DSH_PLUGIN_ORDER_CHANGED_EVENT,
+  type DshAgentPresetSettings,
   dshHostService,
   type DshHostStatusSnapshot,
   type DshPluginEntry,
@@ -38,6 +42,7 @@ import {
   type DshPluginOrderChangedDetail,
   type DshPluginUpdateOutcome,
   type DshPluginVersionList,
+  loadDshAgentPresetSettings,
   loadDshPluginOrder,
   saveDshPluginOrder,
 } from '@/services/dshHost';
@@ -55,6 +60,7 @@ import {
   SETTINGS_ITEM_TITLE_TEXT,
   SETTINGS_META_TEXT,
 } from '../settings/settingsTypography';
+import { DshAdvancedRuntimeModeModal } from './DshAdvancedRuntimeModeModal';
 import {
   BackgroundInstallOutcome,
   DshPluginInstallModal,
@@ -109,6 +115,8 @@ export const DshPluginEcosystemView: React.FC = () => {
   const [checkingAllUpdates, setCheckingAllUpdates] = useState(false);
   const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({});
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [runtimeModeModalOpen, setRuntimeModeModalOpen] = useState(false);
+  const [runtimeModeEnabled, setRuntimeModeEnabled] = useState(DEFAULT_DSH_AGENT_PRESET_SETTINGS.enabled);
   const [coreExpanded, setCoreExpanded] = useState(false);
 
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
@@ -125,6 +133,22 @@ export const DshPluginEcosystemView: React.FC = () => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void loadDshAgentPresetSettings().then((loaded) => {
+      if (active) setRuntimeModeEnabled(loaded.enabled);
+    });
+    const onSettingsChanged = (event: Event) => {
+      const detail = (event as CustomEvent<DshAgentPresetSettings>).detail;
+      if (active && detail) setRuntimeModeEnabled(detail.enabled);
+    };
+    window.addEventListener(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    return () => {
+      active = false;
+      window.removeEventListener(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, onSettingsChanged);
     };
   }, []);
 
@@ -569,6 +593,27 @@ export const DshPluginEcosystemView: React.FC = () => {
                 >
                   <FolderOpenIcon className="h-3.5 w-3.5 text-secondary" />
                   {t('dshPluginsOpenDataDir')}
+                </button>
+
+                <div className="my-1 h-px bg-border" role="separator" />
+
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setRuntimeModeModalOpen(true);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-surface-raised"
+                >
+                  <CpuChipIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
+                  <span className="min-w-0 flex-1 truncate">{t('dshAdvancedRuntimeModeTitle')}</span>
+                  {runtimeModeEnabled && (
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                      aria-hidden="true"
+                    />
+                  )}
                 </button>
               </div>
             )}
@@ -1034,6 +1079,13 @@ export const DshPluginEcosystemView: React.FC = () => {
           )}
         </section>
       )}
+
+      {/* Advanced Runtime Modes Modal */}
+      <DshAdvancedRuntimeModeModal
+        isOpen={runtimeModeModalOpen}
+        onClose={() => setRuntimeModeModalOpen(false)}
+        hostHealthy={hostHealthy}
+      />
 
       {/* Install Modal */}
       <DshPluginInstallModal

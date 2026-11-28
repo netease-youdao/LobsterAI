@@ -7,6 +7,7 @@ import type {
   CoworkMemoryStats as SharedCoworkMemoryStats,
   CoworkMemoryStatus as SharedCoworkMemoryStatus,
   CoworkMemoryStatusFilter as SharedCoworkMemoryStatusFilter,
+  CoworkSessionSource,
   CoworkSessionStatus,
   CoworkTempDirKind,
   CoworkUserMemoryEntry as SharedCoworkUserMemoryEntry,
@@ -49,7 +50,11 @@ import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 // Cowork image attachment for vision-capable models
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
 
-export { type CoworkSessionStatus,CoworkSessionStatusValue } from '../../shared/cowork/constants';
+export {
+  CoworkSessionSource,
+  type CoworkSessionStatus,
+  CoworkSessionStatusValue,
+} from '../../shared/cowork/constants';
 
 // Cowork message types
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
@@ -203,10 +208,12 @@ export interface CoworkSession {
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   permissionPreset?: DshPermissionPreset | null;
+  dshAgentPreset?: string | null;
   activeSkillIds: string[];
   activeKitIds?: string[];
   agentId: string;
   imPlatform?: Platform | null;
+  source?: CoworkSessionSource | null;
   messages: CoworkMessage[];
   /** Offset of the first loaded message in the full message history. 0 means loaded from the beginning. */
   messagesOffset: number;
@@ -393,6 +400,7 @@ export interface CoworkSessionSummary {
   cwd?: string;
   agentId?: string;
   imPlatform?: Platform | null;
+  source?: CoworkSessionSource | null;
   parentSessionId?: string | null;
   forkedAt?: number | null;
   forkMode?: CoworkForkMode;
@@ -448,6 +456,7 @@ export interface CoworkStartOptions {
   agentId?: string;
   modelOverride?: string;
   modelPresetId?: ModelPresetId;
+  dshAgentPreset?: string;
   thinkingLevel?: ModelThinkingLevel;
   imageAttachments?: CoworkImageAttachment[];
   mediaSelection?: MediaSelection;

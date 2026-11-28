@@ -35,6 +35,10 @@ import {
   resolveModelThinkingLevelMap,
   sanitizeExposedModelInfo,
 } from './model-bridge-helpers.mjs';
+import {
+  deriveExternalTurnTraceId,
+  extractExternalUserMessageText,
+} from './ops-rpc-helpers.mjs';
 import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-model-bridge';
@@ -499,6 +503,47 @@ export function apply(ctx) {
     };
   };
 
+  // Assign a deterministic per-turn W3C traceId whenever a top-level session
+  // receives a user/message from an external DSH client (e.g. dsh-pocket) whose
+  // rpcId does not match LobsterAI's active bindSessionContext requestId.
+  // Runs synchronously inside Session.append BEFORE the agent loop issues its
+  // first LLM request, so OpenClawTokenProxy & lobsterai-server attribute every
+  // step (and child subagent call) of that external turn to the exact traceId.
+  ctx.on('session/event', (session, event) => {
+    if (!session || !event || event.type !== 'user/message') return;
+    if (session.header?.origin === 'subagent') return;
+    if (event.surfaceOp !== undefined && event.surfaceOp !== 'append') return;
+    const data = event.data && typeof event.data === 'object' ? event.data : null;
+    if (!data || data.source?.kind !== 'user') return;
+    const sid = typeof session.id === 'string' ? session.id.trim() : '';
+    if (!sid || !Number.isInteger(event.seq) || event.seq < 0) return;
+
+    const rpcId = typeof data.source?.rpcId === 'string' ? data.source.rpcId.trim() : '';
+    const existing = state.sessionContexts.get(sid);
+    if (existing && typeof existing.requestId === 'string' && existing.requestId.length > 0 && rpcId && existing.requestId === rpcId) {
+      if (existing.externalTurnActive) {
+        state.sessionContexts.set(sid, {
+          ...existing,
+          externalTurnActive: false,
+          externalTurnTraceId: undefined,
+          externalTurnUserText: undefined,
+        });
+      }
+      return;
+    }
+
+    const externalTurnTraceId = deriveExternalTurnTraceId(sid, event.seq);
+    if (!externalTurnTraceId) return;
+    const externalTurnUserText = extractExternalUserMessageText(data.content ?? data.message?.content);
+    state.sessionContexts.set(sid, {
+      ...(existing ?? {}),
+      dshSessionId: sid,
+      externalTurnActive: true,
+      externalTurnTraceId,
+      externalTurnUserText,
+    });
+  });
+
   // Inject LobsterAI observability, turn credit traceparent & instance correlation headers on every LLM call.
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
     const sid = resolveSessionId(request);
@@ -507,6 +552,7 @@ export function apply(ctx) {
       request,
       headers,
       instanceId: state.instanceId,
+      sessionId: sid,
       bound,
       buildTraceParent,
     });

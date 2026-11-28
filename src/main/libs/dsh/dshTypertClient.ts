@@ -897,12 +897,41 @@ export class DshTypertClient extends EventEmitter {
     return this.openStream<DshSessionControlFrame>('session/control', {}, signal);
   }
 
-  getModelCatalog(): Promise<{ groups: Array<{ id: string; name: string; models: Array<Record<string, unknown>> }> }> {
+  getModelCatalog(): Promise<{
+    groups: Array<{ id: string; name: string; models: Array<Record<string, unknown>> }>;
+    failures?: Array<{ id: string; name?: string; message?: string }>;
+    routableProviders?: string[];
+  }> {
     return this.call('session/modelCatalog', {});
+  }
+
+  listAgentPresets(): Promise<{
+    presets: Array<{
+      id: string;
+      name?: string;
+      description?: string;
+      order?: number;
+      broken?: string;
+      isDefault: boolean;
+    }>;
+  }> {
+    return this.call('agentPresets/list', {});
   }
 
   listSessions(): Promise<{ items: Array<Record<string, unknown>> }> {
     return this.call('session/list', {});
+  }
+
+  readSessionAttachment(
+    sessionId: string,
+    attachment: Record<string, unknown>,
+  ): Promise<{ attachment?: Record<string, unknown>; data?: string } | null> {
+    return this.call('session/attachment', {
+      request: {
+        sessionId,
+        attachment,
+      },
+    });
   }
 
   // ── Plugin Manager RPCs (HMR-backed live profile management) ───────────────

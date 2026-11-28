@@ -4,10 +4,12 @@ import { ModelPresetId } from '../../../shared/modelPresets/constants';
 import type { Model } from './modelSlice';
 import modelReducer, {
   clearAgentSelectedModel,
+  clearDshPluginModels,
   clearServerModels,
   selectAgentSelectedModel,
   setAvailableModels,
   setDefaultSelectedModel,
+  setDshPluginModels,
   setSelectedModel,
   setServerModels,
 } from './modelSlice';
@@ -238,6 +240,42 @@ describe('setServerModels / clearServerModels', () => {
     state = modelReducer(state, clearServerModels());
 
     // serverModel no longer available → per-agent entry removed
+    expect(state.selectedModelByAgent['agent-1']).toBeUndefined();
+  });
+
+  test('setDshPluginModels keeps server and custom models orthogonal and clears cleanly', () => {
+    const pluginModel: Model = {
+      id: 'deepseek-v4.1-flash',
+      name: 'DeepSeek V4.1 Flash',
+      provider: 'Our Free Model',
+      providerKey: 'our-free-model',
+      openClawProviderId: 'our-free-model',
+      isDshPluginModel: true,
+    };
+
+    let state = modelReducer(undefined, setAvailableModels([modelA]));
+    state = modelReducer(state, setServerModels([serverModel]));
+    state = modelReducer(state, setDshPluginModels([pluginModel]));
+    expect(state.availableModels.map(m => `${m.providerKey}:${m.id}`)).toEqual([
+      'lobsterai-server:server-model',
+      'openai:gpt-4o',
+      'our-free-model:deepseek-v4.1-flash',
+    ]);
+
+    // Updating custom or server models must preserve plugin models.
+    state = modelReducer(state, setAvailableModels([modelB]));
+    state = modelReducer(state, setServerModels([serverKimiModel]));
+    expect(state.availableModels.map(m => `${m.providerKey}:${m.id}`)).toEqual([
+      'lobsterai-server:kimi-k2.6',
+      'zhipu:glm-5.1',
+      'our-free-model:deepseek-v4.1-flash',
+    ]);
+
+    // Selecting a plugin model and then clearing plugin models evicts it from per-agent selection.
+    state = modelReducer(state, setSelectedModel({ agentId: 'agent-1', model: pluginModel }));
+    expect(state.selectedModelByAgent['agent-1']).toEqual(pluginModel);
+    state = modelReducer(state, clearDshPluginModels());
+    expect(state.availableModels.some(m => m.isDshPluginModel)).toBe(false);
     expect(state.selectedModelByAgent['agent-1']).toBeUndefined();
   });
 });

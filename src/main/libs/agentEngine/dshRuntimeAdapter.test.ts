@@ -3352,4 +3352,99 @@ describe('DshRuntimeAdapter', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(emittedUpdates.length).toBe(countAfterStop);
   });
+
+  test('yields approval waterfall with kind: next during external passive follow so driving DSH plugin handles it', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-ext-waterfall',
+      cwd: '/tmp/work',
+      agentId: 'main',
+      claudeSessionId: 'dsh:dsh-ext-wf',
+    });
+
+    const waterfallMap = new Map<string, (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>>();
+    const fakeClient = {
+      onWaterfall: vi.fn((event: string, handler: (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>) => {
+        waterfallMap.set(event, handler);
+        return () => waterfallMap.delete(event);
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const permissionRequests: unknown[] = [];
+    adapter.on('permissionRequest', (_sid, req) => permissionRequests.push(req));
+    adapter.registerDshSessionMapping('dsh-ext-wf', 'cw-ext-waterfall');
+    adapter.setExternalSessionSync({
+      attachClient: vi.fn(),
+      hasActivePassiveFollow: vi.fn((id: string) => id === 'dsh-ext-wf'),
+      hasActivePassiveFollowForCoworkSession: vi.fn((id: string) => id === 'cw-ext-waterfall'),
+      stopAllPassiveFollows: vi.fn(),
+    } as unknown as Parameters<DshRuntimeAdapter['setExternalSessionSync']>[0]);
+
+    adapter.syncHostConnection();
+    const approvalHandler = waterfallMap.get('approval/request');
+    expect(approvalHandler).toBeDefined();
+
+    const outcome = await approvalHandler!({
+      eventId: 'evt-ext-1',
+      agentId: 'dsh-ext-wf',
+      request: { toolName: 'bash', callId: 'call-ext-1', reason: 'Run command' },
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome).toEqual({ kind: 'next' });
+    expect(permissionRequests).toHaveLength(0);
+  });
+
+  test('forwards non-default dshAgentPreset to client.createSession and omits default lobsterai preset', async () => {
+    const createSession = vi.fn(async () => ({ sessionId: 'dsh-pi-1' }));
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const fakeClient = {
+      createSession,
+      promptSession,
+      onWaterfall: () => () => {},
+      followSession: async function* () {
+        yield { type: 'event', event: { type: 'turn/end', data: { reason: { kind: 'completed' } }, seq: 1 } };
+      },
+    } as unknown as DshTypertClient;
+
+    const hostManager = {
+      start: async () => {},
+      isReady: () => true,
+      getClient: () => fakeClient,
+      bindSessionContext: async () => ({}),
+      deleteSessionFiles: async () => ({}),
+    };
+
+    const piStore = createInMemoryStore({
+      id: 'cw-pi',
+      cwd: '/tmp/work',
+      dshAgentPreset: 'pi',
+      messages: [],
+    });
+    const piAdapter = new DshRuntimeAdapter({ store: piStore.store, hostManager });
+    await piAdapter.startSession('cw-pi', 'hello pi');
+    expect(createSession).toHaveBeenNthCalledWith(1, { cwd: '/tmp/work', agentPreset: 'pi' });
+
+    const defaultStore = createInMemoryStore({
+      id: 'cw-default',
+      cwd: '/tmp/work',
+      dshAgentPreset: 'lobsterai',
+      messages: [],
+    });
+    const defaultAdapter = new DshRuntimeAdapter({ store: defaultStore.store, hostManager });
+    await defaultAdapter.startSession('cw-default', 'hello lobster');
+    expect(createSession).toHaveBeenNthCalledWith(2, { cwd: '/tmp/work' });
+  });
 });

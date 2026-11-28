@@ -6,7 +6,9 @@ import { clipboard, dialog, ipcMain, shell } from 'electron';
 import * as fs from 'fs';
 
 import {
+  DEFAULT_DSH_AGENT_PRESET_ID,
   DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_BUILTIN_DEVELOPER_AGENT_PRESET_IDS,
   DshHostIpc,
   DshPermissionPreset,
   DshPluginApplicationStatus,
@@ -331,6 +333,101 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       plugins,
     };
   });
+
+  ipcMain.handle(
+    DshHostIpc.ListPluginModels,
+    async (_event, options?: { forceRefresh?: boolean }) => {
+      const manager = deps.getHostManager();
+      if (!manager || !manager.isReady() || typeof manager.listPluginModels !== 'function') {
+        return { ok: false, groups: [], models: [], failures: [], fetchedAt: Date.now() };
+      }
+      try {
+        const snapshot = await manager.listPluginModels({
+          forceRefresh: options?.forceRefresh === true,
+        });
+        return { ok: true, ...snapshot };
+      } catch (error) {
+        console.warn('[DSH Host] Failed to fetch DSH plugin model catalog:', error);
+        return {
+          ok: false,
+          groups: [],
+          models: [],
+          failures: [],
+          fetchedAt: Date.now(),
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(DshHostIpc.ListAgentPresets, async () => {
+    const manager = deps.getHostManager();
+    if (!manager || !manager.isReady() || typeof manager.listAgentPresets !== 'function') {
+      return {
+        ok: false,
+        presets: [],
+        usablePresets: [],
+        hasThirdPartyPresets: false,
+        defaultPresetId: DEFAULT_DSH_AGENT_PRESET_ID,
+      };
+    }
+    try {
+      const rawPresets = await manager.listAgentPresets();
+      const sorted = [...rawPresets].sort((a, b) => {
+        const orderA = typeof a.order === 'number' ? a.order : Number.MAX_SAFE_INTEGER;
+        const orderB = typeof b.order === 'number' ? b.order : Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.id.localeCompare(b.id);
+      });
+      const usablePresets = sorted.filter((preset) => !preset.broken);
+      const defaultPresetId =
+        usablePresets.find((preset) => preset.isDefault)?.id ?? DEFAULT_DSH_AGENT_PRESET_ID;
+      const builtinDeveloperIds = new Set<string>(DSH_BUILTIN_DEVELOPER_AGENT_PRESET_IDS);
+      const hasThirdPartyPresets = usablePresets.some((preset) => {
+        const id = preset.id.trim().toLowerCase();
+        return id !== DEFAULT_DSH_AGENT_PRESET_ID && !builtinDeveloperIds.has(id);
+      });
+      return {
+        ok: true,
+        presets: sorted,
+        usablePresets,
+        hasThirdPartyPresets,
+        defaultPresetId,
+      };
+    } catch (error) {
+      console.warn('[DSH Host] Failed to list DSH agent presets:', error);
+      return {
+        ok: false,
+        presets: [],
+        usablePresets: [],
+        hasThirdPartyPresets: false,
+        defaultPresetId: DEFAULT_DSH_AGENT_PRESET_ID,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle(
+    DshHostIpc.ListPluginSkills,
+    async (_event, options?: { cwd?: string }) => {
+      const manager = deps.getHostManager();
+      if (!manager || !manager.isReady() || typeof manager.listPluginSkills !== 'function') {
+        return { ok: false, skills: [] };
+      }
+      try {
+        const cwd = typeof options?.cwd === 'string' && options.cwd.trim() ? options.cwd.trim() : undefined;
+        const skills = await manager.listPluginSkills(cwd);
+        return { ok: true, skills };
+      } catch (error) {
+        console.warn('[DSH Host] Failed to list DSH plugin skills:', error);
+        return {
+          ok: false,
+          skills: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
 
   ipcMain.handle(DshHostIpc.GetPluginRegistries, async () => {
     const manager = deps.getHostManager();

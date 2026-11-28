@@ -3,7 +3,12 @@ export const PromptSubmenuSide = { Left: 'left', Right: 'right' } as const;
 export type PromptSubmenuSide = typeof PromptSubmenuSide[keyof typeof PromptSubmenuSide];
 
 /** The add-menu pickers that share one open state, alongside the skills submenu. */
-export const PromptFoldedTool = { Experts: 'experts', Kits: 'kits', Media: 'media' } as const;
+export const PromptFoldedTool = {
+  Experts: 'experts',
+  Kits: 'kits',
+  Media: 'media',
+  AgentPreset: 'agentPreset',
+} as const;
 export type PromptFoldedTool = typeof PromptFoldedTool[keyof typeof PromptFoldedTool];
 
 /** A picker shown as a row of the add menu: the menu decides which submenu is open, and on which side. */

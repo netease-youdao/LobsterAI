@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import { ContinuityCapsuleSource } from '../libs/agentEngine/coworkContinuityCapsule';
 import {
+  backfillLegacySessionsToDshAsync,
   buildDshProjectKey,
   buildLegacySessionSeedLog,
   encodeDshSessionSegment,
@@ -479,6 +480,79 @@ describe('seedLegacySessionsToDsh', () => {
     const goodRow = db.prepare('SELECT claude_session_id FROM cowork_sessions WHERE id = ?').get('cw-good') as { claude_session_id: string };
     expect(badRow.claude_session_id).toBe('agent:main:bad');
     expect(goodRow.claude_session_id).toMatch(/^dsh:[0-9a-f-]{36}$/);
+
+    db.close();
+  });
+
+  test('backfillLegacySessionsToDshAsync seeds newest-first in chunks, invokes onSessionSeeded with maxSeq, and skips already-dsh sessions', async () => {
+    const userDataDir = createTempDir();
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE cowork_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        claude_session_id TEXT,
+        cwd TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      );
+      CREATE TABLE cowork_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        metadata TEXT,
+        created_at INTEGER,
+        sequence INTEGER
+      );
+    `);
+    const workDir = path.join(userDataDir, 'work');
+    fs.mkdirSync(workDir, { recursive: true });
+
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, ?, ?, ?, ?)').run(
+      'cw-old', 'Old Task', null, workDir, 1_700_000_000_000, 1_700_000_000_500,
+    );
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, ?, ?, ?, ?)').run(
+      'cw-new', 'New Task', null, workDir, 1_700_000_010_000, 1_700_000_010_500,
+    );
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, ?, ?, ?, ?)').run(
+      'cw-already-dsh', 'Already DSH', 'dsh:existing-1', workDir, 1_700_000_020_000, 1_700_000_020_500,
+    );
+    db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      'm-old-1', 'cw-old', 'user', 'Old prompt', null, 1_700_000_000_100, 1,
+    );
+    db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      'm-new-1', 'cw-new', 'user', 'New prompt', null, 1_700_000_010_100, 1,
+    );
+    db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      'm-new-2', 'cw-new', 'assistant', 'New answer', null, 1_700_000_010_200, 2,
+    );
+
+    const seededEvents: Array<{ coworkSessionId: string; dshSessionId: string; maxSeq: number }> = [];
+    const res = await backfillLegacySessionsToDshAsync({
+      db,
+      userDataDir,
+      batchSize: 1,
+      onSessionSeeded: (info) => seededEvents.push({
+        coworkSessionId: info.coworkSessionId,
+        dshSessionId: info.dshSessionId,
+        maxSeq: info.maxSeq,
+      }),
+    });
+
+    expect(res.cancelled).toBe(false);
+    expect(res.sessionsPreSeeded).toBe(2);
+    // Newest session is seeded first.
+    expect(seededEvents.map((e) => e.coworkSessionId)).toEqual(['cw-new', 'cw-old']);
+    expect(seededEvents[0].maxSeq).toBeGreaterThanOrEqual(0);
+    expect(seededEvents[1].maxSeq).toBeGreaterThanOrEqual(0);
+
+    const newRow = db.prepare('SELECT claude_session_id FROM cowork_sessions WHERE id = ?').get('cw-new') as { claude_session_id: string };
+    expect(newRow.claude_session_id).toBe(`dsh:${seededEvents[0].dshSessionId}`);
+
+    // Idempotent second run seeds 0.
+    const second = await backfillLegacySessionsToDshAsync({ db, userDataDir });
+    expect(second.sessionsPreSeeded).toBe(0);
 
     db.close();
   });

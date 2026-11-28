@@ -46,6 +46,7 @@ import {
   type CoworkPendingSteer,
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
+import { DEFAULT_DSH_AGENT_PRESET_ID } from '../../../shared/dshEngine/hostConstants';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
 import { MediaPreferenceMode } from '../../../shared/media/defaultPolicy';
 import { modelPresetModelId } from '../../../shared/modelPresets/constants';
@@ -61,6 +62,15 @@ import {
   prepareCoworkPromptPayload,
   type PreparedCoworkPromptPayload,
 } from '../../services/coworkPromptPayload';
+import {
+  DEFAULT_DSH_AGENT_PRESET_SETTINGS,
+  DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT,
+  DSH_PLUGINS_CHANGED_EVENT,
+  type DshAgentPresetInfo,
+  type DshAgentPresetSettings,
+  dshHostService,
+  loadDshAgentPresetSettings,
+} from '../../services/dshHost';
 import { getPortalPricingUrl } from '../../services/endpoints';
 import { switchExpertInDraft } from '../../services/expertOnboarding';
 import { i18nService } from '../../services/i18n';
@@ -166,6 +176,7 @@ import { getClipboardAttachmentFiles, getCopiedMessageImageFiles } from './clipb
 import { CoworkUiEvent } from './constants';
 import { ContextChipTone } from './ContextChip';
 import CoworkPageFileDropOverlay from './CoworkPageFileDropOverlay';
+import { DshAgentPresetMenuItem, DshAgentPresetPill } from './DshAgentPresetControl';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { getCaretPixelPosition } from './getCaretPosition';
 import {
@@ -473,6 +484,8 @@ interface CoworkPromptInputProps {
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
   showAgentSelector?: boolean;
+  dshAgentPreset?: string;
+  onDshAgentPresetChange?: (presetId: string) => void;
   showReadOnlyContext?: boolean;
   readOnlyContextTrailingText?: string;
   contextAgentId?: string;
@@ -526,6 +539,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showFolderSelector = false,
       showModelSelector = false,
       showAgentSelector = false,
+      dshAgentPreset,
+      onDshAgentPresetChange,
       showReadOnlyContext = false,
       readOnlyContextTrailingText,
       contextAgentId,
@@ -548,6 +563,52 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       analyticsSurface,
     } = props;
     const dispatch = useDispatch<AppDispatch>();
+    const [dshAgentPresets, setDshAgentPresets] = useState<DshAgentPresetInfo[]>([]);
+    const [dshAgentPresetSettings, setDshAgentPresetSettings] = useState<DshAgentPresetSettings>(
+      DEFAULT_DSH_AGENT_PRESET_SETTINGS,
+    );
+
+    useEffect(() => {
+      let active = true;
+      void loadDshAgentPresetSettings().then((loaded) => {
+        if (active) setDshAgentPresetSettings(loaded);
+      });
+      const onSettingsChanged = (event: Event) => {
+        const detail = (event as CustomEvent<DshAgentPresetSettings>).detail;
+        if (active && detail) setDshAgentPresetSettings(detail);
+      };
+      window.addEventListener(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+      return () => {
+        active = false;
+        window.removeEventListener(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+      };
+    }, []);
+
+    useEffect(() => {
+      let active = true;
+      const loadPresets = async () => {
+        try {
+          const res = await dshHostService.listAgentPresets();
+          if (active && res?.ok) {
+            setDshAgentPresets(res.usablePresets);
+          }
+        } catch {
+          // Best-effort progressive preset discovery.
+        }
+      };
+      void loadPresets();
+      const offConn = dshHostService.onConnectionChanged(() => void loadPresets());
+      const offPlugins = dshHostService.onPluginsChanged(() => void loadPresets());
+      const onLocalChange = () => void loadPresets();
+      window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, onLocalChange);
+      return () => {
+        active = false;
+        offConn();
+        offPlugins();
+        window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, onLocalChange);
+      };
+    }, []);
+
     const draftKey = sessionId || '__home__';
     const draftPrompt = useSelector((state: RootState) => selectDraftPrompts(state)[draftKey] || '');
     const steerDraft = useSelector((state: RootState) => (
@@ -636,6 +697,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const agentButtonRef = useRef<HTMLButtonElement>(null);
     const mediaOverridePillRef = useRef<HTMLDivElement>(null);
+    const agentPresetPillRef = useRef<HTMLDivElement>(null);
     const readOnlyContextGroupRef = useRef<HTMLDivElement>(null);
     const largeToolbarRef = useRef<HTMLDivElement>(null);
     const dragDepthRef = useRef(0);
@@ -1210,6 +1272,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         !addMenuButtonRef.current?.contains(target)
         && !addMenuRef.current?.contains(target)
         && !mediaOverridePillRef.current?.contains(target)
+        && !agentPresetPillRef.current?.contains(target)
       ) {
         setShowAddMenu(false);
         setShowSkillsPopover(false);
@@ -2762,6 +2825,29 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const handleMediaMenuItemChange = useCallback((open: boolean) => {
     handleFoldedToolChange(PromptFoldedTool.Media, open);
   }, [handleFoldedToolChange]);
+  const handleAgentPresetMenuItemChange = useCallback((open: boolean) => {
+    handleFoldedToolChange(PromptFoldedTool.AgentPreset, open);
+  }, [handleFoldedToolChange]);
+  const handleSelectDshAgentPreset = useCallback((presetId: string) => {
+    onDshAgentPresetChange?.(presetId);
+    setFoldedTool(null);
+    setShowAddMenu(false);
+  }, [onDshAgentPresetChange]);
+  const handleToggleAgentPresetFromPill = useCallback(() => {
+    if (disabled || voiceInputLocksEditing) return;
+    if (showAddMenu && foldedTool === PromptFoldedTool.AgentPreset) {
+      setShowAddMenu(false);
+      setFoldedTool(null);
+      return;
+    }
+    setShowSkillsPopover(false);
+    setShowAddMenu(true);
+    setFoldedTool(PromptFoldedTool.AgentPreset);
+  }, [disabled, foldedTool, showAddMenu, voiceInputLocksEditing]);
+  const handleResetDshAgentPreset = useCallback(() => {
+    if (disabled || voiceInputLocksEditing) return;
+    onDshAgentPresetChange?.(DEFAULT_DSH_AGENT_PRESET_ID);
+  }, [disabled, onDshAgentPresetChange, voiceInputLocksEditing]);
 
   const handleToggleMediaPickerFromPill = useCallback(() => {
     if (disabled || voiceInputLocksEditing) return;
@@ -3406,6 +3492,19 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             disabled={disabled || voiceInputLocksEditing}
             menuItem={{ open: foldedTool === PromptFoldedTool.Media, side: submenuSide, onOpenChange: handleMediaMenuItemChange }}
           />
+          {!sessionId && dshAgentPresetSettings.enabled && (
+            <DshAgentPresetMenuItem
+              value={dshAgentPreset}
+              presets={dshAgentPresets}
+              onSelect={handleSelectDshAgentPreset}
+              disabled={disabled || voiceInputLocksEditing}
+              menuItem={{
+                open: foldedTool === PromptFoldedTool.AgentPreset,
+                side: submenuSide,
+                onOpenChange: handleAgentPresetMenuItemChange,
+              }}
+            />
+          )}
           <div className="mx-3 my-1 h-px bg-border" role="separator" />
           <button
             type="button"
@@ -4340,6 +4439,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       disabled={(permissionDisabled ?? (disabled && !remoteManaged)) || voiceInputLocksEditing}
                     />
                   )}
+                  {voiceRecordingUiState.showLargeInputControls && (
+                    <div ref={agentPresetPillRef} className="contents">
+                      <DshAgentPresetPill
+                        mode={sessionId ? 'locked' : 'active-pill'}
+                        value={sessionId ? currentSession?.dshAgentPreset : dshAgentPreset}
+                        presets={dshAgentPresets}
+                        enabled={dshAgentPresetSettings.enabled}
+                        compact={narrow || isLargeToolbarCompact}
+                        disabled={(disabled && !remoteManaged) || voiceInputLocksEditing}
+                        onOpenPicker={sessionId ? undefined : handleToggleAgentPresetFromPill}
+                        onReset={sessionId ? undefined : handleResetDshAgentPreset}
+                      />
+                    </div>
+                  )}
                   {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}
                   {narrow && voiceRecordingUiState.showLargeInputControls && homeContextSelectors}
                   {narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
@@ -4436,6 +4549,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       compact={isCompact || isLargeToolbarCompact}
                       disabled={(permissionDisabled ?? (disabled && !remoteManaged)) || voiceInputLocksEditing}
                     />
+                  )}
+                  {voiceRecordingUiState.showLargeInputControls && (
+                    <div ref={agentPresetPillRef} className="contents">
+                      <DshAgentPresetPill
+                        mode={sessionId ? 'locked' : 'active-pill'}
+                        value={sessionId ? currentSession?.dshAgentPreset : dshAgentPreset}
+                        presets={dshAgentPresets}
+                        enabled={dshAgentPresetSettings.enabled}
+                        compact={isCompact || isLargeToolbarCompact}
+                        disabled={(disabled && !remoteManaged) || voiceInputLocksEditing}
+                        onOpenPicker={sessionId ? undefined : handleToggleAgentPresetFromPill}
+                        onReset={sessionId ? undefined : handleResetDshAgentPreset}
+                      />
+                    </div>
                   )}
                   {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}
                 </div>

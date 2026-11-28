@@ -9,6 +9,7 @@ import { BlankDocumentKind } from '../../../shared/artifactPreview/blankDocument
 import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import { DEFAULT_DSH_AGENT_PRESET_ID } from '../../../shared/dshEngine/hostConstants';
 import {
   HOME_SHOWCASE_EXPLORE_MORE_ID,
   type HomeShowcasePrimaryEntryId,
@@ -25,6 +26,15 @@ import { agentService } from '../../services/agent';
 import { openWorkspaceDirectoryInSystem } from '../../services/artifactWorkspace';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
+import {
+  DEFAULT_DSH_AGENT_PRESET_SETTINGS,
+  DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT,
+  DSH_PLUGINS_CHANGED_EVENT,
+  type DshAgentPresetInfo,
+  type DshAgentPresetSettings,
+  dshHostService,
+  loadDshAgentPresetSettings,
+} from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
 import { quickActionService } from '../../services/quickAction';
 import { RootState, store } from '../../store';
@@ -89,6 +99,7 @@ import {
   resolveCoworkStartBlock,
   shouldShowCoworkEngineNotice,
 } from './coworkStartRequest';
+import { resolveEffectiveNewSessionDshAgentPresetId } from './dshAgentPresetViewModel';
 import HomeArtifactPanelHeader from './HomeArtifactPanelHeader';
 import {
   COWORK_DETAIL_CONTENT_CLASS,
@@ -143,6 +154,62 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const [isInitialized, setIsInitialized] = useState(() => coworkService.isInitialized());
+  const [dshAgentPresetSettings, setDshAgentPresetSettings] = useState<DshAgentPresetSettings>(
+    DEFAULT_DSH_AGENT_PRESET_SETTINGS,
+  );
+  const [dshAgentPresets, setDshAgentPresets] = useState<DshAgentPresetInfo[]>([]);
+  const [draftDshAgentPresetOverride, setDraftDshAgentPresetOverride] = useState<string | null>(null);
+  const selectedDshAgentPreset = resolveEffectiveNewSessionDshAgentPresetId({
+    settings: dshAgentPresetSettings,
+    draftPresetId: draftDshAgentPresetOverride,
+    presets: dshAgentPresets,
+  });
+
+  useEffect(() => {
+    let active = true;
+    void loadDshAgentPresetSettings().then((loaded) => {
+      if (active) setDshAgentPresetSettings(loaded);
+    });
+    const onSettingsChanged = (event: Event) => {
+      const detail = (event as CustomEvent<DshAgentPresetSettings>).detail;
+      if (active && detail) {
+        setDshAgentPresetSettings(detail);
+        if (!detail.enabled) {
+          setDraftDshAgentPresetOverride(null);
+        }
+      }
+    };
+    window.addEventListener(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    return () => {
+      active = false;
+      window.removeEventListener(DSH_AGENT_PRESET_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadPresets = async () => {
+      try {
+        const res = await dshHostService.listAgentPresets();
+        if (active && res?.ok) {
+          setDshAgentPresets(res.usablePresets);
+        }
+      } catch {
+        // Best-effort preset discovery.
+      }
+    };
+    void loadPresets();
+    const offConn = dshHostService.onConnectionChanged(() => void loadPresets());
+    const offPlugins = dshHostService.onPluginsChanged(() => void loadPresets());
+    const onLocalChange = () => void loadPresets();
+    window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, onLocalChange);
+    return () => {
+      active = false;
+      offConn();
+      offPlugins();
+      window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, onLocalChange);
+    };
+  }, []);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(
     () => coworkService.getOpenClawEngineStatusSnapshot(),
   );
@@ -416,19 +483,21 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     };
 
     try {
-      try {
-        const apiConfig = await coworkService.checkApiConfig();
-        if (apiConfig && !apiConfig.hasConfig) {
-          // No usable model config: steer toward plan models (login/subscribe)
-          // rather than opening the custom-model settings page uninvited.
-          setModelAccessPrompt(
-            isLoggedIn ? ModelAccessPromptKind.Subscribe : ModelAccessPromptKind.Login,
-          );
-          isStartingRef.current = false;
-          return false;
+      if (!currentAgentSelectedModel?.isDshPluginModel) {
+        try {
+          const apiConfig = await coworkService.checkApiConfig();
+          if (apiConfig && !apiConfig.hasConfig) {
+            // No usable model config: steer toward plan models (login/subscribe)
+            // rather than opening the custom-model settings page uninvited.
+            setModelAccessPrompt(
+              isLoggedIn ? ModelAccessPromptKind.Subscribe : ModelAccessPromptKind.Login,
+            );
+            isStartingRef.current = false;
+            return false;
+          }
+        } catch (error) {
+          console.error('Failed to check cowork API config:', error);
         }
-      } catch (error) {
-        console.error('Failed to check cowork API config:', error);
       }
 
       // Create a temporary session with user message to show immediately
@@ -476,6 +545,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       }
       const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(imageAttachments);
 
+      const effectiveDshAgentPreset =
+        selectedDshAgentPreset && selectedDshAgentPreset !== DEFAULT_DSH_AGENT_PRESET_ID
+          ? selectedDshAgentPreset
+          : undefined;
       const tempSession: CoworkSession = {
         id: tempSessionId,
         title: fallbackTitle,
@@ -490,6 +563,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         modelOverride: currentAgentSelectedModelRef,
         thinkingLevel: currentAgentThinkingLevel ?? '',
         executionMode: config.executionMode || 'local',
+        ...(effectiveDshAgentPreset ? { dshAgentPreset: effectiveDshAgentPreset } : {}),
         activeSkillIds: effectiveRuntimeSkillIds,
         activeKitIds: displayKitIds.length > 0 ? displayKitIds : undefined,
         agentId: currentAgentId,
@@ -538,12 +612,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       dispatch(setDraftKitIds({ draftKey: '__home__', kitIds: [] }));
       dispatch(setDraftSkillIds({ draftKey: '__home__', skillIds: [] }));
       dispatch(clearSelection());
+      setDraftDshAgentPresetOverride(null);
 
       // Start the actual session immediately with fallback title
       logCoworkViewModel(
         `creating session with model ${currentAgentSelectedModelRef || 'default'}; agent model is ${currentAgent?.model || 'empty'}; server quota model is ${homeModelUsesServerQuota}`,
       );
-      const { session: startedSession, error: startError } = await coworkService.startSession(startPlan.options);
+      const { session: startedSession, error: startError } = await coworkService.startSession({
+        ...startPlan.options,
+        ...(effectiveDshAgentPreset ? { dshAgentPreset: effectiveDshAgentPreset } : {}),
+      });
 
       if (!startedSession && startError) {
         // Show the error as a system message in the temp session
@@ -1133,6 +1211,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                       showFolderSelector={true}
                       showModelSelector={true}
                       showAgentSelector={true}
+                      dshAgentPreset={selectedDshAgentPreset}
+                      onDshAgentPresetChange={setDraftDshAgentPresetOverride}
                       enablePageFileDrop={true}
                       onManageSkills={() => onShowSkills?.()}
                       onManageKits={() => onShowKits?.()}

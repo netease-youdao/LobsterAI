@@ -95,7 +95,9 @@ import {
   DSH_OPEN_EMBEDDED_PLUGIN_EVENT,
   DSH_PLUGINS_CHANGED_EVENT,
   type DshEmbeddedPluginTarget,
+  dshHostService,
   type DshPluginsChangedDetail,
+  mapDshPluginModelsToStoreModels,
 } from './services/dshHost';
 import { openExpertDraft } from './services/expertOnboarding';
 import { i18nService } from './services/i18n';
@@ -133,7 +135,7 @@ import {
   setDraftSkillIds,
 } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
-import { setAvailableModels } from './store/slices/modelSlice';
+import { setAvailableModels, setDshPluginModels } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import { setActiveSkillIds } from './store/slices/skillSlice';
 import type { Agent } from './types/agent';
@@ -790,6 +792,58 @@ const App: React.FC = () => {
       window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
     };
   }, []);
+
+  // Keep third-party DSH plugin models synchronized with Redux on startup,
+  // DSH host readiness/reconnect, and plugin install/toggle/update/remove.
+  useEffect(() => {
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryCount = 0;
+    const MAX_STARTUP_RETRIES = 4;
+
+    const loadPluginModels = async (forceRefresh = false): Promise<void> => {
+      try {
+        const res = await dshHostService.listPluginModels({ forceRefresh });
+        if (!active) return;
+        if (res?.ok) {
+          dispatch(setDshPluginModels(mapDshPluginModelsToStoreModels(res.models)));
+          return;
+        }
+        if (retryCount < MAX_STARTUP_RETRIES) {
+          retryCount += 1;
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (active) void loadPluginModels(false);
+          }, 2500);
+        }
+      } catch {
+        // Best-effort sync; keep existing models on transient IPC errors.
+      }
+    };
+
+    const scheduleRefresh = (): void => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        if (active) void loadPluginModels(true);
+      }, 300);
+    };
+
+    void loadPluginModels(false);
+    const unsubscribeConn = dshHostService.onConnectionChanged(scheduleRefresh);
+    const unsubscribeHostPlugins = dshHostService.onPluginsChanged(scheduleRefresh);
+    window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, scheduleRefresh);
+
+    return () => {
+      active = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      unsubscribeConn();
+      unsubscribeHostPlugins();
+      window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, scheduleRefresh);
+    };
+  }, [dispatch]);
 
   useEffect(() => {
     const handleOpenCloudLibrary = (): void => {

@@ -133,6 +133,7 @@ export const DshOpsAction = {
   SyncHostTools: 'syncHostTools',
   SyncWebAccessPolicy: 'syncWebAccessPolicy',
   SetPermissionPreset: 'setPermissionPreset',
+  ListPluginSkills: 'listPluginSkills',
 } as const;
 export type DshOpsAction = typeof DshOpsAction[keyof typeof DshOpsAction];
 
@@ -162,6 +163,13 @@ export const DshPermissionPreset = {
 export type DshPermissionPreset = typeof DshPermissionPreset[keyof typeof DshPermissionPreset];
 
 export const DEFAULT_DSH_PERMISSION_PRESET: DshPermissionPreset = DshPermissionPreset.WorkspaceWrite;
+export const DEFAULT_DSH_AGENT_PRESET_ID = 'lobsterai';
+export const DSH_BUILTIN_DEVELOPER_AGENT_PRESET_IDS = [
+  'standard',
+  'ptc',
+  'minimal',
+  'cordis',
+] as const;
 export const DSH_PERMISSION_PRESET_KV_KEY = 'dsh.permissionPreset.default';
 
 export function parseDshPermissionPreset(value: unknown): DshPermissionPreset | null {
@@ -300,6 +308,9 @@ export const DshHostIpc = {
   OpenEcosystemView: 'dshHost:openEcosystemView',
   CloseEcosystemView: 'dshHost:closeEcosystemView',
   ListPlugins: 'dshHost:listPlugins',
+  ListPluginModels: 'dshHost:listPluginModels',
+  ListAgentPresets: 'dshHost:listAgentPresets',
+  ListPluginSkills: 'dshHost:listPluginSkills',
   InspectPlugin: 'dshHost:inspectPlugin',
   InstallPlugin: 'dshHost:installPlugin',
   CancelPluginInstall: 'dshHost:cancelPluginInstall',

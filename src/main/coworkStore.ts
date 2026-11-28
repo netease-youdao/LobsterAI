@@ -25,6 +25,7 @@ import {
   COWORK_SESSION_PAGE_SIZE,
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
+  CoworkSessionSource,
   type CoworkSessionStatus,
   CoworkSessionStatusValue,
 } from '../shared/cowork/constants';
@@ -629,6 +630,7 @@ export interface CoworkSession {
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   permissionPreset?: DshPermissionPreset | null;
+  dshAgentPreset?: string | null;
   activeSkillIds: string[];
   agentId: string;
   imPlatform?: Platform | null;
@@ -653,6 +655,7 @@ export interface CoworkSession {
   forkGitBranch?: string | null;
   forkGitBaseRef?: string | null;
   goal?: CoworkGoal | null;
+  source?: CoworkSessionSource | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -683,6 +686,7 @@ export interface CoworkSessionSummary {
   forkMode?: CoworkForkModeType;
   forkGitBranch?: string | null;
   goal?: CoworkGoal | null;
+  source?: CoworkSessionSource | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -886,6 +890,7 @@ interface CoworkSessionSummaryRow {
   cwd?: string | null;
   agent_id: string | null;
   im_platform?: string | null;
+  source?: string | null;
   parent_session_id?: string | null;
   forked_at?: number | null;
   fork_mode?: string | null;
@@ -919,6 +924,8 @@ export interface CreateCoworkSessionOptions {
   scheduledTaskId?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
   permissionPreset?: DshPermissionPreset | null;
+  dshAgentPreset?: string | null;
+  source?: CoworkSessionSource | null;
 }
 
 export class CoworkStore {
@@ -957,6 +964,9 @@ export class CoworkStore {
       const columns = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
       if (!columns.some((col) => col.name.toLowerCase() === 'permission_preset')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+      }
+      if (!columns.some((col) => col.name.toLowerCase() === 'dsh_agent_preset')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN dsh_agent_preset TEXT;');
       }
     } catch {
       // Ignore if database is read-only or schema already migrated.
@@ -1038,13 +1048,23 @@ export class CoworkStore {
     const forkGitBranchColumn = this.hasCoworkSessionColumn('fork_git_branch')
       ? `${sessionAlias}.fork_git_branch`
       : 'NULL AS fork_git_branch';
+    const sourceColumn = this.hasCoworkSessionColumn('source')
+      ? `${sessionAlias}.source`
+      : 'NULL AS source';
 
     return `${sessionAlias}.id, ${sessionAlias}.title, ${sessionAlias}.scheduled_task_id,
       ${sessionAlias}.status, ${sessionAlias}.pinned, ${sessionAlias}.pin_order,
-      ${sessionAlias}.cwd, ${sessionAlias}.agent_id, ${imPlatformColumn},
+      ${sessionAlias}.cwd, ${sessionAlias}.agent_id, ${imPlatformColumn}, ${sourceColumn},
       ${sessionAlias}.parent_session_id, ${sessionAlias}.forked_at, ${sessionAlias}.fork_mode,
       ${forkGitBranchColumn}, ${sessionAlias}.goal_json,
       ${sessionAlias}.created_at, ${sessionAlias}.updated_at`;
+  }
+
+  private normalizeSessionSource(value: string | null | undefined): CoworkSessionSource | null {
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+    const allowed = Object.values(CoworkSessionSource) as string[];
+    return allowed.includes(trimmed) ? (trimmed as CoworkSessionSource) : null;
   }
 
   private normalizeIMPlatform(value: string | null | undefined): Platform | null {
@@ -1079,6 +1099,7 @@ export class CoworkStore {
       cwd: row.cwd?.trim() || '',
       agentId: row.agent_id || 'main',
       imPlatform: this.normalizeIMPlatform(row.im_platform),
+      source: this.normalizeSessionSource(row.source),
       parentSessionId: row.parent_session_id ?? null,
       forkedAt: row.forked_at ?? null,
       forkMode: (row.fork_mode as CoworkForkModeType | undefined) ?? CoworkForkMode.None,
@@ -1116,6 +1137,10 @@ export class CoworkStore {
     const scheduledTaskId = options.scheduledTaskId?.trim() || null;
     const thinkingLevel = options.thinkingLevel ?? '';
     const permissionPreset = parseDshPermissionPreset(options.permissionPreset);
+    const dshAgentPreset = typeof options.dshAgentPreset === 'string' && options.dshAgentPreset.trim()
+      ? options.dshAgentPreset.trim()
+      : null;
+    const source = this.normalizeSessionSource(options.source ?? null);
 
     this.writeSessionProjections([id], () => {
       this.db
@@ -1140,6 +1165,12 @@ export class CoworkStore {
           now,
           now,
         );
+      if (source && this.hasCoworkSessionColumn('source')) {
+        this.db.prepare('UPDATE cowork_sessions SET source = ? WHERE id = ?').run(source, id);
+      }
+      if (dshAgentPreset && this.hasCoworkSessionColumn('dsh_agent_preset')) {
+        this.db.prepare('UPDATE cowork_sessions SET dsh_agent_preset = ? WHERE id = ?').run(dshAgentPreset, id);
+      }
     });
 
     return {
@@ -1156,9 +1187,11 @@ export class CoworkStore {
       thinkingLevel,
       executionMode,
       permissionPreset,
+      dshAgentPreset,
       activeSkillIds,
       agentId,
       imPlatform: null,
+      source,
       userQuestionsDisabled: Boolean(scheduledTaskId),
       messages: [],
       messagesOffset: 0,
@@ -1198,9 +1231,11 @@ export class CoworkStore {
       thinking_level?: string | null;
       execution_mode?: string | null;
       permission_preset?: string | null;
+      dsh_agent_preset?: string | null;
       active_skill_ids?: string | null;
       agent_id?: string | null;
       im_platform?: string | null;
+      source?: string | null;
       goal_json?: string | null;
       created_at: number;
       updated_at: number;
@@ -1215,10 +1250,16 @@ export class CoworkStore {
           LIMIT 1
         ) AS im_platform`
       : 'NULL AS im_platform';
+    const sourceColumn = this.hasCoworkSessionColumn('source')
+      ? 'source'
+      : 'NULL AS source';
+    const dshAgentPresetColumn = this.hasCoworkSessionColumn('dsh_agent_preset')
+      ? 'dsh_agent_preset'
+      : 'NULL AS dsh_agent_preset';
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, permission_preset, active_skill_ids, agent_id, ${imPlatformColumn}, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, permission_preset, ${dshAgentPresetColumn}, active_skill_ids, agent_id, ${imPlatformColumn}, ${sourceColumn}, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -1266,9 +1307,11 @@ export class CoworkStore {
       thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       permissionPreset: parseDshPermissionPreset(row.permission_preset),
+      dshAgentPreset: row.dsh_agent_preset?.trim() || null,
       activeSkillIds,
       agentId: row.agent_id || 'main',
       imPlatform: this.normalizeIMPlatform(row.im_platform),
+      source: this.normalizeSessionSource(row.source),
       // Use the stored mapping, including instance-qualified names such as "feishu:bot-2".
       userQuestionsDisabled: Boolean(row.scheduled_task_id?.trim() || row.im_platform),
       messages,
@@ -2746,8 +2789,35 @@ export class CoworkStore {
     return rows.map(row => this.parseStoredMessage(sessionId, row));
   }
 
-  addMessage(sessionId: string, message: Omit<CoworkMessage, 'id' | 'timestamp'>, timestamp?: number): CoworkMessage {
-    const id = uuidv4();
+  hasMessage(sessionId: string, messageId: string): boolean {
+    return this.getOne<{ found: number }>(
+      'SELECT 1 AS found FROM cowork_messages WHERE session_id = ? AND id = ?',
+      [sessionId, messageId],
+    ) !== undefined;
+  }
+
+  getMaxMessageTimestamp(sessionId: string): number | null {
+    const row = this.getOne<{ max_ts: number | null }>(
+      'SELECT MAX(created_at) AS max_ts FROM cowork_messages WHERE session_id = ?',
+      [sessionId],
+    );
+    return typeof row?.max_ts === 'number' ? row.max_ts : null;
+  }
+
+  addMessage(
+    sessionId: string,
+    message: Omit<CoworkMessage, 'id' | 'timestamp'>,
+    timestamp?: number,
+    options?: { id?: string },
+  ): CoworkMessage {
+    const explicitId = options?.id?.trim() || null;
+    if (explicitId) {
+      const existing = this.getMessage(sessionId, explicitId);
+      if (existing) {
+        return existing;
+      }
+    }
+    const id = explicitId || uuidv4();
     const now = timestamp ?? Date.now();
 
     if (message.type === 'user' || message.type === 'assistant') {

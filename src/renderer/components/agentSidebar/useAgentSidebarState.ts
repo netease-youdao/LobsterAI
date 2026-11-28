@@ -14,7 +14,7 @@ import {
 } from '../../store/selectors/coworkSelectors';
 import { setSidebarRevealAgentId } from '../../store/slices/agentSlice';
 import type { CoworkSessionSummary } from '../../types/cowork';
-import { CoworkSessionStatusValue } from '../../types/cowork';
+import { CoworkSessionSource, CoworkSessionStatusValue } from '../../types/cowork';
 import {
   AgentSidebarIndicator,
   AgentSidebarPageSize,
@@ -82,6 +82,7 @@ const hasSessionChanged = (
     || (previous.cwd ?? '') !== (next.cwd ?? '')
     || (previous.forkGitBranch ?? null) !== (next.forkGitBranch ?? null)
     || previous.imPlatform !== next.imPlatform
+    || (previous.source ?? null) !== (next.source ?? null)
     || previous.parentSessionId !== next.parentSessionId
     || previous.updatedAt !== next.updatedAt
     || previous.createdAt !== next.createdAt
@@ -202,6 +203,7 @@ export const reconcilePinnedSidebarSessions = (
       cwd: live.cwd || existing?.cwd || '',
       forkGitBranch: live.forkGitBranch !== undefined ? live.forkGitBranch : (existing?.forkGitBranch ?? null),
       imPlatform: live.imPlatform !== undefined ? live.imPlatform : (existing?.imPlatform ?? null),
+      source: live.source !== undefined ? live.source : (existing?.source ?? null),
     };
     if (!existing || hasSessionChanged(existing, merged)) {
       byId.set(live.id, merged);
@@ -245,6 +247,7 @@ export const toAgentSidebarTaskNode = (
     cwd: session.cwd?.trim() || '',
     forkGitBranch: session.forkGitBranch ?? null,
     imPlatform: session.imPlatform ?? null,
+    isExternalDshSession: session.source === CoworkSessionSource.DshExternal,
     updatedAt: session.updatedAt,
     createdAt: session.createdAt,
     indicator: deriveAgentSidebarIndicator(
@@ -666,6 +669,9 @@ export const useAgentSidebarState = () => {
           imPlatform: session.imPlatform !== undefined
             ? session.imPlatform
             : (existing.imPlatform ?? null),
+          source: session.source !== undefined
+            ? session.source
+            : (existing.source ?? null),
         };
         if (hasSessionChanged(existing, mergedSession)) {
           const updatedTasks = [...existingTasks];
@@ -890,6 +896,7 @@ export const useAgentSidebarState = () => {
           cwd: fallback.cwd ?? '',
           agentId: fallback.agentId,
           imPlatform: fallback.imPlatform ?? null,
+          source: fallback.isExternalDshSession ? CoworkSessionSource.DshExternal : null,
           forkGitBranch: fallback.forkGitBranch ?? null,
           createdAt: fallback.createdAt,
           updatedAt: fallback.updatedAt,

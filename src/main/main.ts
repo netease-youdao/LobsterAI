@@ -493,6 +493,10 @@ import { createDshHtmlRenderProvider } from './libs/dsh/dshHtmlRenderTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
+import {
+  findDshPluginModel,
+  parseRawProviderModelRef,
+} from './libs/dsh/dshPluginModelCatalog';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
 import { createDshSkillInstallProvider } from './libs/dsh/dshSkillInstallTool';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
@@ -559,7 +563,7 @@ import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyf
 import { LibraryThumbnailRenderer } from './libs/libraryThumbnailRenderer';
 import { LibraryThumbnailService } from './libs/libraryThumbnailService';
 import { shouldRejectNativeLibraryThumbnail } from './libs/libraryThumbnailValidation';
-import { configureLlmUsageContextResolver, configureUsageTitleReporter, getMediaUsageContext, reportUsageSessionTitle } from './libs/llmUsageContext';
+import { configureLlmUsageContextResolver, configureUsageTitleReporter, getMediaUsageContext, registerLlmUsageContext, reportUsageSessionTitle } from './libs/llmUsageContext';
 import {
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
@@ -2437,15 +2441,44 @@ const getDshBootstrap = (): DshBootstrap => {
         messageEdits: storeInstance.messageEdits,
         messageVersions: storeInstance.messageVersions,
         getSession: (sessionId, messageLimit) => storeInstance.getSession(sessionId, messageLimit),
+        getSessionIdByClaudeSessionId: claudeSessionId => storeInstance.getSessionIdByClaudeSessionId(claudeSessionId),
         getLatestUserMessage: sessionId => storeInstance.getLatestUserMessage(sessionId),
         getMessage: (sessionId, messageId) => storeInstance.getMessage(sessionId, messageId),
+        hasMessage: (sessionId, messageId) => storeInstance.hasMessage(sessionId, messageId),
+        getMaxMessageTimestamp: sessionId => storeInstance.getMaxMessageTimestamp(sessionId),
+        listAgents: () => storeInstance.listAgents(),
+        createSession: (
+          title,
+          cwd,
+          systemPrompt,
+          executionMode,
+          activeSkillIds,
+          agentId,
+          modelOverride,
+          options,
+        ) => storeInstance.createSession(
+          title,
+          cwd,
+          systemPrompt,
+          executionMode,
+          activeSkillIds,
+          agentId,
+          modelOverride,
+          options,
+        ),
         addMessage: (sessionId, message) => storeInstance.addMessage(sessionId, message),
+        addExternalMessage: (sessionId, message, timestamp, options) => (
+          storeInstance.addMessage(sessionId, message, timestamp, options)
+        ),
         updateMessageContent: (sessionId, messageId, content, metadata) => {
           storeInstance.updateMessage(sessionId, messageId, { content, ...(metadata ? { metadata } : {}) });
         },
         deleteMessage: (sessionId, messageId) => storeInstance.deleteMessage(sessionId, messageId),
         updateSession: (sessionId, updates) => {
           storeInstance.updateSession(sessionId, updates);
+        },
+        updateExternalSession: (sessionId, updates, options) => {
+          storeInstance.updateSession(sessionId, updates, options);
         },
         getContinuityCapsule: sessionId => storeInstance.getContinuityCapsule(sessionId),
         forkSession: options => storeInstance.forkSession(options),
@@ -2462,7 +2495,65 @@ const getDshBootstrap = (): DshBootstrap => {
           ? agent.model
           : undefined;
         const ref = override?.trim() || sessionModel?.trim() || agentModel?.trim() || resolveDefaultAgentModelRef();
+        const normalizedAgentRef = agentModel?.trim() ? normalizeOpenClawModelRef(agentModel.trim()) : '';
         const normalized = normalizeOpenClawModelRef(ref);
+        const inheritAgentThinkingLevel = !override?.trim()
+          && (!sessionModel?.trim() || !normalizedAgentRef || normalized === normalizedAgentRef);
+        const effectiveAgentThinkingLevel = agent && agent.modelSelectionMode !== AgentModelSelectionMode.Inherit
+          ? agent.thinkingLevel
+          : storeInstance.getAgent(AgentId.Main)?.thinkingLevel;
+
+        // Pass through third-party DSH plugin models (e.g. `our-free-model/...`)
+        // verbatim without rewriting provider IDs or falling back to paid plan models.
+        const rawParsed = parseRawProviderModelRef(ref);
+        if (rawParsed && rawParsed.providerId !== OpenClawProviderId.LobsteraiServer) {
+          const hostManager = getDshBootstrap().hostManager;
+          const syncedIds = hostManager.getSyncedProviderIds();
+          const canonicalRawProvider = canonicalizeDshProviderId(rawParsed.providerId);
+          const isLobsterSyncedProvider = syncedIds.has(rawParsed.providerId) || syncedIds.has(canonicalRawProvider);
+          if (hostManager.isReady() && !isLobsterSyncedProvider) {
+            let pluginSnapshot = await hostManager.listPluginModels();
+            let matchedPluginModel = findDshPluginModel(
+              pluginSnapshot,
+              rawParsed.providerId,
+              rawParsed.modelId,
+            );
+            if (!matchedPluginModel) {
+              pluginSnapshot = await hostManager.listPluginModels({ forceRefresh: true });
+              matchedPluginModel = findDshPluginModel(
+                pluginSnapshot,
+                rawParsed.providerId,
+                rawParsed.modelId,
+              );
+            }
+            if (matchedPluginModel) {
+              const reasoningEffort = resolveEffectiveDshReasoningEffort({
+                providerId: matchedPluginModel.providerId,
+                overrideThinkingLevel: thinkingLevelOverride,
+                sessionThinkingLevel: session?.thinkingLevel,
+                agentThinkingLevel: effectiveAgentThinkingLevel,
+                inheritAgentThinkingLevel,
+              });
+              return {
+                provider: matchedPluginModel.providerId,
+                model: matchedPluginModel.id,
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+                isDshPluginModel: true,
+              };
+            }
+            if (
+              hostManager.isKnownPluginModelProvider(rawParsed.providerId)
+              || hostManager.hasSyncedProviders()
+            ) {
+              throw new Error(
+                t('dshPluginModelUnavailable', {
+                  model: `${rawParsed.providerId}/${rawParsed.modelId}`,
+                }),
+              );
+            }
+          }
+        }
+
         const parsed = parsePrimaryModelRef(normalized);
         let selection: { provider: string; model: string } | null = null;
         if (parsed) {
@@ -2511,12 +2602,6 @@ const getDshBootstrap = (): DshBootstrap => {
         const serverMeta = selection.provider === OpenClawProviderId.LobsteraiServer
           ? getServerModelMetadata(selection.model)
           : undefined;
-        const normalizedAgentRef = agentModel?.trim() ? normalizeOpenClawModelRef(agentModel.trim()) : '';
-        const inheritAgentThinkingLevel = !override?.trim()
-          && (!sessionModel?.trim() || !normalizedAgentRef || normalized === normalizedAgentRef);
-        const effectiveAgentThinkingLevel = agent && agent.modelSelectionMode !== AgentModelSelectionMode.Inherit
-          ? agent.thinkingLevel
-          : storeInstance.getAgent(AgentId.Main)?.thinkingLevel;
         const reasoningEffort = resolveEffectiveDshReasoningEffort({
           providerId: selection.provider,
           modelMetadata: serverMeta,
@@ -2584,6 +2669,14 @@ const getDshBootstrap = (): DshBootstrap => {
       },
       onSideChatTurnFinished: (event) => {
         settleSideChatTurnUsage(event);
+      },
+      onRegisterExternalTurnUsage: ({ traceId, coworkSessionId, userMessage, title }) => {
+        registerLlmUsageContext(traceId, coworkSessionId, userMessage, {
+          ...(title ? { title } : {}),
+        });
+      },
+      onSettleExternalTurnUsage: (coworkSessionId) => {
+        settleCoworkTurnUsage(coworkSessionId);
       },
     });
     dshBootstrap.hostManager.on('connectionChange', () => {
@@ -9843,7 +9936,7 @@ if (!gotTheLock) {
           agent => agent.workingDirectory?.trim() || resolveAgentDefaultWorkingDirectory(agent.id) || os.homedir(),
         ),
       )];
-      const result = await getDshBootstrap().hostManager.refreshAgentWorkspaces(workspaceDirectories);
+      const result = await getDshBootstrap().refreshAgentWorkspacesWithSessions(workspaceDirectories);
       if (result && typeof result === 'object' && result.skipped === true) {
         await syncOpenClawConfig({ reason: 'dsh-ecosystem-open' });
       }
@@ -9878,6 +9971,7 @@ if (!gotTheLock) {
     setTitle: (sessionId, title) => {
       getCoworkStore().updateSession(sessionId, { title }, { touchUpdatedAt: false });
       reportUsageSessionTitle(sessionId);
+      dshBootstrap?.syncSessionTitleToDsh(sessionId, title);
     },
   });
 
@@ -9902,6 +9996,7 @@ if (!gotTheLock) {
         agentId?: string;
         modelOverride?: string;
         modelPresetId?: ModelPresetId;
+        dshAgentPreset?: string;
         thinkingLevel?: string;
         mediaSelection?: MediaSelectionState;
         pptCover?: PptCoverRequest;
@@ -10030,7 +10125,12 @@ if (!gotTheLock) {
           runtimeSkillIds || [],
           options.agentId || 'main',
           options.modelPresetId ? '' : options.modelOverride || '',
-          { thinkingLevel: thinkingLevel || '' },
+          {
+            thinkingLevel: thinkingLevel || '',
+            ...(typeof options.dshAgentPreset === 'string' && options.dshAgentPreset.trim()
+              ? { dshAgentPreset: options.dshAgentPreset.trim() }
+              : {}),
+          },
         );
 
         if (options.modelPresetId !== undefined) {
@@ -10959,6 +11059,7 @@ if (!gotTheLock) {
   ipcMain.handle(CoworkIpcChannel.DeleteSession, async (_event, sessionId: string) => {
     try {
       getCoworkEngineRouter().stopSession(sessionId);
+      dshBootstrap?.externalSessionSync?.handleCoworkSessionDeleted(sessionId);
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSession(sessionId);
       mediaSelectionBySession.delete(sessionId);
@@ -11001,6 +11102,7 @@ if (!gotTheLock) {
       const runtime = getCoworkEngineRouter();
       sessionIds.forEach(sessionId => {
         runtime.stopSession(sessionId);
+        dshBootstrap?.externalSessionSync?.handleCoworkSessionDeleted(sessionId);
       });
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSessions(sessionIds);
@@ -11057,6 +11159,7 @@ if (!gotTheLock) {
         sessionTitleGenerator.cancel(options.sessionId);
         coworkStoreInstance.updateSession(options.sessionId, { title }, { touchUpdatedAt: false });
         reportUsageSessionTitle(options.sessionId);
+        dshBootstrap?.syncSessionTitleToDsh(options.sessionId, title);
         return { success: true };
       } catch (error) {
         return {
@@ -11159,6 +11262,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.GetSession, async (_event, sessionId: string) => {
     try {
+      try {
+        await dshBootstrap?.externalSessionSync?.reconcileByCoworkSessionId(sessionId);
+      } catch (reconcileError) {
+        console.debug('[CoworkIPC] External DSH session catch-up skipped:', reconcileError);
+      }
       const store = getCoworkStore();
       const session = store.getSession(sessionId);
       if (session) {
