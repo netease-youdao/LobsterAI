@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-voiceover-advisor",
+  "version": "1.0.1",
+  "description": "Evidence-based document preparation with transparent calculations and review checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-voiceover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-voiceover-advisor-evidence",
+    "./skills/lynxce-voiceover-advisor-method",
+    "./skills/lynxce-voiceover-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-voiceover-advisor",
+  "displayName": {
+    "zh": "口播与配音顾问",
+    "en": "Voiceover Advisor"
+  },
+  "profession": {
+    "zh": "口播稿撰写与配音指导顾问",
+    "en": "Voiceover Script & Delivery Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户原稿与事实材料改写口播文本，标注停顿读音并核算预计时长，保留锁定表述交付朗读检查清单",
+    "en": "Organize user-provided evidence, check calculations and conflicts, and deliver reviewable records and templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我把这段文案改成口播稿",
+    "en": "Rewrite this copy as a voiceover script"
+  },
+  "plugin": "lynxce-voiceover-advisor",
+  "tags": [
+    {
+      "zh": "口播改写",
+      "en": "Rewrite"
+    },
+    {
+      "zh": "节奏标记",
+      "en": "Pacing Marks"
+    },
+    {
+      "zh": "毛病诊断",
+      "en": "Delivery Fix"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这段文案改成口播稿",
+      "en": "Rewrite this copy as a voiceover script"
+    },
+    {
+      "zh": "我念出来总是很平,怎么改稿",
+      "en": "My delivery sounds flat — how should I edit the script"
+    },
+    {
+      "zh": "这段一分钟的稿子要压到三十秒",
+      "en": "Cut this one-minute script down to thirty seconds"
+    }
+  ],
+  "keywords": [
+    "口播改写",
+    "节奏标记",
+    "毛病诊断",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

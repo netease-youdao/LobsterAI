@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-festival-advisor",
+  "version": "1.0.4",
+  "description": "Festival shopping by headcount and delivery date: lists, gift-box math and order cutoffs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-festival-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-festival-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-festival-advisor",
+  "displayName": {
+    "zh": "节日年货与礼盒采购顾问",
+    "en": "Festival Shopping Advisor"
+  },
+  "profession": {
+    "zh": "节日年货与礼盒采购顾问",
+    "en": "Festival Shopping Advisor"
+  },
+  "displayDescription": {
+    "zh": "年货按人数和到货日来排：分类清单怎么列、礼盒怎么折成单品价、最晚几号前必须下单。",
+    "en": "Festival shopping by headcount and delivery date: lists, gift-box math and order cutoffs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我列一份年货清单",
+    "en": "Draft my festival shopping list"
+  },
+  "plugin": "lynxce-festival-advisor",
+  "tags": [
+    {
+      "zh": "年货采购",
+      "en": "Festival"
+    },
+    {
+      "zh": "礼盒比价",
+      "en": "Gift Boxes"
+    },
+    {
+      "zh": "到货时间",
+      "en": "Delivery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我列一份年货清单",
+      "en": "Draft my festival shopping list"
+    },
+    {
+      "zh": "这个礼盒划不划算",
+      "en": "Is this gift box good value"
+    },
+    {
+      "zh": "什么时候下单还来得及",
+      "en": "When is the latest I can order"
+    }
+  ],
+  "keywords": [
+    "年货采购",
+    "礼盒比价",
+    "到货时间",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-essay-rubric-anchor-b45",
+  "version": "1.0.0",
+  "description": "Creates analytic essay rubrics, scored anchors and moderation exercises with explicit partial-credit rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-essay-rubric-anchor-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-essay-rubric-anchor-b45-dimension-map",
+    "./skills/lynxce-essay-rubric-anchor-b45-anchor-writing",
+    "./skills/lynxce-essay-rubric-anchor-b45-moderation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-essay-rubric-anchor-b45",
+  "displayName": {
+    "zh": "评分顾问",
+    "en": "Essay Rubric and Anchor Designer"
+  },
+  "profession": {
+    "zh": "论述题评分顾问",
+    "en": "Essay Rubric and Anchor Designer"
+  },
+  "displayDescription": {
+    "zh": "将论述题目标转成分维评分量规，编写完整作答锚例与部分分说明，交付双评校准流程和学生反馈范例。",
+    "en": "Creates analytic essay rubrics, scored anchors and moderation exercises with explicit partial-credit rules."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "为这道十分论述题写四维评分量规并提供三份完整锚例。",
+    "en": "Essay Rubric and Anchor Designer"
+  },
+  "plugin": "lynxce-essay-rubric-anchor-b45",
+  "tags": [
+    {
+      "zh": "论述题评分",
+      "en": "论述题评分"
+    },
+    {
+      "zh": "评分量规",
+      "en": "评分量规"
+    },
+    {
+      "zh": "阅卷校准",
+      "en": "阅卷校准"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "为这道十分论述题写四维评分量规并提供三份完整锚例。",
+      "en": "Essay Rubric and Anchor Designer"
+    },
+    {
+      "zh": "两位老师给同一回答打七分和九分，请定位差异并改写给分规则。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "题目允许两种立场，请设计不按立场给分的评分标准。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "论述题评分",
+    "评分量规",
+    "阅卷校准"
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-education-error-tier-retest-b43-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile teacher error tier and retest from supplied records and produce reviewable text tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-education-error-tier-retest-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-education-error-tier-retest-b43",
+    "./skills/lynxce-education-error-tier-retest-b43-int-evidence",
+    "./skills/lynxce-education-error-tier-retest-b43-int-migration"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-education-error-tier-retest-b43-advisor",
+  "displayName": {
+    "zh": "教师错题分层复测顾问",
+    "en": "Teacher Error Tier and Retest Advisor"
+  },
+  "profession": {
+    "zh": "教师错题分层复测顾问",
+    "en": "Teacher Error Tier and Retest Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向任课教师，依据匿名答卷与知识点范围归类错因，提供分层练习、答案解析及复测反馈记录表。",
+    "en": "Reconcile teacher error tier and retest from supplied records and produce reviewable text tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "根据现有记录生成首份教师错题分层复测表",
+    "en": "Build the first review table from supplied records"
+  },
+  "plugin": "lynxce-education-error-tier-retest-b43-advisor",
+  "tags": [
+    {
+      "zh": "任课教师",
+      "en": "Target Role"
+    },
+    {
+      "zh": "教师错题分层复测",
+      "en": "Task Review"
+    },
+    {
+      "zh": "证据复核表",
+      "en": "Evidence Review Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有记录生成首份教师错题分层复测表",
+      "en": "Build the first review table from supplied records"
+    },
+    {
+      "zh": "资料冲突或条件缺失时怎样保留待核项",
+      "en": "Handle conflicting records and missing conditions"
+    },
+    {
+      "zh": "根据后续反馈更新版本并复核影响范围",
+      "en": "Revise the table and check the affected scope"
+    }
+  ],
+  "keywords": [
+    "任课教师",
+    "教师错题分层复测",
+    "证据复核表"
+  ]
+}

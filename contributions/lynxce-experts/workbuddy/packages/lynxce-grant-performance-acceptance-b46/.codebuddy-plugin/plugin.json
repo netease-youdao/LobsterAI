@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-grant-performance-acceptance-b46",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked project documents and reconcile supplied requirements, outcomes and budgets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-grant-performance-acceptance-b46.md"
+  ],
+  "skills": [
+    "./skills/lynxce-grant-performance-acceptance-b46-baseline-change-chain",
+    "./skills/lynxce-grant-performance-acceptance-b46-performance-evidence-trace",
+    "./skills/lynxce-grant-performance-acceptance-b46-budget-deviation-draft"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-grant-performance-acceptance-b46",
+  "displayName": {
+    "zh": "验收顾问",
+    "en": "Grant Performance Acceptance Advisor"
+  },
+  "profession": {
+    "zh": "项目验收顾问",
+    "en": "Grant Performance Acceptance Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向项目负责人和科研管理人员，对照任务书核验成果与经费，交付逐指标证据表、偏差说明和完整自评稿",
+    "en": "Prepare evidence-linked project documents and reconcile supplied requirements, outcomes and budgets."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按任务书、变更批复和测试报告核指标，直接写一份完整项目验收自评稿。",
+    "en": "Grant Performance Acceptance Advisor"
+  },
+  "plugin": "lynxce-grant-performance-acceptance-b46",
+  "tags": [
+    {
+      "zh": "项目验收",
+      "en": "项目验收"
+    },
+    {
+      "zh": "绩效自评",
+      "en": "绩效自评"
+    },
+    {
+      "zh": "经费执行",
+      "en": "经费执行"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按任务书、变更批复和测试报告核指标，直接写一份完整项目验收自评稿。",
+      "en": "Grant Performance Acceptance Advisor"
+    },
+    {
+      "zh": "预算100万元实际92万元，请核各资金来源执行率并写偏差说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "同一批测试报告分别96%和94%，帮我保留冲突写补正说明，别择优选结果。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "项目验收",
+    "绩效自评",
+    "经费执行"
+  ]
+}

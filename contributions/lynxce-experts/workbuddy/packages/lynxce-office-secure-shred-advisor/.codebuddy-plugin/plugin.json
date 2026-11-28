@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-secure-shred-advisor",
+  "version": "1.0.0",
+  "description": "Plan disposal bags and seals, reconcile custody and track approved completion.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-secure-shred-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-secure-shred"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-secure-shred-advisor",
+  "displayName": {
+    "zh": "销毁封袋交接核算师",
+    "en": "Disposal Bag Handover Calculator"
+  },
+  "profession": {
+    "zh": "保密文件销毁封袋耗材交接核算师",
+    "en": "Document Disposal Supply and Custody Calculator"
+  },
+  "displayDescription": {
+    "zh": "按批准销毁批次核算封袋与封签耗材，逐包核对编号重量及交接状态，隔离差异批次，输出闭环复核台账。",
+    "en": "Plan disposal bags and seals, reconcile custody and track approved completion."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按批准批次重量算封袋和封签采购量",
+    "en": "Calculate bags and seals from approved batch weights"
+  },
+  "plugin": "lynxce-office-secure-shred-advisor",
+  "tags": [
+    {
+      "zh": "封袋算量",
+      "en": "Bag Quantities"
+    },
+    {
+      "zh": "封签追踪",
+      "en": "Seal Tracking"
+    },
+    {
+      "zh": "逐包交接",
+      "en": "Package Custody"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按批准批次重量算封袋和封签采购量",
+      "en": "Calculate bags and seals from approved batch weights"
+    },
+    {
+      "zh": "交出七袋只收到六袋怎样留交接差异",
+      "en": "Record a custody mismatch when only six of seven bags arrive"
+    },
+    {
+      "zh": "做逐包重量封签与完成凭证核对表",
+      "en": "Build a package weight seal and completion evidence ledger"
+    }
+  ],
+  "keywords": [
+    "封袋算量",
+    "封签追踪",
+    "逐包交接",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

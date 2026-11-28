@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-nap-bed-advisor",
+  "version": "1.0.0",
+  "description": "Plan office nap cots: space, aisle width, load rating, storage, pillows and placement.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-nap-bed-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-nap-bed"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-nap-bed-advisor",
+  "displayName": {
+    "zh": "午休用品配置助理",
+    "en": "Office Nap Supplies Assistant"
+  },
+  "profession": {
+    "zh": "午休折叠床与午睡枕团队办公采购顾问",
+    "en": "Office Nap Cot and Pillow Team Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "午休用品怎么配：按工位空间核折叠床展开与收纳尺寸、看承重，出团队午休采购表与摆放方案。",
+    "en": "Plan office nap cots: space, aisle width, load rating, storage, pillows and placement."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "6 米长的空地能放几张折叠床",
+    "en": "How many cots fit along a 6 meter wall"
+  },
+  "plugin": "lynxce-office-nap-bed-advisor",
+  "tags": [
+    {
+      "zh": "空间核算",
+      "en": "Space Check"
+    },
+    {
+      "zh": "承重收纳",
+      "en": "Load and Storage"
+    },
+    {
+      "zh": "摆放方案",
+      "en": "Placement Plan"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "6 米长的空地能放几张折叠床",
+      "en": "How many cots fit along a 6 meter wall"
+    },
+    {
+      "zh": "折叠床承重要选多少才稳",
+      "en": "What load rating an office cot needs"
+    },
+    {
+      "zh": "午休床放工位旁会不会堵通道",
+      "en": "Will a cot beside desks block the aisle"
+    }
+  ],
+  "keywords": [
+    "空间核算",
+    "承重收纳",
+    "摆放方案",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-noise-cancel-headset-advisor",
+  "version": "1.0.0",
+  "description": "Bulk buy meeting headsets: mic noise reduction, wear time, ports, spares, comparison and sign sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-noise-cancel-headset-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-noise-cancel-headset"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-noise-cancel-headset-advisor",
+  "displayName": {
+    "zh": "会议耳麦采购顾问",
+    "en": "Meeting Headset Purchase Advisor"
+  },
+  "profession": {
+    "zh": "降噪会议耳麦团队批量办公采购顾问",
+    "en": "Noise Cancelling Meeting Headset Bulk Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "会议耳麦怎么批量买：分清通话降噪与听音降噪、实测开放工位收音、按会议时长选佩戴与接口，附比价表。",
+    "en": "Bulk buy meeting headsets: mic noise reduction, wear time, ports, spares, comparison and sign sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "客服组二十多人买什么会议耳麦",
+    "en": "Headsets for a support team of twenty plus"
+  },
+  "plugin": "lynxce-noise-cancel-headset-advisor",
+  "tags": [
+    {
+      "zh": "通话降噪",
+      "en": "Mic Noise Reduction"
+    },
+    {
+      "zh": "佩戴时长",
+      "en": "Wear Time"
+    },
+    {
+      "zh": "批量比价",
+      "en": "Bulk Price Comparison"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "客服组二十多人买什么会议耳麦",
+      "en": "Headsets for a support team of twenty plus"
+    },
+    {
+      "zh": "通话降噪和主动降噪有什么区别",
+      "en": "Mic noise reduction versus active noise cancelling"
+    },
+    {
+      "zh": "批量买耳麦要多备几个",
+      "en": "How many spare headsets to order"
+    }
+  ],
+  "keywords": [
+    "通话降噪",
+    "佩戴时长",
+    "批量比价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-vertical-poster-advisor",
+  "version": "1.0.2",
+  "description": "Turn event details and placement into vertical poster specs: canvas, safe areas, type sizes, contrast checks and an export list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-vertical-poster-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-vertical-poster"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-vertical-poster-advisor",
+  "displayName": {
+    "zh": "竖版海报设计顾问",
+    "en": "Vertical Poster Advisor"
+  },
+  "profession": {
+    "zh": "竖版海报与预告图设计顾问｜灵策智算",
+    "en": "Vertical Poster and Teaser Design Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据活动信息和投放位置定竖版海报画幅安全区与字号，核算对比度和缩略可读性，交付排版规格及导出核对单。",
+    "en": "Turn event details and placement into vertical poster specs: canvas, safe areas, type sizes, contrast checks and an export list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据活动资料和投放位置生成竖版预告图排版规格表",
+    "en": "Build a vertical teaser layout spec from event details and placement"
+  },
+  "plugin": "lynxce-vertical-poster-advisor",
+  "tags": [
+    {
+      "zh": "排版规格",
+      "en": "Layout Spec"
+    },
+    {
+      "zh": "字号对比",
+      "en": "Type and Contrast"
+    },
+    {
+      "zh": "导出核对",
+      "en": "Export Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据活动资料和投放位置生成竖版预告图排版规格表",
+      "en": "Build a vertical teaser layout spec from event details and placement"
+    },
+    {
+      "zh": "复核这张海报的安全区字号对比度和信息错漏",
+      "en": "Review this poster for safe areas, type size, contrast and errors"
+    },
+    {
+      "zh": "只有活动名称时先给默认竖版规格和待补清单",
+      "en": "Give a default vertical spec and missing-info list from the event name only"
+    }
+  ],
+  "keywords": [
+    "排版规格",
+    "字号对比",
+    "导出核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

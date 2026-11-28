@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-equipment-repair-advisor",
+  "version": "1.0.1",
+  "description": "Draft repair intake, vendor follow-up and acceptance records with timestamp checks and repair versus replacement assumptions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-equipment-repair-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-equipment-repair"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-equipment-repair-advisor",
+  "displayName": {
+    "zh": "设备维保顾问",
+    "en": "Equipment Maintenance Advisor"
+  },
+  "profession": {
+    "zh": "办公设备报修与维保跟进顾问｜灵策智算",
+    "en": "Office Equipment Repair and Maintenance Advisor"
+  },
+  "displayDescription": {
+    "zh": "把设备故障整理为报修单厂商跟进与验收台账区分响应到场修复时点核对费用假设和重复故障便于维修决策",
+    "en": "Draft repair intake, vendor follow-up and acceptance records with timestamp checks and repair versus replacement assumptions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请把这些故障信息整理成报修单和处理优先级表",
+    "en": "Build repair tickets and proposed priorities from these incidents"
+  },
+  "plugin": "lynxce-equipment-repair-advisor",
+  "tags": [
+    {
+      "zh": "报修登记",
+      "en": "Repair Intake"
+    },
+    {
+      "zh": "厂商跟进",
+      "en": "Vendor Tracking"
+    },
+    {
+      "zh": "修换比较",
+      "en": "Repair Comparison"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这些故障信息整理成报修单和处理优先级表",
+      "en": "Build repair tickets and proposed priorities from these incidents"
+    },
+    {
+      "zh": "请核对厂商承诺与实际时间交付履约差异表",
+      "en": "Compare vendor commitments with actual service timestamps"
+    },
+    {
+      "zh": "请按同一使用周期交付设备修理与更换比较表",
+      "en": "Compare repair and replacement under one planning horizon"
+    }
+  ],
+  "keywords": [
+    "报修登记",
+    "厂商跟进",
+    "修换比较"
+  ],
+  "needEncrypt": true
+}

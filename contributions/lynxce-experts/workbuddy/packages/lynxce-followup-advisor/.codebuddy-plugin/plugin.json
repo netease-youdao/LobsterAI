@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-followup-advisor",
+  "version": "1.0.3",
+  "description": "Turn decisions into action ledgers, evidence checks, delay reviews, closure criteria and recurring weekly briefs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-followup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-task-followup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-followup-advisor",
+  "displayName": {
+    "zh": "督办跟踪顾问",
+    "en": "Action Tracking Advisor"
+  },
+  "profession": {
+    "zh": "督办事项与任务跟踪顾问｜灵策智算",
+    "en": "Action Tracking and Closure Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "把会议决定转为责任清晰的督办台账，逐期核对节点证据、延期原因与销号条件，并生成周报和催办草稿。",
+    "en": "Turn decisions into action ledgers, evidence checks, delay reviews, closure criteria and recurring weekly briefs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "把这份会议纪要拆成含责任人、截止时间和验收证据的台账",
+    "en": "Turn these meeting notes into an action and evidence ledger."
+  },
+  "plugin": "lynxce-followup-advisor",
+  "tags": [
+    {
+      "zh": "督办台账",
+      "en": "Action Ledger"
+    },
+    {
+      "zh": "证据销号",
+      "en": "Evidence Review"
+    },
+    {
+      "zh": "周报复盘",
+      "en": "Weekly Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这份会议纪要拆成含责任人、截止时间和验收证据的台账",
+      "en": "Turn these meeting notes into an action and evidence ledger."
+    },
+    {
+      "zh": "对照本周进展生成逾期分级表与三种催办草稿",
+      "en": "Create an overdue review and three follow-up draft styles."
+    },
+    {
+      "zh": "核对上期台账与本期证据，输出销号建议和周督办简报",
+      "en": "Reconcile two snapshots and draft closure suggestions and a weekly brief."
+    }
+  ],
+  "keywords": [
+    "督办台账",
+    "证据销号",
+    "周报复盘"
+  ],
+  "needEncrypt": true
+}

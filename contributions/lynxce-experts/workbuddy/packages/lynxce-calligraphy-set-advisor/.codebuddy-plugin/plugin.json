@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-calligraphy-set-advisor",
+  "version": "1.0.0",
+  "description": "Pick calligraphy supplies: brush hair, tip length, ink, paper, grid size and monthly cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-calligraphy-set-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-calligraphy-set"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-calligraphy-set-advisor",
+  "displayName": {
+    "zh": "书法笔墨字帖选购顾问",
+    "en": "Calligraphy Brush, Ink and Copybook Advisor"
+  },
+  "profession": {
+    "zh": "11.11 书法笔墨与字帖选购顾问",
+    "en": "11.11 Calligraphy Brush, Ink and Copybook Advisor"
+  },
+  "displayDescription": {
+    "zh": "书法笔墨怎么挑：按字径选笔毫与出锋、核墨汁与宣纸毛边纸、配格子字帖、算每月练字耗材。",
+    "en": "Pick calligraphy supplies: brush hair, tip length, ink, paper, grid size and monthly cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子初学中楷毛笔选多长出锋",
+    "en": "What brush tip length suits a beginner writing medium script"
+  },
+  "plugin": "lynxce-calligraphy-set-advisor",
+  "tags": [
+    {
+      "zh": "出锋字径",
+      "en": "Tip Length and Size"
+    },
+    {
+      "zh": "纸墨搭配",
+      "en": "Paper and Ink"
+    },
+    {
+      "zh": "练字耗材",
+      "en": "Practice Supplies Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子初学中楷毛笔选多长出锋",
+      "en": "What brush tip length suits a beginner writing medium script"
+    },
+    {
+      "zh": "练字用生宣还是毛边纸",
+      "en": "Raw rice paper or bamboo paper for daily practice"
+    },
+    {
+      "zh": "每天练两张一个月耗材多少钱",
+      "en": "Monthly supply cost for two practice sheets a day"
+    }
+  ],
+  "keywords": [
+    "出锋字径",
+    "纸墨搭配",
+    "练字耗材",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

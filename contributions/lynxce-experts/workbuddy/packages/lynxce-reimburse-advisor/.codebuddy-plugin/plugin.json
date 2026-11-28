@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-reimburse-advisor",
+  "version": "1.0.1",
+  "description": "Get expenses approved first time: documents, evidence by category, pitfalls.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-reimburse-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-reimburse-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-reimburse-advisor",
+  "displayName": {
+    "zh": "票据整理与报销流程顾问",
+    "en": "Expense Documentation Advisor"
+  },
+  "profession": {
+    "zh": "票据整理与报销流程顾问",
+    "en": "Expense Documentation Advisor"
+  },
+  "displayDescription": {
+    "zh": "报销怎么才能一次过：单据要齐哪几样、按类目要什么凭证、常见被退回的原因都有哪些。",
+    "en": "Get expenses approved first time: documents, evidence by category, pitfalls."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "这笔费用要准备什么单据",
+    "en": "Which documents do I need for this expense"
+  },
+  "plugin": "lynxce-reimburse-advisor",
+  "tags": [
+    {
+      "zh": "报销流程",
+      "en": "Expense Claim"
+    },
+    {
+      "zh": "单据核对",
+      "en": "Documents"
+    },
+    {
+      "zh": "退回原因",
+      "en": "Pitfalls"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这笔费用要准备什么单据",
+      "en": "Which documents do I need for this expense"
+    },
+    {
+      "zh": "为什么我的报销被退回",
+      "en": "Why was my claim rejected"
+    },
+    {
+      "zh": "帮我整理一份报销清单",
+      "en": "Help me organise this expense claim"
+    }
+  ],
+  "keywords": [
+    "报销流程",
+    "单据核对",
+    "退回原因",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

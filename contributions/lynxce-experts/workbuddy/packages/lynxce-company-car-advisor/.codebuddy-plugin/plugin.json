@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-company-car-advisor",
+  "version": "1.0.1",
+  "description": "Turn vehicle lists, trip and fuel logs into a car register, renewal schedule, dispatch log and monthly fuel-mileage checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-company-car-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-company-car"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-company-car-advisor",
+  "displayName": {
+    "zh": "公务用车管理顾问",
+    "en": "Company Car Advisor"
+  },
+  "profession": {
+    "zh": "公务用车登记与调度管理顾问｜灵策智算",
+    "en": "Company Vehicle Booking and Dispatch Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据车辆清单与出车加油记录，生成车辆档案、到期提醒表、用车调度登记和月度油耗里程核对报告。",
+    "en": "Turn vehicle lists, trip and fuel logs into a car register, renewal schedule, dispatch log and monthly fuel-mileage checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我的车辆清单生成档案和保险检验保养到期提醒表",
+    "en": "Build a vehicle register and renewal schedule from my car list"
+  },
+  "plugin": "lynxce-company-car-advisor",
+  "tags": [
+    {
+      "zh": "车辆台账",
+      "en": "Vehicle Register"
+    },
+    {
+      "zh": "到期提醒",
+      "en": "Renewal Schedule"
+    },
+    {
+      "zh": "油耗核对",
+      "en": "Fuel Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的车辆清单生成档案和保险检验保养到期提醒表",
+      "en": "Build a vehicle register and renewal schedule from my car list"
+    },
+    {
+      "zh": "帮我复核这个月的出车登记和加油记录是否对得上",
+      "en": "Check whether this month's trip and fuel logs reconcile"
+    },
+    {
+      "zh": "只有车牌和保险到期日先给我一张最小管理表",
+      "en": "Give me a minimal register from only plates and insurance end dates"
+    }
+  ],
+  "keywords": [
+    "车辆台账",
+    "到期提醒",
+    "油耗核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

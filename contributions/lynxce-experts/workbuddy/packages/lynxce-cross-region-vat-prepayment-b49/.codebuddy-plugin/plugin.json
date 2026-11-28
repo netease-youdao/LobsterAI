@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-cross-region-vat-prepayment-b49",
+  "version": "1.0.0",
+  "description": "Reconcile cross-region construction receipts, paid subcontract costs and actual VAT prepayments in project-level drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cross-region-vat-prepayment-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-prepayment-region-stage-b49",
+    "./skills/lynxce-prepayment-paid-subcontract-b49",
+    "./skills/lynxce-prepayment-receipt-credit-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cross-region-vat-prepayment-b49",
+  "displayName": {
+    "zh": "预缴顾问",
+    "en": "Cross Region Construction VAT Prepayment Advisor"
+  },
+  "profession": {
+    "zh": "异地预缴顾问",
+    "en": "Cross Region Construction VAT Prepayment Advisor"
+  },
+  "displayDescription": {
+    "zh": "为跨地区建筑企业财务核对项目地点、已付分包与预缴凭证，形成逐项目税款台账、抵减说明和冲突补正稿。",
+    "en": "Reconcile cross-region construction receipts, paid subcontract costs and actual VAT prepayments in project-level drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按2026新办法核跨地区建筑两项目，区分预收与纳税义务。",
+    "en": "Cross Region Construction VAT Prepayment Advisor"
+  },
+  "plugin": "lynxce-cross-region-vat-prepayment-b49",
+  "tags": [
+    {
+      "zh": "异地预缴",
+      "en": "异地预缴"
+    },
+    {
+      "zh": "建筑分包",
+      "en": "建筑分包"
+    },
+    {
+      "zh": "项目抵减",
+      "en": "项目抵减"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按2026新办法核跨地区建筑两项目，区分预收与纳税义务。",
+      "en": "Cross Region Construction VAT Prepayment Advisor"
+    },
+    {
+      "zh": "分包台账与银行实付不一致，请保留两口径重写全量预缴稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "预收已预缴后再发生纳税义务，帮我防止同一价款重复预缴。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "异地预缴",
+    "建筑分包",
+    "项目抵减"
+  ]
+}

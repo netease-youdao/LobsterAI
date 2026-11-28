@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-snack-stockup-advisor",
+  "version": "1.0.2",
+  "description": "Back-calculate snack and drink quantities from consumption, flag near-expiry risk, and convert bundles to unit prices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-snack-stockup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-snack-stockup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-snack-stockup-advisor",
+  "displayName": {
+    "zh": "零食饮料大促囤货与保质期顾问",
+    "en": "Snack and Drink Promo Stock-up and Shelf-life Advisor"
+  },
+  "profession": {
+    "zh": "零食饮料大促囤货与保质期顾问",
+    "en": "Snack and Drink Promo Stock-up and Shelf-life Advisor"
+  },
+  "displayDescription": {
+    "zh": "零食饮料大促囤多少：按消耗速度倒推数量，识别临期风险，把整箱组合折算到每瓶每百克。",
+    "en": "Back-calculate snack and drink quantities from consumption, flag near-expiry risk, and convert bundles to unit prices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一家三口零食饮料大促囤多少合适",
+    "en": "How much snack and drink to stock for three"
+  },
+  "plugin": "lynxce-snack-stockup-advisor",
+  "tags": [
+    {
+      "zh": "消耗倒推",
+      "en": "Consumption Planning"
+    },
+    {
+      "zh": "临期识别",
+      "en": "Near-expiry Check"
+    },
+    {
+      "zh": "每瓶单价",
+      "en": "Unit Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一家三口零食饮料大促囤多少合适",
+      "en": "How much snack and drink to stock for three"
+    },
+    {
+      "zh": "整箱和六连包哪个每瓶更便宜",
+      "en": "Case or six-pack, which is cheaper per bottle"
+    },
+    {
+      "zh": "这个特价是不是临期货",
+      "en": "Is this deal near expiry"
+    }
+  ],
+  "keywords": [
+    "消耗倒推",
+    "临期识别",
+    "每瓶单价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

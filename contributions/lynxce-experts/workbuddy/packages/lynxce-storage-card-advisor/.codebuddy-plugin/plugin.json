@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-storage-card-advisor",
+  "version": "1.0.1",
+  "description": "Choose memory cards: spot fake capacity, match U3, V30 and A2 to the use, right interface, compare price per GB.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-storage-card-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-storage-card"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-storage-card-advisor",
+  "displayName": {
+    "zh": "存储卡与U盘选购顾问",
+    "en": "Memory Card and USB Drive Advisor"
+  },
+  "profession": {
+    "zh": "11.11 存储卡与U盘选购顾问",
+    "en": "11.11 Memory Card and USB Drive Advisor"
+  },
+  "displayDescription": {
+    "zh": "存储卡U盘怎么选：扩容假卡怎么识别、速度等级按用途匹配、接口与设备对应、按每GB单价比较。",
+    "en": "Choose memory cards: spot fake capacity, match U3, V30 and A2 to the use, right interface, compare price per GB."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "拍 4K 视频该买什么速度的卡",
+    "en": "What card speed do I need for 4K video"
+  },
+  "plugin": "lynxce-storage-card-advisor",
+  "tags": [
+    {
+      "zh": "扩容识别",
+      "en": "Fake Capacity Check"
+    },
+    {
+      "zh": "速度等级",
+      "en": "Speed Class"
+    },
+    {
+      "zh": "每GB单价",
+      "en": "Price per GB"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "拍 4K 视频该买什么速度的卡",
+      "en": "What card speed do I need for 4K video"
+    },
+    {
+      "zh": "怎么判断存储卡是不是扩容假卡",
+      "en": "How can I tell if a memory card is fake capacity"
+    },
+    {
+      "zh": "这几款 U 盘按每 GB 算哪个合适",
+      "en": "Which of these USB drives is better per GB"
+    }
+  ],
+  "keywords": [
+    "扩容识别",
+    "速度等级",
+    "每GB单价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

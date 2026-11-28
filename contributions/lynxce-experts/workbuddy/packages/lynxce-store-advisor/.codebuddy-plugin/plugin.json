@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-store-advisor",
+  "version": "1.0.1",
+  "description": "Turn site, cost and sales data into break-even and payback estimates, menu matrices, audit scorecards and review replies.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-store-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-store-site"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-store-advisor",
+  "displayName": {
+    "zh": "门店选址运营顾问",
+    "en": "Retail Store Advisor"
+  },
+  "profession": {
+    "zh": "连锁门店选址与运营顾问",
+    "en": "Retail Site Selection and Store Operations Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据铺位、成本与经营数据，整理保本营业额与回收期测算、菜单四象限、巡检评分表和差评公开回复草稿。",
+    "en": "Turn site, cost and sales data into break-even and payback estimates, menu matrices, audit scorecards and review replies."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据铺位租金和同类门店数据测算保本营业额与回收期",
+    "en": "Estimate break-even sales and payback for this site"
+  },
+  "plugin": "lynxce-store-advisor",
+  "tags": [
+    {
+      "zh": "保本测算",
+      "en": "Break-even Estimate"
+    },
+    {
+      "zh": "菜单分析",
+      "en": "Menu Engineering"
+    },
+    {
+      "zh": "门店巡检",
+      "en": "Store Audit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据铺位租金和同类门店数据测算保本营业额与回收期",
+      "en": "Estimate break-even sales and payback for this site"
+    },
+    {
+      "zh": "复核我这份巡检表和差评回复有没有漏项与风险",
+      "en": "Review my audit form and review reply for gaps and risks"
+    },
+    {
+      "zh": "只有租金和面积时先给选址测算结构和待补数据",
+      "en": "With only rent and area, give the site model and missing data"
+    }
+  ],
+  "keywords": [
+    "保本测算",
+    "菜单分析",
+    "门店巡检",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

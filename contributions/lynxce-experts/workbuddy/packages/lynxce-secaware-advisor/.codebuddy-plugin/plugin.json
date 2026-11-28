@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-secaware-advisor",
+  "version": "1.0.1",
+  "description": "Turn your data types and roles into a data tiering table, a do-and-don't staff handbook, a phishing drill plan and an incident report flow.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-secaware-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-secaware-advisor",
+  "displayName": {
+    "zh": "数据安全意识顾问",
+    "en": "Data Security & Compliance Awareness Advisor"
+  },
+  "profession": {
+    "zh": "企业数据安全与员工合规意识顾问",
+    "en": "Data Security and Staff Compliance Awareness Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据企业数据类型与岗位分工整理数据分级表和员工行为手册，设计钓鱼演练方案，附事件上报流程与指标核算。",
+    "en": "Turn your data types and roles into a data tiering table, a do-and-don't staff handbook, a phishing drill plan and an incident report flow."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "11-SecurityCompliance",
+  "defaultInitPrompt": {
+    "zh": "根据我们的数据类型和岗位生成分级表与员工行为手册",
+    "en": "Build a data tiering table and staff handbook from our data and roles"
+  },
+  "plugin": "lynxce-secaware-advisor",
+  "tags": [
+    {
+      "zh": "数据分级",
+      "en": "Data Tiering"
+    },
+    {
+      "zh": "钓鱼演练",
+      "en": "Phishing Drill"
+    },
+    {
+      "zh": "事件上报",
+      "en": "Incident Report"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的数据类型和岗位生成分级表与员工行为手册",
+      "en": "Build a data tiering table and staff handbook from our data and roles"
+    },
+    {
+      "zh": "帮我复核这份钓鱼演练方案和结果统计有没有问题",
+      "en": "Review this phishing drill plan and result statistics"
+    },
+    {
+      "zh": "只知道公司人数和主要业务先给一版分级与上报草稿",
+      "en": "With only headcount and business draft tiering and reporting first"
+    }
+  ],
+  "keywords": [
+    "数据分级",
+    "钓鱼演练",
+    "事件上报",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

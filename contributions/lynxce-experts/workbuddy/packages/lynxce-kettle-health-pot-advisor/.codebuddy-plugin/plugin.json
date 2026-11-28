@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kettle-health-pot-advisor",
+  "version": "1.0.1",
+  "description": "Pick kettles and health pots: capacity and power, 304 or 316 steel, keep-warm, glass body, power cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kettle-health-pot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kettle-health-pot"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kettle-health-pot-advisor",
+  "displayName": {
+    "zh": "电热水壶与养生壶选购顾问",
+    "en": "Electric Kettle and Health Pot Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电热水壶与养生壶选购顾问",
+    "en": "11.11 Electric Kettle and Health Pot Advisor"
+  },
+  "displayDescription": {
+    "zh": "电热水壶养生壶怎么挑：按人数定容量功率、核不锈钢牌号范围、看恒温保温与玻璃壶体、算月电费。",
+    "en": "Pick kettles and health pots: capacity and power, 304 or 316 steel, keep-warm, glass body, power cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "冲奶粉恒温壶一个月电费多少",
+    "en": "How much does a keep-warm kettle cost per month for formula"
+  },
+  "plugin": "lynxce-kettle-health-pot-advisor",
+  "tags": [
+    {
+      "zh": "容量功率",
+      "en": "Capacity and Power"
+    },
+    {
+      "zh": "不锈钢牌号",
+      "en": "Steel Grade"
+    },
+    {
+      "zh": "恒温电费",
+      "en": "Keep-warm Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "冲奶粉恒温壶一个月电费多少",
+      "en": "How much does a keep-warm kettle cost per month for formula"
+    },
+    {
+      "zh": "316 不锈钢水壶值得比 304 多花一倍吗",
+      "en": "Is 316 steel worth double the price of 304"
+    },
+    {
+      "zh": "宿舍限功率 1000 瓦能买哪种水壶",
+      "en": "Which kettle works under a 1000 watt dorm limit"
+    }
+  ],
+  "keywords": [
+    "容量功率",
+    "不锈钢牌号",
+    "恒温电费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

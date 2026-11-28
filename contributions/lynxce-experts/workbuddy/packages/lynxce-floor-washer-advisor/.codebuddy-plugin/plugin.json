@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-floor-washer-advisor",
+  "version": "1.0.1",
+  "description": "Pick floor washers: runtime and tank for floor area, self-cleaning and drying, yearly roller and filter cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-floor-washer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-floor-washer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-floor-washer-advisor",
+  "displayName": {
+    "zh": "洗地机选购与耗材顾问",
+    "en": "Floor Washer and Consumables Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 洗地机选购与滚刷滤芯耗材核算顾问",
+    "en": "11.11 Floor Washer and Consumables Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "洗地机怎么挑：按户型面积核续航与水箱，看自清洁烘干与贴边，算滚刷滤芯年耗材比三年总成本。",
+    "en": "Pick floor washers: runtime and tank for floor area, self-cleaning and drying, yearly roller and filter cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "90 平米的房子洗地机要多长续航",
+    "en": "How much runtime does a 90 square meter home need"
+  },
+  "plugin": "lynxce-floor-washer-advisor",
+  "tags": [
+    {
+      "zh": "续航面积",
+      "en": "Runtime for Area"
+    },
+    {
+      "zh": "自清洁烘干",
+      "en": "Self-clean and Dry"
+    },
+    {
+      "zh": "耗材成本",
+      "en": "Consumables Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "90 平米的房子洗地机要多长续航",
+      "en": "How much runtime does a 90 square meter home need"
+    },
+    {
+      "zh": "这两台洗地机算上滚刷滤芯哪个更值",
+      "en": "Which floor washer is better value with rollers and filters"
+    },
+    {
+      "zh": "自清洁不带烘干的洗地机能买吗",
+      "en": "Is a floor washer without roller drying worth buying"
+    }
+  ],
+  "keywords": [
+    "续航面积",
+    "自清洁烘干",
+    "耗材成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

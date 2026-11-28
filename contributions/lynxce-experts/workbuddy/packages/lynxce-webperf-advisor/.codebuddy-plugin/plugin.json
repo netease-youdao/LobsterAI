@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-webperf-advisor",
+  "version": "1.0.1",
+  "description": "Review supplied performance records into bottleneck hypotheses, ranked changes and comparable validation drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-webperf-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-web-perf"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-webperf-advisor",
+  "displayName": {
+    "zh": "前端性能顾问",
+    "en": "Web Performance"
+  },
+  "profession": {
+    "zh": "前端性能诊断与优化顾问",
+    "en": "Web Performance Diagnosis and Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据性能记录区分加载与交互瓶颈，提供优化排序、实验对照和预算验收底稿，帮助团队复核改善证据。",
+    "en": "Review supplied performance records into bottleneck hypotheses, ranked changes and comparable validation drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据加载记录生成首屏瓶颈和优化优先级表",
+    "en": "Rank first-screen bottlenecks from supplied loading records"
+  },
+  "plugin": "lynxce-webperf-advisor",
+  "tags": [
+    {
+      "zh": "瓶颈定位",
+      "en": "Bottleneck Review"
+    },
+    {
+      "zh": "改动对照",
+      "en": "Change Comparison"
+    },
+    {
+      "zh": "性能预算",
+      "en": "Performance Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据加载记录生成首屏瓶颈和优化优先级表",
+      "en": "Rank first-screen bottlenecks from supplied loading records"
+    },
+    {
+      "zh": "根据交互轨迹生成长任务诊断与改动验证表",
+      "en": "Draft long-task findings and validation from interaction traces"
+    },
+    {
+      "zh": "根据前后测试数据生成可比性核对和预算报告",
+      "en": "Compare before-and-after data and draft a performance budget report"
+    }
+  ],
+  "keywords": [
+    "瓶颈定位",
+    "改动对照",
+    "性能预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

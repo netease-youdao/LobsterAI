@@ -1,0 +1,66 @@
+{
+  "name": "lynxce-cross-border-support-expert",
+  "version": "1.0.1",
+  "description": "Prepare multilingual support drafts, fact checks, dispute evidence sheets and refund arithmetic from supplied materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cross-border-support-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cross-border-support-expert",
+  "displayName": {
+    "zh": "跨境客服专家",
+    "en": "Cross-border Support Specialist"
+  },
+  "profession": {
+    "zh": "多语言客服与纠纷处理顾问",
+    "en": "Multilingual Support and Dispute Preparation Advisor"
+  },
+  "displayDescription": {
+    "zh": "把跨语言售后材料整理为事实核对、双语回复和纠纷证据表，校准金额与语气边界，并生成待确认处理清单。",
+    "en": "Prepare multilingual support drafts, fact checks, dispute evidence sheets and refund arithmetic from supplied materials."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "按这段客户原话制作中文事实卡、英文回复与回译核对表",
+    "en": "Create a Chinese fact card, English reply and back-translation checks."
+  },
+  "plugin": "lynxce-cross-border-support-expert",
+  "tags": [
+    {
+      "zh": "双语回复",
+      "en": "Bilingual Replies"
+    },
+    {
+      "zh": "纠纷材料",
+      "en": "Dispute Evidence"
+    },
+    {
+      "zh": "金额核对",
+      "en": "Amount Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这段客户原话制作中文事实卡、英文回复与回译核对表",
+      "en": "Create a Chinese fact card, English reply and back-translation checks."
+    },
+    {
+      "zh": "把订单和售后记录整理成纠纷时间线与证据缺口清单",
+      "en": "Build a dispute timeline and evidence-gap list from order records."
+    },
+    {
+      "zh": "核对已退和拟退金额，生成两种语气的售后方案草稿",
+      "en": "Check past and proposed refunds and draft two support response styles."
+    }
+  ],
+  "keywords": [
+    "双语回复",
+    "纠纷材料",
+    "金额核对"
+  ],
+  "needEncrypt": true
+}

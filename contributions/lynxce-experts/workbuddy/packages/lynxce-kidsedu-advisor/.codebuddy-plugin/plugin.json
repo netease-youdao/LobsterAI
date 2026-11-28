@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kidsedu-advisor",
+  "version": "1.0.4",
+  "description": "Choose kids classes without waste: trial checks, contract terms and which aids are enough.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kidsedu-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kidsedu-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kidsedu-advisor",
+  "displayName": {
+    "zh": "儿童兴趣班与教具采买顾问",
+    "en": "Kids Activity and Learning Aid Advisor"
+  },
+  "profession": {
+    "zh": "儿童兴趣班与教具采买顾问",
+    "en": "Kids Activity and Learning Aid Advisor"
+  },
+  "displayDescription": {
+    "zh": "兴趣班怎么报才不浪费：试课该看哪几项、合同退费条款怎么读、教具买哪些就已经够用。",
+    "en": "Choose kids classes without waste: trial checks, contract terms and which aids are enough."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "这个兴趣班值不值得报",
+    "en": "Is this class worth signing up for"
+  },
+  "plugin": "lynxce-kidsedu-advisor",
+  "tags": [
+    {
+      "zh": "兴趣班",
+      "en": "Kids Classes"
+    },
+    {
+      "zh": "合同条款",
+      "en": "Contracts"
+    },
+    {
+      "zh": "年度预算",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个兴趣班值不值得报",
+      "en": "Is this class worth signing up for"
+    },
+    {
+      "zh": "试课的时候该看什么",
+      "en": "What should I check in a trial class"
+    },
+    {
+      "zh": "帮我列一年的预算表",
+      "en": "Draft a yearly budget table"
+    }
+  ],
+  "keywords": [
+    "兴趣班",
+    "合同条款",
+    "年度预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

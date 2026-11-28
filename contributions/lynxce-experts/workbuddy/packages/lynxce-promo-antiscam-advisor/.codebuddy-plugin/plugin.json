@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-antiscam-advisor",
+  "version": "1.0.2",
+  "description": "Spot promotion scams: fake refund calls, screen sharing and code requests, private transfers and phishing links.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-antiscam-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-antiscam"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-antiscam-advisor",
+  "displayName": {
+    "zh": "大促购物防骗与链接识别顾问",
+    "en": "Promotion Anti-Scam and Link Check Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促购物防骗与链接识别顾问",
+    "en": "11.11 Promotion Anti-Scam and Link Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促防骗怎么识别：假客服退款理赔、屏幕共享与验证码索要、私下转账、钓鱼短信链接处置。",
+    "en": "Spot promotion scams: fake refund calls, screen sharing and code requests, private transfers and phishing links."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "有人打电话说要给我退款理赔，是真的吗",
+    "en": "Someone called offering a refund, is it real"
+  },
+  "plugin": "lynxce-promo-antiscam-advisor",
+  "tags": [
+    {
+      "zh": "假客服识别",
+      "en": "Fake Service Check"
+    },
+    {
+      "zh": "钓鱼链接",
+      "en": "Phishing Links"
+    },
+    {
+      "zh": "应急处置",
+      "en": "Emergency Steps"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "有人打电话说要给我退款理赔，是真的吗",
+      "en": "Someone called offering a refund, is it real"
+    },
+    {
+      "zh": "这条大促短信里的链接能点吗",
+      "en": "Is the link in this promotion SMS safe"
+    },
+    {
+      "zh": "我已经把验证码告诉对方了怎么办",
+      "en": "I already gave them the code, what now"
+    }
+  ],
+  "keywords": [
+    "假客服识别",
+    "钓鱼链接",
+    "应急处置",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

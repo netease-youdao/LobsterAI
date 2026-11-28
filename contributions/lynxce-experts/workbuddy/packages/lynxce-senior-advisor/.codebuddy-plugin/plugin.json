@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-senior-advisor",
+  "version": "1.0.4",
+  "description": "Shop for elderly parents safely: bathroom retrofits, usable devices and a phased plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-senior-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-senior-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-senior-advisor",
+  "displayName": {
+    "zh": "适老化用品与长辈采买顾问",
+    "en": "Senior Living Product Advisor"
+  },
+  "profession": {
+    "zh": "适老化用品与长辈采买顾问",
+    "en": "Senior Living Product Advisor"
+  },
+  "displayDescription": {
+    "zh": "给长辈买东西先看安全：卫生间怎么改造、设备怎么选才好用、先买哪些后买哪些最稳妥。",
+    "en": "Shop for elderly parents safely: bathroom retrofits, usable devices and a phased plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里该先改哪里",
+    "en": "Which room should we retrofit first"
+  },
+  "plugin": "lynxce-senior-advisor",
+  "tags": [
+    {
+      "zh": "适老化",
+      "en": "Senior Living"
+    },
+    {
+      "zh": "防跌倒",
+      "en": "Fall Safety"
+    },
+    {
+      "zh": "分阶段采买",
+      "en": "Phased Plan"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里该先改哪里",
+      "en": "Which room should we retrofit first"
+    },
+    {
+      "zh": "给长辈选手机看什么",
+      "en": "What to look for in a phone for elders"
+    },
+    {
+      "zh": "帮我列一份采买清单",
+      "en": "Draft a purchase list"
+    }
+  ],
+  "keywords": [
+    "适老化",
+    "防跌倒",
+    "分阶段采买",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

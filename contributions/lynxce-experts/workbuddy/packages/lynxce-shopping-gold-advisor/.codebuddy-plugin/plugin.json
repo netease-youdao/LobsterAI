@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-shopping-gold-advisor",
+  "version": "1.0.2",
+  "description": "Decide on shopping credit top-ups: real discount rate, amount from your list, refund rules, validity and scope.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shopping-gold-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-shopping-gold"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-shopping-gold-advisor",
+  "displayName": {
+    "zh": "购物金充值返现核算顾问",
+    "en": "Shopping Credit Top-up and Bonus Advisor"
+  },
+  "profession": {
+    "zh": "11.11 购物金充值返现核算顾问",
+    "en": "11.11 Shopping Credit Top-up and Bonus Advisor"
+  },
+  "displayDescription": {
+    "zh": "购物金该不该充、充多少：实际折扣率换算、按清单反推金额、余额与退款规则、有效期与范围。",
+    "en": "Decide on shopping credit top-ups: real discount rate, amount from your list, refund rules, validity and scope."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "充 1000 送 50 到底打几折，我该充多少",
+    "en": "What discount is top up 1000 get 50, how much should I top up"
+  },
+  "plugin": "lynxce-shopping-gold-advisor",
+  "tags": [
+    {
+      "zh": "折扣率换算",
+      "en": "Discount Rate"
+    },
+    {
+      "zh": "充值档位",
+      "en": "Top-up Tier"
+    },
+    {
+      "zh": "余额规则",
+      "en": "Balance Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "充 1000 送 50 到底打几折，我该充多少",
+      "en": "What discount is top up 1000 get 50, how much should I top up"
+    },
+    {
+      "zh": "购物金没用完能退吗",
+      "en": "Can unused shopping credit be refunded"
+    },
+    {
+      "zh": "用购物金买的东西退货钱退到哪",
+      "en": "Where does the refund go for items paid with credit"
+    }
+  ],
+  "keywords": [
+    "折扣率换算",
+    "充值档位",
+    "余额规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

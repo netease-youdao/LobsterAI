@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-charger-advisor",
+  "version": "1.0.5",
+  "description": "Pick chargers properly: real capacity, protocol matching, safety marks and travel rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-charger-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-charger-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-charger-advisor",
+  "displayName": {
+    "zh": "充电宝与线材选购顾问",
+    "en": "Power Bank and Cable Advisor"
+  },
+  "profession": {
+    "zh": "充电宝与线材选购顾问",
+    "en": "Power Bank and Cable Advisor"
+  },
+  "displayDescription": {
+    "zh": "充电宝怎么挑：容量怎么换算、快充协议要对上、认证怎么看、带上飞机的规定先查清楚。",
+    "en": "Pick chargers properly: real capacity, protocol matching, safety marks and travel rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个容量够用吗",
+    "en": "Is this capacity enough for me"
+  },
+  "plugin": "lynxce-charger-advisor",
+  "tags": [
+    {
+      "zh": "充电宝",
+      "en": "Power Banks"
+    },
+    {
+      "zh": "快充协议",
+      "en": "Protocols"
+    },
+    {
+      "zh": "安全认证",
+      "en": "Certification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个容量够用吗",
+      "en": "Is this capacity enough for me"
+    },
+    {
+      "zh": "为什么充得这么慢",
+      "en": "Why is my charging so slow"
+    },
+    {
+      "zh": "能带上飞机吗",
+      "en": "Can I take this on a plane"
+    }
+  ],
+  "keywords": [
+    "充电宝",
+    "快充协议",
+    "安全认证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

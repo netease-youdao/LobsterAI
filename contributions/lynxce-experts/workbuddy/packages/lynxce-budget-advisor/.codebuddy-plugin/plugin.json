@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-budget-advisor",
+  "version": "1.0.3",
+  "description": "Organize household spending: six categories, caps on discretionary spend, finding leaks and a monthly review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-budget-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-family-budget"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-budget-advisor",
+  "displayName": {
+    "zh": "家庭开支梳理与省钱规划顾问",
+    "en": "Household Spending Advisor"
+  },
+  "profession": {
+    "zh": "家庭开支梳理与省钱规划顾问",
+    "en": "Household Spending Advisor"
+  },
+  "displayDescription": {
+    "zh": "把家庭开支理清楚：六大类记账口径、弹性消费设上限、找出漏点与每月十分钟复盘的做法。",
+    "en": "Organize household spending: six categories, caps on discretionary spend, finding leaks and a monthly review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我把开支分个类",
+    "en": "Help me categorize my spending"
+  },
+  "plugin": "lynxce-budget-advisor",
+  "tags": [
+    {
+      "zh": "开支梳理",
+      "en": "Budgeting"
+    },
+    {
+      "zh": "漏点排查",
+      "en": "Leak Check"
+    },
+    {
+      "zh": "月度复盘",
+      "en": "Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把开支分个类",
+      "en": "Help me categorize my spending"
+    },
+    {
+      "zh": "钱好像总不知道花哪了",
+      "en": "I never know where my money goes"
+    },
+    {
+      "zh": "哪些订阅应该退掉",
+      "en": "Which subscriptions should I cancel"
+    }
+  ],
+  "keywords": [
+    "开支梳理",
+    "漏点排查",
+    "月度复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

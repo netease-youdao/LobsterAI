@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-facility-vendor-advisor",
+  "version": "1.0.2",
+  "description": "Turn supplied records into checkable templates, worked examples and change plans.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-facility-vendor-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-facility-vendor"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-facility-vendor-advisor",
+  "displayName": {
+    "zh": "物业服务顾问",
+    "en": "Cleaning and Facility Vendor Management Advisor"
+  },
+  "profession": {
+    "zh": "保洁与物业服务商日常管理顾问",
+    "en": "Cleaning and Facility Vendor Management Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据服务约定和巡检报修记录，交付验收标准、两条时限账、整改闭环表及月度评价底稿。",
+    "en": "Use supplied records to deliver checkable templates, worked examples and versioned plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据服务范围和约定，做可观察的保洁验收标准",
+    "en": "Build the first deliverable from my records"
+  },
+  "plugin": "lynxce-facility-vendor-advisor",
+  "tags": [
+    {
+      "zh": "材料核对",
+      "en": "Record Review"
+    },
+    {
+      "zh": "交付模板",
+      "en": "Deliverable Templates"
+    },
+    {
+      "zh": "变更复算",
+      "en": "Change Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据服务范围和约定，做可观察的保洁验收标准",
+      "en": "Build the first deliverable from my records"
+    },
+    {
+      "zh": "根据报修记录分别核对到场与完成时限，列出缺证据工单",
+      "en": "Review requirements, exceptions and acceptance evidence"
+    },
+    {
+      "zh": "用本月巡检和复查记录做评价底稿，显示分母、覆盖与未知项",
+      "en": "Recalculate the results and record changes"
+    }
+  ],
+  "keywords": [
+    "保洁与物业服务商日常管理顾问",
+    "验收",
+    "模板",
+    "灵策智算"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-street-interview-advisor",
+  "version": "1.0.1",
+  "description": "Turn account positioning and location into a topic card, question set, consent log, shoot quota and edit structure.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-street-interview-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-street-interview"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-street-interview-advisor",
+  "displayName": {
+    "zh": "街采视频策划顾问",
+    "en": "Street Interview Advisor"
+  },
+  "profession": {
+    "zh": "街头采访视频策划顾问｜灵策智算",
+    "en": "Street Interview Video Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据账号定位与拍摄地点产出街采选题卡和问题组，配套现场授权台账、出片人数测算与剪辑结构表。",
+    "en": "Turn account positioning and location into a topic card, question set, consent log, shoot quota and edit structure."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的账号定位和拍摄地点生成一期街采选题卡和问题组",
+    "en": "Build a topic card and question set for one street interview episode"
+  },
+  "plugin": "lynxce-street-interview-advisor",
+  "tags": [
+    {
+      "zh": "街采选题",
+      "en": "Topic Design"
+    },
+    {
+      "zh": "出镜授权",
+      "en": "On-camera Consent"
+    },
+    {
+      "zh": "剪辑结构",
+      "en": "Edit Structure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的账号定位和拍摄地点生成一期街采选题卡和问题组",
+      "en": "Build a topic card and question set for one street interview episode"
+    },
+    {
+      "zh": "复核这组街采问题有没有引导隐私或冒犯风险",
+      "en": "Review these street interview questions for leading, privacy or offence risk"
+    },
+    {
+      "zh": "只有主题没有地点时先给问题组和授权流程初稿",
+      "en": "Draft questions and a consent flow when only the topic is known"
+    }
+  ],
+  "keywords": [
+    "街采选题",
+    "出镜授权",
+    "剪辑结构",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

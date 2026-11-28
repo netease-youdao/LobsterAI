@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-crossstore-advisor",
+  "version": "1.0.2",
+  "description": "Hit cross-store thresholds smartly: pick filler items, allocate discounts by amount, predict refund clawback.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-crossstore-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-crossstore-discount"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-crossstore-advisor",
+  "displayName": {
+    "zh": "跨店满减凑单与优惠分摊顾问",
+    "en": "Cross-Store Bundling and Discount Allocation Advisor"
+  },
+  "profession": {
+    "zh": "11.11 跨店满减凑单与优惠分摊顾问",
+    "en": "11.11 Cross-Store Bundling and Discount Allocation Advisor"
+  },
+  "displayDescription": {
+    "zh": "跨店满减怎么凑才划算：凑单品挑选、优惠按金额比例分摊、部分退款后优惠回收的影响预判。",
+    "en": "Hit cross-store thresholds smartly: pick filler items, allocate discounts by amount, predict refund clawback."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的购物车怎么凑满减最划算",
+    "en": "How should I bundle my cart for the best discount"
+  },
+  "plugin": "lynxce-crossstore-advisor",
+  "tags": [
+    {
+      "zh": "凑单方案",
+      "en": "Bundling Plan"
+    },
+    {
+      "zh": "优惠分摊",
+      "en": "Discount Allocation"
+    },
+    {
+      "zh": "退款预判",
+      "en": "Refund Impact"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的购物车怎么凑满减最划算",
+      "en": "How should I bundle my cart for the best discount"
+    },
+    {
+      "zh": "每件商品分摊后实际多少钱",
+      "en": "What does each item really cost after allocation"
+    },
+    {
+      "zh": "退掉一件会少退多少钱",
+      "en": "How much less will I get back if I return one item"
+    }
+  ],
+  "keywords": [
+    "凑单方案",
+    "优惠分摊",
+    "退款预判",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

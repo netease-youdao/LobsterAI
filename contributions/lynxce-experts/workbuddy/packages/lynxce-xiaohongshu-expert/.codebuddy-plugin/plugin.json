@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-xiaohongshu-expert",
+  "version": "1.0.0",
+  "description": "Xiaohongshu (RED) operations expert for topic planning, cover titles, note copywriting, engagement and account review",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-xiaohongshu-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-xiaohongshu-note"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-xiaohongshu-expert",
+  "displayName": {
+    "zh": "小红书运营专家",
+    "en": "Xiaohongshu Operator"
+  },
+  "profession": {
+    "zh": "小红书内容与账号增长顾问",
+    "en": "Xiaohongshu Content & Growth Advisor"
+  },
+  "displayDescription": {
+    "en": "Full-cycle Xiaohongshu operations: topic planning, cover titles, native note copy, comment engagement, account review and platform compliance checks.",
+    "zh": "小红书全链路运营，覆盖选题策划、封面标题、种草正文、评论互动与账号数据复盘，含平台合规避雷。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "帮我写一篇露营装备的小红书种草笔记",
+    "en": "Write a Xiaohongshu note for camping gear"
+  },
+  "plugin": "lynxce-xiaohongshu-expert",
+  "tags": [
+    {
+      "zh": "小红书",
+      "en": "Xiaohongshu"
+    },
+    {
+      "zh": "种草文案",
+      "en": "Note Copy"
+    },
+    {
+      "zh": "账号增长",
+      "en": "Account Growth"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一篇露营装备的小红书种草笔记",
+      "en": "Write a Xiaohongshu note for camping gear"
+    },
+    {
+      "zh": "给这个产品想 5 个高点击的封面标题",
+      "en": "Give me five high-CTR cover titles for this product"
+    },
+    {
+      "zh": "复盘我这个月的笔记数据，找出问题",
+      "en": "Review this month's note performance and find the problems"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "小红书",
+    "种草文案",
+    "账号增长",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

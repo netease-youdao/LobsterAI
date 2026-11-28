@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-video-meeting-light-advisor",
+  "version": "1.0.0",
+  "description": "Set up meeting video: light ratio, color temperature, field of view and framing per room.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-video-meeting-light-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-video-meeting-light"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-video-meeting-light-advisor",
+  "displayName": {
+    "zh": "视频会议设备顾问",
+    "en": "Video Meeting Gear Advisor"
+  },
+  "profession": {
+    "zh": "视频会议补光与摄像头配置顾问",
+    "en": "Video Meeting Lighting and Camera Advisor"
+  },
+  "displayDescription": {
+    "zh": "视频会议画面怎么调：核主辅光比与色温，按座位距离算视场角与构图，出会议室与工位配置表。",
+    "en": "Set up meeting video: light ratio, color temperature, field of view and framing per room."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "视频会议脸太黑怎么补光",
+    "en": "How to light a dark face on video calls"
+  },
+  "plugin": "lynxce-video-meeting-light-advisor",
+  "tags": [
+    {
+      "zh": "光比色温",
+      "en": "Light Ratio and Color"
+    },
+    {
+      "zh": "视场角",
+      "en": "Field of View"
+    },
+    {
+      "zh": "画面构图",
+      "en": "Framing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "视频会议脸太黑怎么补光",
+      "en": "How to light a dark face on video calls"
+    },
+    {
+      "zh": "6 人会议室摄像头要多大视场角",
+      "en": "What field of view a 6 seat meeting room needs"
+    },
+    {
+      "zh": "帮我做会议室和工位视频设备配置表",
+      "en": "Build a video gear sheet for rooms and desks"
+    }
+  ],
+  "keywords": [
+    "光比色温",
+    "视场角",
+    "画面构图",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-travel-presale-advisor",
+  "version": "1.0.2",
+  "description": "Check travel presales: validity, holiday surcharges, refund and booking rules, per-night price versus direct booking.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-travel-presale-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-travel-presale"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-travel-presale-advisor",
+  "displayName": {
+    "zh": "酒店旅行套餐预售核算顾问",
+    "en": "Hotel and Travel Package Presale Advisor"
+  },
+  "profession": {
+    "zh": "11.11 酒店旅行套餐预售核算顾问",
+    "en": "11.11 Hotel and Travel Package Presale Advisor"
+  },
+  "displayDescription": {
+    "zh": "酒旅预售值不值：核有效期与节假日加价、查退改规则与预约要求、折算每晚价对比直订价。",
+    "en": "Check travel presales: validity, holiday surcharges, refund and booking rules, per-night price versus direct booking."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个酒店套餐预售值得买吗",
+    "en": "Is this hotel package presale worth buying"
+  },
+  "plugin": "lynxce-travel-presale-advisor",
+  "tags": [
+    {
+      "zh": "每晚价折算",
+      "en": "Per-Night Price"
+    },
+    {
+      "zh": "退改规则",
+      "en": "Refund Rules"
+    },
+    {
+      "zh": "节假日可用",
+      "en": "Holiday Availability"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个酒店套餐预售值得买吗",
+      "en": "Is this hotel package presale worth buying"
+    },
+    {
+      "zh": "节假日能用吗，要不要加钱",
+      "en": "Can I use it on holidays, is there a surcharge"
+    },
+    {
+      "zh": "用不上的话能退吗",
+      "en": "Can I get a refund if I do not use it"
+    }
+  ],
+  "keywords": [
+    "每晚价折算",
+    "退改规则",
+    "节假日可用",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

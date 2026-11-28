@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-price-trend-advisor",
+  "version": "1.0.2",
+  "description": "Check if a deal is real: read price history, set a daily baseline, compute true discount, spot raise-then-cut pricing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-price-trend-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-price-trend"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-price-trend-advisor",
+  "displayName": {
+    "zh": "大促价格走势与真实折扣识别顾问",
+    "en": "Price Trend and Real Discount Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促价格走势与真实折扣识别顾问",
+    "en": "11.11 Price Trend and Real Discount Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促折扣是真是假：看历史价格走势、定日常价基准、算真实折扣率、识别先涨后降的套路。",
+    "en": "Check if a deal is real: read price history, set a daily baseline, compute true discount, spot raise-then-cut pricing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个大促价是真便宜还是假折扣",
+    "en": "Is this promotion price a real discount"
+  },
+  "plugin": "lynxce-price-trend-advisor",
+  "tags": [
+    {
+      "zh": "历史价对比",
+      "en": "Price History"
+    },
+    {
+      "zh": "真实折扣率",
+      "en": "True Discount Rate"
+    },
+    {
+      "zh": "先涨后降",
+      "en": "Raise-Then-Cut"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个大促价是真便宜还是假折扣",
+      "en": "Is this promotion price a real discount"
+    },
+    {
+      "zh": "帮我算一下真实折扣率",
+      "en": "Calculate the true discount rate for me"
+    },
+    {
+      "zh": "怎么看出商家先涨价再降价",
+      "en": "How to spot raise-then-cut pricing"
+    }
+  ],
+  "keywords": [
+    "历史价对比",
+    "真实折扣率",
+    "先涨后降",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

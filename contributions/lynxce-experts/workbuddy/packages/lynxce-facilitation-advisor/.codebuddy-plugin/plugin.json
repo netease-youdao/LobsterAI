@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-facilitation-advisor",
+  "version": "1.0.1",
+  "description": "Turn meeting goals and attendees into timeboxed agendas, scoring rules, facilitation plans and action follow-up trackers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-facilitation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-facilitation-guide"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-facilitation-advisor",
+  "displayName": {
+    "zh": "会议引导顾问",
+    "en": "Facilitation"
+  },
+  "profession": {
+    "zh": "会议引导与共识达成顾问",
+    "en": "Meeting Facilitation and Consensus Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据会议目的与参会人，按产出倒排议程时间盒，设计发散收敛打分规则与控场预案，并生成纪要待办闭环表。",
+    "en": "Turn meeting goals and attendees into timeboxed agendas, scoring rules, facilitation plans and action follow-up trackers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据会议目的和参会人生成决策会议程与时间盒",
+    "en": "Build a decision meeting agenda with timeboxes from my goal and attendees"
+  },
+  "plugin": "lynxce-facilitation-advisor",
+  "tags": [
+    {
+      "zh": "议程倒排",
+      "en": "Outcome Agenda"
+    },
+    {
+      "zh": "收敛打分",
+      "en": "Scoring Matrix"
+    },
+    {
+      "zh": "待办闭环",
+      "en": "Action Follow-up"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据会议目的和参会人生成决策会议程与时间盒",
+      "en": "Build a decision meeting agenda with timeboxes from my goal and attendees"
+    },
+    {
+      "zh": "复核我这份议程和上次纪要为什么开不出结论",
+      "en": "Review my agenda and last minutes for why no decision was reached"
+    },
+    {
+      "zh": "只知道会议主题时先给产出句和最小议程",
+      "en": "With only a topic, draft an outcome statement and a minimal agenda"
+    }
+  ],
+  "keywords": [
+    "议程倒排",
+    "收敛打分",
+    "待办闭环",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

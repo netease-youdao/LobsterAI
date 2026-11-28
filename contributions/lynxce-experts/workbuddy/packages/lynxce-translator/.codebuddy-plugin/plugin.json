@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-translator",
+  "version": "1.0.1",
+  "description": "Business translation expert for Chinese-English contracts, emails, marketing copy and technical documentation",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-translator.md"
+  ],
+  "skills": [
+    "./skills/lynxce-translation",
+    "./skills/lynxce-term-ledger",
+    "./skills/lynxce-localization-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-translator",
+  "displayName": {
+    "zh": "商务翻译专家",
+    "en": "Business Translator"
+  },
+  "profession": {
+    "zh": "中英商务翻译与本地化顾问",
+    "en": "CN-EN Business Translation & Localization Advisor"
+  },
+  "displayDescription": {
+    "zh": "中英双向商务翻译，处理合同、邮件、营销文案与技术文档，统一术语并消除中式英语表达。",
+    "en": "Chinese-English business translation for contracts, emails, copy and technical docs, with unified terminology."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "把这份合同翻译成英文",
+    "en": "Translate this contract into English"
+  },
+  "plugin": "lynxce-translator",
+  "tags": [
+    {
+      "zh": "商务翻译",
+      "en": "Translation"
+    },
+    {
+      "zh": "术语统一",
+      "en": "Terminology"
+    },
+    {
+      "zh": "本地化",
+      "en": "Localization"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这份合同翻译成英文",
+      "en": "Translate this contract into English"
+    },
+    {
+      "zh": "这段英文邮件读起来很中式，帮我改",
+      "en": "This English email reads like Chinglish, fix it"
+    },
+    {
+      "zh": "帮我建一份产品术语中英对照表",
+      "en": "Build a bilingual product terminology table"
+    }
+  ],
+  "keywords": [
+    "商务翻译",
+    "术语统一",
+    "本地化",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

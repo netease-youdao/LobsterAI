@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-apidebug-advisor",
+  "version": "1.0.1",
+  "description": "Turn supplied requests and redacted logs into evidence timelines, diagnostic matrices and API regression drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-apidebug-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-apidebug-advisor",
+  "displayName": {
+    "zh": "接口联调排障顾问",
+    "en": "API Debugging"
+  },
+  "profession": {
+    "zh": "接口联调与线上排障顾问",
+    "en": "API Integration and Troubleshooting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据请求响应和脱敏日志整理故障证据，提供分层排查矩阵、接口契约和回归底稿，辅助团队定位问题。",
+    "en": "Turn supplied requests and redacted logs into evidence timelines, diagnostic matrices and API regression drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据这些请求响应生成分层排障与证据缺口表",
+    "en": "Build a layered diagnostic table from these requests and responses"
+  },
+  "plugin": "lynxce-apidebug-advisor",
+  "tags": [
+    {
+      "zh": "故障证据",
+      "en": "Fault Evidence"
+    },
+    {
+      "zh": "联调契约",
+      "en": "API Contract"
+    },
+    {
+      "zh": "回归矩阵",
+      "en": "Regression Matrix"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这些请求响应生成分层排障与证据缺口表",
+      "en": "Build a layered diagnostic table from these requests and responses"
+    },
+    {
+      "zh": "把前后端字段差异整理成接口联调契约",
+      "en": "Turn frontend and backend field differences into an API contract"
+    },
+    {
+      "zh": "为超时重试场景生成幂等与回归验收清单",
+      "en": "Draft idempotency and regression checks for timeout retries"
+    }
+  ],
+  "keywords": [
+    "故障证据",
+    "联调契约",
+    "回归矩阵",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-comment-ops-advisor",
+  "version": "1.0.1",
+  "description": "Run comment sections: replies by type, pinned comments, criticism and escalation.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-comment-ops-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-comment-reply"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-comment-ops-advisor",
+  "displayName": {
+    "zh": "评论区运营与粉丝互动顾问",
+    "en": "Comment Section and Community Advisor"
+  },
+  "profession": {
+    "zh": "评论区运营与粉丝互动顾问",
+    "en": "Comment Section and Community Advisor"
+  },
+  "displayDescription": {
+    "zh": "评论区怎么运营出互动：不同评论怎么回、置顶评论怎么写、差评质疑怎么处理、哪些情况必须升级上报。",
+    "en": "Run comment sections: replies by type, pinned comments, criticism and escalation."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "帮我写一套评论回复模板",
+    "en": "Write comment reply templates"
+  },
+  "plugin": "lynxce-comment-ops-advisor",
+  "tags": [
+    {
+      "zh": "评论区运营",
+      "en": "Comments"
+    },
+    {
+      "zh": "粉丝互动",
+      "en": "Engagement"
+    },
+    {
+      "zh": "差评处理",
+      "en": "Criticism Handling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一套评论回复模板",
+      "en": "Write comment reply templates"
+    },
+    {
+      "zh": "置顶评论写什么好",
+      "en": "What should the pinned comment say"
+    },
+    {
+      "zh": "有人在评论区骂产品怎么回",
+      "en": "Someone trashes our product in comments"
+    }
+  ],
+  "keywords": [
+    "评论区运营",
+    "粉丝互动",
+    "差评处理",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

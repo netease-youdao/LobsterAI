@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-file-index-label-print-cost-advisor",
+  "version": "1.0.0",
+  "description": "Calculate index label yields, print costs and reprints.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-file-index-label-print-cost-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-file-index-label-print-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-file-index-label-print-cost-advisor",
+  "displayName": {
+    "zh": "索引贴成本核算师",
+    "en": "Office File Index Label Printing Costs Advisor"
+  },
+  "profession": {
+    "zh": "办公文件分类索引贴打印成本顾问",
+    "en": "Office File Index Label Printing Costs Advisor"
+  },
+  "displayDescription": {
+    "zh": "按文件分类索引贴版式核每页可用贴数，分开试印废页与有效打印，核纸墨人工成本及补印异常台账。",
+    "en": "Calculate index label yields, print costs and reprints."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按已有记录核对办公文件分类索引贴打印成本",
+    "en": "Check the supplied records"
+  },
+  "plugin": "lynxce-office-file-index-label-print-cost-advisor",
+  "tags": [
+    {
+      "zh": "适配复核",
+      "en": "Fit Review"
+    },
+    {
+      "zh": "数量核算",
+      "en": "Quantity Calculation"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按已有记录核对办公文件分类索引贴打印成本",
+      "en": "Check the supplied records"
+    },
+    {
+      "zh": "列数量差异与待补依据",
+      "en": "List quantity gaps and missing evidence"
+    },
+    {
+      "zh": "输出可复核算式与异常台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "适配复核",
+    "数量核算",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

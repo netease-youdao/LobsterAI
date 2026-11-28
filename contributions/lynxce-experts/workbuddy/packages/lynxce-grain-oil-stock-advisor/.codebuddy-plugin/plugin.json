@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-grain-oil-stock-advisor",
+  "version": "1.0.2",
+  "description": "Plan grocery staple stocking: monthly usage, per-unit price, shelf life and storage, moisture and pest prevention.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-grain-oil-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-grain-oil-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-grain-oil-stock-advisor",
+  "displayName": {
+    "zh": "粮油米面调味品囤货顾问",
+    "en": "Grain, Oil and Condiment Stocking Advisor"
+  },
+  "profession": {
+    "zh": "11.11 粮油米面调味品囤货顾问",
+    "en": "11.11 Grain, Oil and Condiment Stocking Advisor"
+  },
+  "displayDescription": {
+    "zh": "囤粮油米面调味品怎么算：按家庭月用量估算、大包装单价换算、保质期与开封存放、防潮防虫别囤超半年。",
+    "en": "Plan grocery staple stocking: monthly usage, per-unit price, shelf life and storage, moisture and pest prevention."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "大米大促买 25 公斤一袋的划算吗",
+    "en": "Is a 25kg bag of rice a good deal"
+  },
+  "plugin": "lynxce-grain-oil-stock-advisor",
+  "tags": [
+    {
+      "zh": "月用量估算",
+      "en": "Monthly Usage"
+    },
+    {
+      "zh": "单价换算",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "防潮防虫",
+      "en": "Moisture and Pest Prevention"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "大米大促买 25 公斤一袋的划算吗",
+      "en": "Is a 25kg bag of rice a good deal"
+    },
+    {
+      "zh": "食用油囤多少不算浪费",
+      "en": "How much cooking oil should I stock without waste"
+    },
+    {
+      "zh": "调味品保质期怎么核对",
+      "en": "How do I check condiment shelf life"
+    }
+  ],
+  "keywords": [
+    "月用量估算",
+    "单价换算",
+    "防潮防虫",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

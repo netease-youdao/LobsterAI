@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-service-manufacturing-dossier-b53",
+  "version": "1.0.0",
+  "description": "Prepare manufacturing service scenarios, reconcile contracts and revenue, and deliver complete evidence-based revisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-service-manufacturing-dossier-b53.md"
+  ],
+  "skills": [
+    "./skills/lynxce-service-manufacturing-1",
+    "./skills/lynxce-service-manufacturing-2",
+    "./skills/lynxce-service-manufacturing-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-service-manufacturing-dossier-b53",
+  "displayName": {
+    "zh": "制造顾问",
+    "en": "Service Oriented Manufacturing Advisor"
+  },
+  "profession": {
+    "zh": "服务型制造顾问",
+    "en": "Service Oriented Manufacturing Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造企业服务业务经办梳理客户需求、履约收入及场景证据，交付融合场景说明、财务底稿和完整补正稿。",
+    "en": "Prepare manufacturing service scenarios, reconcile contracts and revenue, and deliver complete evidence-based revisions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把制造业务与远程运维整理为实用场景材料。",
+    "en": "Service Oriented Manufacturing Advisor"
+  },
+  "plugin": "lynxce-service-manufacturing-dossier-b53",
+  "tags": [
+    {
+      "zh": "服务型制造",
+      "en": "服务型制造"
+    },
+    {
+      "zh": "融合场景",
+      "en": "融合场景"
+    },
+    {
+      "zh": "履约证据",
+      "en": "履约证据"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把制造业务与远程运维整理为实用场景材料。",
+      "en": "Service Oriented Manufacturing Advisor"
+    },
+    {
+      "zh": "合同、收入和收款不一致，请写完整双分支补正。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "地方窗口已过，帮我预备下一轮场景及证据。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "服务型制造",
+    "融合场景",
+    "履约证据"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-shaver-advisor",
+  "version": "1.0.1",
+  "description": "Pick electric shavers: foil or rotary by beard type, wet and dry use, battery, yearly blade and fluid cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shaver-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-shaver"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-shaver-advisor",
+  "displayName": {
+    "zh": "电动剃须刀选购顾问",
+    "en": "Electric Shaver and Blade Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电动剃须刀选购与刀头成本核算顾问",
+    "en": "11.11 Electric Shaver and Blade Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "电动剃须刀怎么挑：按胡须选往复或旋转、看干湿两用与续航、算刀头与清洁液年成本比总价。",
+    "en": "Pick electric shavers: foil or rotary by beard type, wet and dry use, battery, yearly blade and fluid cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "胡子又密又硬选往复还是旋转",
+    "en": "Foil or rotary shaver for a dense tough beard"
+  },
+  "plugin": "lynxce-shaver-advisor",
+  "tags": [
+    {
+      "zh": "往复旋转",
+      "en": "Foil or Rotary"
+    },
+    {
+      "zh": "刀头成本",
+      "en": "Blade Head Cost"
+    },
+    {
+      "zh": "清洁液",
+      "en": "Cleaning Fluid"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "胡子又密又硬选往复还是旋转",
+      "en": "Foil or rotary shaver for a dense tough beard"
+    },
+    {
+      "zh": "带清洁座的剃须刀三年多花多少钱",
+      "en": "How much more does a cleaning station cost over three years"
+    },
+    {
+      "zh": "这两款剃须刀算上刀头哪个更值",
+      "en": "Which shaver is better value once blade heads are counted"
+    }
+  ],
+  "keywords": [
+    "往复旋转",
+    "刀头成本",
+    "清洁液",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

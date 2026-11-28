@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-photopack-advisor",
+  "version": "1.0.4",
+  "description": "Compare photo packages: real inclusions, common upsells and delivery terms.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-photopack-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-photopack-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-photopack-advisor",
+  "displayName": {
+    "zh": "摄影写真套餐比价顾问",
+    "en": "Photography Package Comparison Advisor"
+  },
+  "profession": {
+    "zh": "摄影写真套餐比价顾问",
+    "en": "Photography Package Comparison Advisor"
+  },
+  "displayDescription": {
+    "zh": "拍照套餐要怎么比才对：含项逐条列、加钱项在哪、底片给不给、交付与授权怎么写清楚。",
+    "en": "Compare photo packages: real inclusions, common upsells and delivery terms."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "这两个套餐怎么比",
+    "en": "How do these two packages compare"
+  },
+  "plugin": "lynxce-photopack-advisor",
+  "tags": [
+    {
+      "zh": "摄影套餐",
+      "en": "Photo Packages"
+    },
+    {
+      "zh": "含项对照",
+      "en": "Inclusions"
+    },
+    {
+      "zh": "交付授权",
+      "en": "Delivery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两个套餐怎么比",
+      "en": "How do these two packages compare"
+    },
+    {
+      "zh": "底片给不给要怎么问",
+      "en": "How do I ask about raw files"
+    },
+    {
+      "zh": "大概会加多少钱",
+      "en": "How much will the upsells add"
+    }
+  ],
+  "keywords": [
+    "摄影套餐",
+    "含项对照",
+    "交付授权",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

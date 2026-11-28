@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-grocery-advisor",
+  "version": "1.0.3",
+  "description": "Plan meals then the list: weekly grocery planning, unit-price math, what to stock and how to cut waste.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-grocery-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-grocery-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-grocery-advisor",
+  "displayName": {
+    "zh": "家庭采买与生鲜日用规划顾问",
+    "en": "Household Grocery Planning Advisor"
+  },
+  "profession": {
+    "zh": "家庭采买与生鲜日用规划顾问",
+    "en": "Household Grocery Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "先排菜单再列清单：一周采买怎么规划、单价怎么换算、囤什么不囤什么与损耗怎么降下来。",
+    "en": "Plan meals then the list: weekly grocery planning, unit-price math, what to stock and how to cut waste."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我排一周的买菜清单",
+    "en": "Draft my weekly grocery list"
+  },
+  "plugin": "lynxce-grocery-advisor",
+  "tags": [
+    {
+      "zh": "采买规划",
+      "en": "Grocery"
+    },
+    {
+      "zh": "单价换算",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "降低损耗",
+      "en": "Less Waste"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我排一周的买菜清单",
+      "en": "Draft my weekly grocery list"
+    },
+    {
+      "zh": "这两个包装哪个更划算",
+      "en": "Which package size is the better deal"
+    },
+    {
+      "zh": "冰箱总有东西坏掉怎么办",
+      "en": "Food keeps spoiling in my fridge — what do I do"
+    }
+  ],
+  "keywords": [
+    "采买规划",
+    "单价换算",
+    "降低损耗",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

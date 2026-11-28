@@ -1,0 +1,31 @@
+{
+  "orderSource": "假设订单表",
+  "lines": [
+    {
+      "id": "A",
+      "quantity": 23,
+      "unitNetKg": null,
+      "source": "假设订单A",
+      "model": "A",
+      "mixGroup": "允许组1"
+    },
+    {
+      "id": "B",
+      "quantity": 17,
+      "unitNetKg": null,
+      "source": "假设订单B",
+      "model": "B",
+      "mixGroup": "允许组1"
+    }
+  ],
+  "rules": {
+    "maxPieces": 10,
+    "maxNetKg": null,
+    "tareKg": null,
+    "allowMix": true,
+    "dimensions": null
+  },
+  "fixedBoxes": [],
+  "quantityScenarios": [],
+  "previousPlan": null
+}

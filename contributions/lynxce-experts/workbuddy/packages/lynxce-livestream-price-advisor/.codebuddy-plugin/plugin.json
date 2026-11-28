@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-livestream-price-advisor",
+  "version": "1.0.2",
+  "description": "Is the livestream deal real: compare with shelf price, check freebies and specs, and run a three-point check before paying.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-livestream-price-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-livestream-price"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-livestream-price-advisor",
+  "displayName": {
+    "zh": "直播间与货架价对比顾问",
+    "en": "Livestream vs Shelf Price Check Advisor"
+  },
+  "profession": {
+    "zh": "直播间价与货架价对比与下单核对顾问",
+    "en": "Livestream vs Shelf Price Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "直播间到底划不划算：专属价与货架价逐项对比、赠品是否计入、规格是否一致，下单前做三核对。",
+    "en": "Is the livestream deal real: compare with shelf price, check freebies and specs, and run a three-point check before paying."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个直播间价比货架价划算吗",
+    "en": "Is this livestream price better than the shelf"
+  },
+  "plugin": "lynxce-livestream-price-advisor",
+  "tags": [
+    {
+      "zh": "直播比价",
+      "en": "Livestream Pricing"
+    },
+    {
+      "zh": "赠品核价",
+      "en": "Freebie Valuation"
+    },
+    {
+      "zh": "下单三核对",
+      "en": "Pre-Order Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个直播间价比货架价划算吗",
+      "en": "Is this livestream price better than the shelf"
+    },
+    {
+      "zh": "直播间的赠品该怎么算钱",
+      "en": "How to value livestream freebies"
+    },
+    {
+      "zh": "直播间下单前要核对什么",
+      "en": "What to check before ordering in a livestream"
+    }
+  ],
+  "keywords": [
+    "直播比价",
+    "赠品核价",
+    "下单三核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

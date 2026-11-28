@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-car-wax-coating-advisor",
+  "version": "1.0.0",
+  "description": "Pick car wax or coating: durability, usage, prep, curing and monthly cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-car-wax-coating-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-car-wax-coating"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-car-wax-coating-advisor",
+  "displayName": {
+    "zh": "车蜡镀晶养护顾问",
+    "en": "Car Wax and Ceramic Coating Advisor"
+  },
+  "profession": {
+    "zh": "11.11 车蜡与镀晶漆面养护选购顾问",
+    "en": "11.11 Car Wax and Ceramic Coating Care Advisor"
+  },
+  "displayDescription": {
+    "zh": "车蜡镀晶怎么挑：按停车与洗车频率定蜡或镀晶、核单次用量与持久期、看施工条件、算每月养护成本。",
+    "en": "Pick car wax or coating: durability, usage, prep, curing and monthly cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "露天停车打蜡还是镀晶",
+    "en": "Wax or ceramic coating for outdoor parking"
+  },
+  "plugin": "lynxce-car-wax-coating-advisor",
+  "tags": [
+    {
+      "zh": "养护类型",
+      "en": "Product Type"
+    },
+    {
+      "zh": "用量持久",
+      "en": "Usage and Durability"
+    },
+    {
+      "zh": "每月成本",
+      "en": "Monthly Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "露天停车打蜡还是镀晶",
+      "en": "Wax or ceramic coating for outdoor parking"
+    },
+    {
+      "zh": "一瓶镀晶够用几次",
+      "en": "How many uses one bottle of coating gives"
+    },
+    {
+      "zh": "门店镀晶三年值不值",
+      "en": "Is a three year shop coating worth it"
+    }
+  ],
+  "keywords": [
+    "养护类型",
+    "用量持久",
+    "每月成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

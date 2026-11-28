@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-carousel-advisor",
+  "version": "1.0.1",
+  "description": "Turn source text into a page-by-page carousel script, cover copy, layout rules and a readability checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-carousel-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-carousel-post"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-carousel-advisor",
+  "displayName": {
+    "zh": "图文笔记排版顾问",
+    "en": "Carousel Post Advisor"
+  },
+  "profession": {
+    "zh": "多图图文笔记排版与叙事顾问｜灵策智算",
+    "en": "Carousel Image Post Layout and Storytelling Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "把长文拆成逐页可制作的图文脚本，交付首图文案、分页叙事、视觉规范和检查清单，核对页数与文字密度",
+    "en": "Turn source text into a page-by-page carousel script, cover copy, layout rules and a readability checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把这篇长文改成八页图文，逐页写标题正文和画面说明",
+    "en": "Adapt this article into eight pages with titles, copy and visual directions"
+  },
+  "plugin": "lynxce-carousel-advisor",
+  "tags": [
+    {
+      "zh": "逐页叙事",
+      "en": "Page flow"
+    },
+    {
+      "zh": "首图文案",
+      "en": "Cover copy"
+    },
+    {
+      "zh": "版式规范",
+      "en": "Layout rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这篇长文改成八页图文，逐页写标题正文和画面说明",
+      "en": "Adapt this article into eight pages with titles, copy and visual directions"
+    },
+    {
+      "zh": "为这组图文做三版首图并检查承诺是否在内页兑现",
+      "en": "Draft three covers and check whether the inner pages support each promise"
+    },
+    {
+      "zh": "检查我的分页稿页数、文字密度和视觉规范并给修订版",
+      "en": "Revise my page count, copy density and layout specification"
+    }
+  ],
+  "keywords": [
+    "逐页叙事",
+    "首图文案",
+    "版式规范"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-camera-advisor",
+  "version": "1.0.4",
+  "description": "Split a camera budget right: body versus lens, mount and sensor checks and accessory costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-camera-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-camera-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-camera-advisor",
+  "displayName": {
+    "zh": "相机镜头选购与器材搭配顾问",
+    "en": "Camera and Lens Buying Advisor"
+  },
+  "profession": {
+    "zh": "相机镜头选购与器材搭配顾问",
+    "en": "Camera and Lens Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "相机预算怎么分配才对：机身和镜头谁优先、卡口与画幅怎么核对、周边配件要留出多少钱。",
+    "en": "Split a camera budget right: body versus lens, mount and sensor checks and accessory costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "我拍这个题材该买什么镜头",
+    "en": "Which lens suits what I shoot"
+  },
+  "plugin": "lynxce-camera-advisor",
+  "tags": [
+    {
+      "zh": "相机选购",
+      "en": "Cameras"
+    },
+    {
+      "zh": "镜头搭配",
+      "en": "Lenses"
+    },
+    {
+      "zh": "器材预算",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我拍这个题材该买什么镜头",
+      "en": "Which lens suits what I shoot"
+    },
+    {
+      "zh": "这机身和镜头能配吗",
+      "en": "Are this body and lens compatible"
+    },
+    {
+      "zh": "这套器材现在什么价",
+      "en": "What does this kit cost now"
+    }
+  ],
+  "keywords": [
+    "相机选购",
+    "镜头搭配",
+    "器材预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

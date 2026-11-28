@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pmc-advisor",
+  "version": "1.0.1",
+  "description": "Calculate capacity and draft schedules with material constraints and rush-order impact checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pmc-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-capacity-ledger",
+    "./skills/lynxce-material-readiness",
+    "./skills/lynxce-rush-order-impact"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pmc-advisor",
+  "displayName": {
+    "zh": "生产计划与排程顾问",
+    "en": "Production Planning & Scheduling Advisor"
+  },
+  "profession": {
+    "zh": "生产计划排程与交期管理顾问",
+    "en": "Production Scheduling and Delivery Commitment Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据订单工时良率和物料材料核算产能编制排程及插单影响表保留约束与确认条件形成可复核交期草案",
+    "en": "Calculate capacity and draft schedules with material constraints and rush-order impact checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "核对订单工时与现有产能，列出条件交期",
+    "en": "Check order hours and available capacity and list conditional delivery dates"
+  },
+  "plugin": "lynxce-pmc-advisor",
+  "tags": [
+    {
+      "zh": "产能工时",
+      "en": "Capacity hours"
+    },
+    {
+      "zh": "插单比较",
+      "en": "Rush-order tradeoffs"
+    },
+    {
+      "zh": "约束确认",
+      "en": "Constraint checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对订单工时与现有产能，列出条件交期",
+      "en": "Check order hours and available capacity and list conditional delivery dates"
+    },
+    {
+      "zh": "比较插单方案对原订单的交期影响",
+      "en": "Compare rush-order scenarios and impacts on existing orders"
+    },
+    {
+      "zh": "材料或班次资料不全时，整理排程待确认表",
+      "en": "Prepare a scheduling clarification table for missing material or shift data"
+    }
+  ],
+  "keywords": [
+    "产能测算",
+    "交期承诺",
+    "插单处理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-property-repair-priority-b43-advisor",
+  "version": "1.0.0",
+  "description": "Help property staff turn supplied records into evidence-based tables, conditional plans and review questions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-property-repair-priority-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-property-repair-priority-b43",
+    "./skills/lynxce-property-repair-priority-b43-int-window-conflict",
+    "./skills/lynxce-property-repair-priority-b43-int-reopen-feedback"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-property-repair-priority-b43-advisor",
+  "displayName": {
+    "zh": "物业维修工单调度专家",
+    "en": "Property Repair Dispatch Advisor"
+  },
+  "profession": {
+    "zh": "物业维修工单优先级与约束派工专家",
+    "en": "Property Repair Dispatch Advisor"
+  },
+  "displayDescription": {
+    "zh": "为物业值班人员核对报修影响、技能班次和入户条件，生成维修优先级表、派工草案与回访闭环清单。",
+    "en": "Help property staff turn supplied records into evidence-based tables, conditional plans and review questions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请按我提供的资料做物业维修工单优先级与派工草案",
+    "en": "Prepare the initial record-based deliverable"
+  },
+  "plugin": "lynxce-property-repair-priority-b43-advisor",
+  "tags": [
+    {
+      "zh": "建筑物业",
+      "en": "Property Operations"
+    },
+    {
+      "zh": "物业维修工单优先",
+      "en": "Record Review"
+    },
+    {
+      "zh": "证据与闭环成果",
+      "en": "Evidence and Closure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请按我提供的资料做物业维修工单优先级与派工草案",
+      "en": "Prepare the initial record-based deliverable"
+    },
+    {
+      "zh": "关键记录矛盾时怎样核查并保留待确认项",
+      "en": "Review contradictory records and unresolved conditions"
+    },
+    {
+      "zh": "补证后如何更新成果并跟踪人工闭环",
+      "en": "Revise evidence and track human-confirmed closure"
+    }
+  ],
+  "keywords": [
+    "建筑物业",
+    "物业维修工单优先",
+    "证据与闭环成果"
+  ]
+}

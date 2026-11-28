@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-smart-switch-advisor",
+  "version": "1.0.1",
+  "description": "Choose smart switches and strips: live and neutral, protocols and hubs, rated load, certification, safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-smart-switch-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-smart-switch"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-smart-switch-advisor",
+  "displayName": {
+    "zh": "智能开关插座与插线板选购顾问",
+    "en": "Smart Switch and Power Strip Advisor"
+  },
+  "profession": {
+    "zh": "11.11 智能开关插座与插线板选购顾问",
+    "en": "11.11 Smart Switch and Power Strip Advisor"
+  },
+  "displayDescription": {
+    "zh": "智能开关插线板怎么选：单火与零火线、协议与网关、插线板额定功率与国标认证、用电安全，强电找电工。",
+    "en": "Choose smart switches and strips: live and neutral, protocols and hubs, rated load, certification, safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里没零线能装智能开关吗",
+    "en": "Can I install a smart switch without a neutral wire"
+  },
+  "plugin": "lynxce-smart-switch-advisor",
+  "tags": [
+    {
+      "zh": "零火线",
+      "en": "Live and Neutral"
+    },
+    {
+      "zh": "协议网关",
+      "en": "Protocol and Hub"
+    },
+    {
+      "zh": "插线板负载",
+      "en": "Strip Load"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里没零线能装智能开关吗",
+      "en": "Can I install a smart switch without a neutral wire"
+    },
+    {
+      "zh": "智能开关选 Wi-Fi 还是 Zigbee",
+      "en": "Should my smart switch use Wi-Fi or Zigbee"
+    },
+    {
+      "zh": "插线板能同时插哪些电器",
+      "en": "Which appliances can share one power strip"
+    }
+  ],
+  "keywords": [
+    "零火线",
+    "协议网关",
+    "插线板负载",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

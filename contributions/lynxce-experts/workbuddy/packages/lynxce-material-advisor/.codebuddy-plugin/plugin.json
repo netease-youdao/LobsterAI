@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-material-advisor",
+  "version": "1.0.4",
+  "description": "Buy materials in install order: quantities, waste allowance and line-by-line quote checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-material-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-material-list"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-material-advisor",
+  "displayName": {
+    "zh": "装修主材选购与报价核对顾问",
+    "en": "Renovation Material Advisor"
+  },
+  "profession": {
+    "zh": "装修主材选购与报价核对顾问",
+    "en": "Renovation Material Advisor"
+  },
+  "displayDescription": {
+    "zh": "主材按进场顺序买不积压：用量怎么估、损耗留多少、报价单逐项怎么核才不会被留开口子。",
+    "en": "Buy materials in install order: quantities, waste allowance and line-by-line quote checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "主材该按什么顺序买",
+    "en": "In what order should I buy materials"
+  },
+  "plugin": "lynxce-material-advisor",
+  "tags": [
+    {
+      "zh": "装修主材",
+      "en": "Materials"
+    },
+    {
+      "zh": "用量估算",
+      "en": "Quantities"
+    },
+    {
+      "zh": "报价核对",
+      "en": "Quotes"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "主材该按什么顺序买",
+      "en": "In what order should I buy materials"
+    },
+    {
+      "zh": "这个面积要买多少瓷砖",
+      "en": "How many tiles do I need for this area"
+    },
+    {
+      "zh": "帮我核一下这份报价单",
+      "en": "Review this renovation quote"
+    }
+  ],
+  "keywords": [
+    "装修主材",
+    "用量估算",
+    "报价核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

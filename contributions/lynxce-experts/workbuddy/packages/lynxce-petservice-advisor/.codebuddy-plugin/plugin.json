@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-petservice-advisor",
+  "version": "1.0.4",
+  "description": "Choose pet boarding carefully: facility checks, contract terms and travel rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-petservice-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-petservice-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-petservice-advisor",
+  "displayName": {
+    "zh": "宠物寄养与出行服务核算顾问",
+    "en": "Pet Boarding and Travel Advisor"
+  },
+  "profession": {
+    "zh": "宠物寄养与出行服务核算顾问",
+    "en": "Pet Boarding and Travel Advisor"
+  },
+  "displayDescription": {
+    "zh": "宠物寄养怎么选：环境实地要看什么、合同要写什么、费用怎么比、带宠出行规则先查清。",
+    "en": "Choose pet boarding carefully: facility checks, contract terms and travel rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "寄养该怎么挑",
+    "en": "How do I choose a boarding place"
+  },
+  "plugin": "lynxce-petservice-advisor",
+  "tags": [
+    {
+      "zh": "宠物寄养",
+      "en": "Pet Boarding"
+    },
+    {
+      "zh": "合同约定",
+      "en": "Contracts"
+    },
+    {
+      "zh": "出行规则",
+      "en": "Travel Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "寄养该怎么挑",
+      "en": "How do I choose a boarding place"
+    },
+    {
+      "zh": "上门喂养还是寄养",
+      "en": "Home visits or boarding"
+    },
+    {
+      "zh": "带猫狗坐车要办什么",
+      "en": "What do I need to travel with my pet"
+    }
+  ],
+  "keywords": [
+    "宠物寄养",
+    "合同约定",
+    "出行规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

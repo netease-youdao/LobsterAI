@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-membership-payback-advisor",
+  "version": "1.0.2",
+  "description": "Should you buy a paid membership: price gap times purchases for payback, shipping perks, renewal traps and auto-renew off.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-membership-payback-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-membership-payback"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-membership-payback-advisor",
+  "displayName": {
+    "zh": "付费会员与年卡大促回本核算顾问",
+    "en": "Paid Membership and Annual Card Payback Advisor"
+  },
+  "profession": {
+    "zh": "付费会员与年卡大促回本核算顾问",
+    "en": "Paid Membership and Annual Card Payback Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促要不要开付费会员：会员价差乘预计购买次数算回本，核对运费券权益、续费陷阱与自动续费关闭。",
+    "en": "Should you buy a paid membership: price gap times purchases for payback, shipping perks, renewal traps and auto-renew off."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "大促这个付费会员值不值得开",
+    "en": "Is this paid membership worth it this promo"
+  },
+  "plugin": "lynxce-membership-payback-advisor",
+  "tags": [
+    {
+      "zh": "会员回本",
+      "en": "Membership Payback"
+    },
+    {
+      "zh": "续费陷阱",
+      "en": "Renewal Traps"
+    },
+    {
+      "zh": "自动续费",
+      "en": "Auto-Renew"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "大促这个付费会员值不值得开",
+      "en": "Is this paid membership worth it this promo"
+    },
+    {
+      "zh": "帮我算几单能回本",
+      "en": "How many orders until it pays back"
+    },
+    {
+      "zh": "自动续费怎么关干净",
+      "en": "How to fully turn off auto-renew"
+    }
+  ],
+  "keywords": [
+    "会员回本",
+    "续费陷阱",
+    "自动续费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

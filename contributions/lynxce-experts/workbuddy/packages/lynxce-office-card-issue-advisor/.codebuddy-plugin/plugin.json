@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-card-issue-advisor",
+  "version": "1.0.0",
+  "description": "Calculate card sleeve orders and reconcile approved issues, returns and losses.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-card-issue-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-card-issue"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-card-issue-advisor",
+  "displayName": {
+    "zh": "门禁耗材领用核销师",
+    "en": "Access Supply Consumption Calculator"
+  },
+  "profession": {
+    "zh": "门禁卡套核销与访客证件回收核算师",
+    "en": "Card Sleeve Consumption and Visitor Return Calculator"
+  },
+  "displayDescription": {
+    "zh": "按入职补换与访客计划核算门禁卡套，核对发放归还及权限确认状态，扣除可用库存，输出采购登记台账。",
+    "en": "Calculate card sleeve orders and reconcile approved issues, returns and losses."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按新发补换和访客峰值算卡套整包数量",
+    "en": "Calculate sleeve packs for new issues replacements and peaks"
+  },
+  "plugin": "lynxce-office-card-issue-advisor",
+  "tags": [
+    {
+      "zh": "卡套包装",
+      "en": "Sleeve Pack Sizes"
+    },
+    {
+      "zh": "访客回收",
+      "en": "Visitor Returns"
+    },
+    {
+      "zh": "领用核销",
+      "en": "Issue Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按新发补换和访客峰值算卡套整包数量",
+      "en": "Calculate sleeve packs for new issues replacements and peaks"
+    },
+    {
+      "zh": "临时访客证件回收怎样冲减耗材净领用",
+      "en": "Reconcile consumable usage after visitor credential returns"
+    },
+    {
+      "zh": "输出卡套采购与领用核销配对登记表",
+      "en": "Build paired sleeve purchase and consumption ledgers"
+    }
+  ],
+  "keywords": [
+    "卡套包装",
+    "访客回收",
+    "领用核销",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

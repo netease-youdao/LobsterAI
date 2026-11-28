@@ -1,0 +1,49 @@
+{
+  "orderSource": "假设订单表",
+  "lines": [
+    {
+      "id": "A",
+      "quantity": 23,
+      "unitNetKg": "0.2",
+      "source": "假设订单A",
+      "model": "A",
+      "mixGroup": "允许组1"
+    },
+    {
+      "id": "B",
+      "quantity": 17,
+      "unitNetKg": "0.5",
+      "source": "假设订单B",
+      "model": "B",
+      "mixGroup": "允许组1"
+    }
+  ],
+  "rules": {
+    "maxPieces": 10,
+    "maxNetKg": "3",
+    "tareKg": "0.4",
+    "allowMix": true,
+    "dimensions": null
+  },
+  "fixedBoxes": [],
+  "quantityScenarios": [
+    {
+      "label": "未确认替代的客户邮件",
+      "source": "客户邮件原值",
+      "quantities": {
+        "A": 25,
+        "B": 17
+      }
+    }
+  ],
+  "previousPlan": null,
+  "comparisonScenarios": [
+    {
+      "label": "两来源均仅改包材至0.5公斤",
+      "source": "假设用户明确要求单变量比较",
+      "overrides": {
+        "tareKg": "0.5"
+      }
+    }
+  ]
+}

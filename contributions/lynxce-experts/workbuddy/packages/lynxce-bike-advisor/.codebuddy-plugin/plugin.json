@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bike-advisor",
+  "version": "1.0.1",
+  "description": "Plan a bike purchase: frame size by height, type by commute, helmet, lights and lock budget, yearly upkeep.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bike-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bike"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bike-advisor",
+  "displayName": {
+    "zh": "自行车与通勤骑行装备顾问",
+    "en": "Bicycle and Commuting Gear Advisor"
+  },
+  "profession": {
+    "zh": "11.11 自行车与通勤骑行装备顾问",
+    "en": "11.11 Bicycle and Commuting Gear Advisor"
+  },
+  "displayDescription": {
+    "zh": "自行车怎么选怎么算：按身高选车架尺寸、按通勤距离选车型、头盔车灯车锁必备件预算、年度保养成本。",
+    "en": "Plan a bike purchase: frame size by height, type by commute, helmet, lights and lock budget, yearly upkeep."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "身高 172 选多大车架",
+    "en": "What frame size fits someone 172cm tall"
+  },
+  "plugin": "lynxce-bike-advisor",
+  "tags": [
+    {
+      "zh": "车架尺寸",
+      "en": "Frame Size"
+    },
+    {
+      "zh": "通勤车型",
+      "en": "Commuter Bike Type"
+    },
+    {
+      "zh": "安全装备预算",
+      "en": "Safety Gear Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "身高 172 选多大车架",
+      "en": "What frame size fits someone 172cm tall"
+    },
+    {
+      "zh": "通勤 8 公里选公路车还是折叠车",
+      "en": "Road bike or folding bike for an 8km commute"
+    },
+    {
+      "zh": "头盔车灯车锁预算留多少",
+      "en": "How much should I budget for helmet, lights and lock"
+    }
+  ],
+  "keywords": [
+    "车架尺寸",
+    "通勤车型",
+    "安全装备预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

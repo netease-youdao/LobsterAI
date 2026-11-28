@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-facial-mask-advisor",
+  "version": "1.0.1",
+  "description": "Stock up on facial masks: per-sheet price, shelf life versus usage, skin type match, gift sheet count check.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-facial-mask-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-facial-mask"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-facial-mask-advisor",
+  "displayName": {
+    "zh": "面膜大促囤货核算顾问",
+    "en": "Facial Mask Stock-up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 面膜大促囤货核算顾问",
+    "en": "11.11 Facial Mask Stock-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "面膜大促怎么囤：按片换算单片价、核保质期与开封期、按肤质选类型、核对赠品片数与规格。",
+    "en": "Stock up on facial masks: per-sheet price, shelf life versus usage, skin type match, gift sheet count check."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两盒面膜加上赠品单片价各是多少",
+    "en": "What is the per-sheet price of these two mask packs with gifts"
+  },
+  "plugin": "lynxce-facial-mask-advisor",
+  "tags": [
+    {
+      "zh": "单片价换算",
+      "en": "Per-sheet Price"
+    },
+    {
+      "zh": "保质期囤量",
+      "en": "Shelf Life and Stock"
+    },
+    {
+      "zh": "肤质匹配",
+      "en": "Skin Type Match"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两盒面膜加上赠品单片价各是多少",
+      "en": "What is the per-sheet price of these two mask packs with gifts"
+    },
+    {
+      "zh": "每周敷两片囤多少面膜不会过期",
+      "en": "How many masks can I stock at two a week before expiry"
+    },
+    {
+      "zh": "混合偏油皮该囤哪种面膜",
+      "en": "Which mask type suits combination oily skin"
+    }
+  ],
+  "keywords": [
+    "单片价换算",
+    "保质期囤量",
+    "肤质匹配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

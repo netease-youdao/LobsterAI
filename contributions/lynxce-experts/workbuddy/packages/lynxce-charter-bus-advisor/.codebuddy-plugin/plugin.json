@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-charter-bus-advisor",
+  "version": "1.0.0",
+  "description": "Pick vehicle size, normalize charter quotes and produce a comparison and booking form.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-charter-bus-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-charter-bus"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-charter-bus-advisor",
+  "displayName": {
+    "zh": "团建包车比价助理",
+    "en": "Charter Bus Quote Assistant"
+  },
+  "profession": {
+    "zh": "团建与异地会议包车比价行政顾问",
+    "en": "Team Event and Offsite Charter Bus Quote Advisor"
+  },
+  "displayDescription": {
+    "zh": "团建会议包车怎么订：按人数选车型，按里程与用车时长核算全包价，出多家报价对比表与用车确认单。",
+    "en": "Pick vehicle size, normalize charter quotes and produce a comparison and booking form."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "40 个人团建租什么车合适",
+    "en": "What vehicle fits a 40 person team outing"
+  },
+  "plugin": "lynxce-charter-bus-advisor",
+  "tags": [
+    {
+      "zh": "车型选择",
+      "en": "Vehicle Size"
+    },
+    {
+      "zh": "全包价核算",
+      "en": "All In Price"
+    },
+    {
+      "zh": "用车确认",
+      "en": "Booking Form"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "40 个人团建租什么车合适",
+      "en": "What vehicle fits a 40 person team outing"
+    },
+    {
+      "zh": "三家包车报价口径不同怎么比",
+      "en": "How to compare three charter quotes fairly"
+    },
+    {
+      "zh": "返程晚到一小时超时费怎么算",
+      "en": "How overtime is charged when returning late"
+    }
+  ],
+  "keywords": [
+    "车型选择",
+    "全包价核算",
+    "用车确认",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

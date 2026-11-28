@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-warehouse-kit-workstation-schedule-b45",
+  "version": "1.0.0",
+  "description": "Schedule kit assembly orders by workstation minutes, ready times and deadlines, with insertion and delay drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-warehouse-kit-workstation-schedule-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-warehouse-kit-workstation-schedule-inside-1-b45",
+    "./skills/lynxce-warehouse-kit-workstation-schedule-inside-2-b45",
+    "./skills/lynxce-warehouse-kit-workstation-schedule-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-warehouse-kit-workstation-schedule-b45",
+  "displayName": {
+    "zh": "装配计划师",
+    "en": "Warehouse Kit Workstation Scheduler"
+  },
+  "profession": {
+    "zh": "仓库装配排程师",
+    "en": "Warehouse Kit Workstation Scheduler"
+  },
+  "displayDescription": {
+    "zh": "根据装配订单、齐料时间与交付期限编排仓库工位，生成分钟排程、换型安排和插单后的延迟沟通稿。",
+    "en": "Schedule kit assembly orders by workstation minutes, ready times and deadlines, with insertion and delay drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三单都要今天装配完，请按工位和截止时间排班。",
+    "en": "Warehouse Kit Workstation Scheduler"
+  },
+  "plugin": "lynxce-warehouse-kit-workstation-schedule-b45",
+  "tags": [
+    {
+      "zh": "仓库装配",
+      "en": "仓库装配"
+    },
+    {
+      "zh": "工位排程",
+      "en": "工位排程"
+    },
+    {
+      "zh": "插单重排",
+      "en": "插单重排"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三单都要今天装配完，请按工位和截止时间排班。",
+      "en": "Warehouse Kit Workstation Scheduler"
+    },
+    {
+      "zh": "十点插入一张急单，帮我重排并列出受影响订单。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "工位一停用四十分钟，给出能执行的补救安排。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "仓库装配",
+    "工位排程",
+    "插单重排"
+  ]
+}

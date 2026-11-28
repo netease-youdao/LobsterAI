@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-group-split-advisor",
+  "version": "1.0.2",
+  "description": "Split group orders fairly: per-person discount allocation, payer and receiver roles, re-settlement after returns, ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-group-split-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-group-split"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-group-split-advisor",
+  "displayName": {
+    "zh": "多人合买拼单与费用分摊顾问",
+    "en": "Group Order and Cost Split Advisor"
+  },
+  "profession": {
+    "zh": "11.11 多人合买拼单与费用分摊顾问",
+    "en": "11.11 Group Order and Cost Split Advisor"
+  },
+  "displayDescription": {
+    "zh": "多人合单怎么分钱：满减按人比例分摊、谁付款谁收货、有人退货后重算、合买记账表模板。",
+    "en": "Split group orders fairly: per-person discount allocation, payer and receiver roles, re-settlement after returns, ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我们三个人合单凑满减，钱怎么分",
+    "en": "Three of us combined an order, how do we split the cost"
+  },
+  "plugin": "lynxce-group-split-advisor",
+  "tags": [
+    {
+      "zh": "优惠分摊",
+      "en": "Discount Allocation"
+    },
+    {
+      "zh": "退货重算",
+      "en": "Return Re-settlement"
+    },
+    {
+      "zh": "合买记账",
+      "en": "Group Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我们三个人合单凑满减，钱怎么分",
+      "en": "Three of us combined an order, how do we split the cost"
+    },
+    {
+      "zh": "合买后有人退货怎么重新算",
+      "en": "How to re-settle when someone returns an item"
+    },
+    {
+      "zh": "帮我做一张合买记账表",
+      "en": "Make a group purchase ledger for me"
+    }
+  ],
+  "keywords": [
+    "优惠分摊",
+    "退货重算",
+    "合买记账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

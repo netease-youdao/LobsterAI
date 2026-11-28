@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-car-fridge-advisor",
+  "version": "1.0.1",
+  "description": "Pick car fridges: compressor or thermoelectric, capacity and trunk fit, battery protection, power use, dual use.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-car-fridge-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-car-fridge"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-car-fridge-advisor",
+  "displayName": {
+    "zh": "车载冰箱选购与耗电核算顾问",
+    "en": "Car Fridge and Power Use Advisor"
+  },
+  "profession": {
+    "zh": "11.11 车载冰箱选购与耗电核算顾问",
+    "en": "11.11 Car Fridge and Power Use Advisor"
+  },
+  "displayDescription": {
+    "zh": "车载冰箱怎么挑：分压缩机与半导体、按后备箱尺寸定容量、核电瓶保护与电压、算制冷耗电、看家车两用。",
+    "en": "Pick car fridges: compressor or thermoelectric, capacity and trunk fit, battery protection, power use, dual use."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "露营两天要冻肉选压缩机还是半导体",
+    "en": "Compressor or thermoelectric fridge for two days of camping"
+  },
+  "plugin": "lynxce-car-fridge-advisor",
+  "tags": [
+    {
+      "zh": "压缩机半导体",
+      "en": "Compressor or Peltier"
+    },
+    {
+      "zh": "电瓶保护",
+      "en": "Battery Protection"
+    },
+    {
+      "zh": "容量尺寸",
+      "en": "Capacity and Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "露营两天要冻肉选压缩机还是半导体",
+      "en": "Compressor or thermoelectric fridge for two days of camping"
+    },
+    {
+      "zh": "停车过夜开冰箱会不会亏电",
+      "en": "Will running the fridge overnight while parked drain the battery"
+    },
+    {
+      "zh": "这台冰箱后备箱放得下吗",
+      "en": "Will this fridge fit in my trunk"
+    }
+  ],
+  "keywords": [
+    "压缩机半导体",
+    "电瓶保护",
+    "容量尺寸",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

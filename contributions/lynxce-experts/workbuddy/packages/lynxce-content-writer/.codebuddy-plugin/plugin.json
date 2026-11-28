@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-content-writer",
+  "version": "1.0.2",
+  "description": "Plan evidence-based content, editorial calendars and channel rewrites using user materials and review checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-content-writer.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-content-writer",
+  "displayName": {
+    "zh": "内容创作专家",
+    "en": "Content Creator"
+  },
+  "profession": {
+    "zh": "内容策划与文案写手",
+    "en": "Content Strategist & Copywriter"
+  },
+  "displayDescription": {
+    "zh": "围绕用户材料规划选题与内容排期编写证据驱动文稿完成多载体改写交付审稿清单与工时复算说明",
+    "en": "Plan evidence-based content, editorial calendars and channel rewrites using user materials and review checklists."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我规划下周的公众号选题和内容日历",
+    "en": "Plan next week's WeChat topics and content calendar"
+  },
+  "plugin": "lynxce-content-writer",
+  "tags": [
+    {
+      "zh": "选题策划",
+      "en": "Topic Planning"
+    },
+    {
+      "zh": "文章撰写",
+      "en": "Article Writing"
+    },
+    {
+      "zh": "社媒文案",
+      "en": "Social Copy"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我规划下周的公众号选题和内容日历",
+      "en": "Plan next week's WeChat topics and content calendar"
+    },
+    {
+      "zh": "写一篇关于AI数字员工的深度分析文章",
+      "en": "Write an in-depth article on AI digital employees"
+    },
+    {
+      "zh": "把这段产品介绍改成小红书种草文案",
+      "en": "Rewrite this product intro as a Xiaohongshu post"
+    }
+  ],
+  "keywords": [
+    "选题策划",
+    "文章撰写",
+    "社媒文案",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "skills": [
+    "./skills/lynxce-topic-calendar",
+    "./skills/lynxce-evidence-copy",
+    "./skills/lynxce-channel-rewrite"
+  ],
+  "needEncrypt": true
+}

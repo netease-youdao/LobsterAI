@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-region-version-advisor",
+  "version": "1.0.1",
+  "description": "Check a gadget version: mainland/HK/overseas/refurbished markings, network bands, warranty and invoice, and whether the gap pays.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-region-version-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-region-version"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-region-version-advisor",
+  "displayName": {
+    "zh": "数码版本与保修核对顾问",
+    "en": "Electronics Version and Warranty Advisor"
+  },
+  "profession": {
+    "zh": "11.11 数码版本与保修核对顾问",
+    "en": "11.11 Electronics Version and Warranty Advisor"
+  },
+  "displayDescription": {
+    "zh": "数码便宜货先查版本：国行港版海外版官翻怎么认、网络频段是否适配、保修发票范围、价差值不值。",
+    "en": "Check a gadget version: mainland/HK/overseas/refurbished markings, network bands, warranty and invoice, and whether the gap pays."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这台便宜的手机是不是国行",
+    "en": "Is this cheaper phone a mainland retail version"
+  },
+  "plugin": "lynxce-region-version-advisor",
+  "tags": [
+    {
+      "zh": "版本识别",
+      "en": "Version Check"
+    },
+    {
+      "zh": "频段比对",
+      "en": "Network Bands"
+    },
+    {
+      "zh": "保修发票",
+      "en": "Warranty and Invoice"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这台便宜的手机是不是国行",
+      "en": "Is this cheaper phone a mainland retail version"
+    },
+    {
+      "zh": "港版手机在国内能正常用吗",
+      "en": "Will a Hong Kong version phone work well here"
+    },
+    {
+      "zh": "便宜几百元值得买非国行吗",
+      "en": "Is a non-mainland version worth a few hundred less"
+    }
+  ],
+  "keywords": [
+    "版本识别",
+    "频段比对",
+    "保修发票",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-garment-steamer-advisor",
+  "version": "1.0.1",
+  "description": "Pick garment steamers and irons: handheld or upright, steam time from tank, fabric settings, travel, descaling.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-garment-steamer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-garment-steamer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-garment-steamer-advisor",
+  "displayName": {
+    "zh": "挂烫机与电熨斗选购核算顾问",
+    "en": "Garment Steamer and Iron Advisor"
+  },
+  "profession": {
+    "zh": "11.11 挂烫机与电熨斗选购核算顾问",
+    "en": "11.11 Garment Steamer and Iron Advisor"
+  },
+  "displayDescription": {
+    "zh": "挂烫机电熨斗怎么挑：分手持立式、按水箱与蒸汽量算连续时间、按面料配档位、核便携与除垢。",
+    "en": "Pick garment steamers and irons: handheld or upright, steam time from tank, fabric settings, travel, descaling."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "每周烫 5 件衬衫选手持还是立式",
+    "en": "Handheld or upright steamer for 5 shirts a week"
+  },
+  "plugin": "lynxce-garment-steamer-advisor",
+  "tags": [
+    {
+      "zh": "手持立式",
+      "en": "Handheld or Upright"
+    },
+    {
+      "zh": "蒸汽水箱",
+      "en": "Steam and Tank"
+    },
+    {
+      "zh": "面料除垢",
+      "en": "Fabric and Descaling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "每周烫 5 件衬衫选手持还是立式",
+      "en": "Handheld or upright steamer for 5 shirts a week"
+    },
+    {
+      "zh": "150 毫升水箱能连续烫多久",
+      "en": "How long can a 150 milliliter tank steam continuously"
+    },
+    {
+      "zh": "真丝和羊毛衣服该用什么档位烫",
+      "en": "What setting should I use on silk and wool"
+    }
+  ],
+  "keywords": [
+    "手持立式",
+    "蒸汽水箱",
+    "面料除垢",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

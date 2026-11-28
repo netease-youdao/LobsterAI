@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-rain-umbrella-advisor",
+  "version": "1.0.0",
+  "description": "Size shared umbrella stock and reconcile loans, drying, repairs and replenishment.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-rain-umbrella-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-rain-umbrella"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-rain-umbrella-advisor",
+  "displayName": {
+    "zh": "共享雨具借还核算师",
+    "en": "Shared Umbrella Loan Calculator"
+  },
+  "profession": {
+    "zh": "雨天通勤共享雨具补给与借还核算师",
+    "en": "Commute Umbrella Replenishment and Loan Calculator"
+  },
+  "displayDescription": {
+    "zh": "按雨天同时借用峰值核算共享雨具，区分在借待晾与维修库存，逐把登记借还报损，输出补给差异复核表。",
+    "en": "Size shared umbrella stock and reconcile loans, drying, repairs and replenishment."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按同时在借峰值算共享雨伞补货数量",
+    "en": "Calculate umbrella orders from concurrent loan peaks"
+  },
+  "plugin": "lynxce-office-rain-umbrella-advisor",
+  "tags": [
+    {
+      "zh": "并发峰值",
+      "en": "Concurrent Peaks"
+    },
+    {
+      "zh": "雨具补给",
+      "en": "Umbrella Supplies"
+    },
+    {
+      "zh": "借还闭环",
+      "en": "Loan Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按同时在借峰值算共享雨伞补货数量",
+      "en": "Calculate umbrella orders from concurrent loan peaks"
+    },
+    {
+      "zh": "归还湿伞与待修雨伞怎样分开计库存",
+      "en": "Separate wet returns and repair stock from available umbrellas"
+    },
+    {
+      "zh": "做逐把借还台账并核对总保有数量",
+      "en": "Build a numbered loan ledger and reconcile total assets"
+    }
+  ],
+  "keywords": [
+    "并发峰值",
+    "雨具补给",
+    "借还闭环",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

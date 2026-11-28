@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fuelcharge-advisor",
+  "version": "1.0.4",
+  "description": "Cut running costs: set a cost-per-kilometer baseline, compare discounts and judge prepaid risk.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fuelcharge-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fuel-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fuelcharge-advisor",
+  "displayName": {
+    "zh": "加油充电与用车成本核算顾问",
+    "en": "Fuel and Charging Cost Advisor"
+  },
+  "profession": {
+    "zh": "加油充电与用车成本核算顾问",
+    "en": "Fuel and Charging Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "用车能耗成本怎么降下来：每公里先算基线、优惠按折后单价比、预存卡的风险怎么判断。",
+    "en": "Cut running costs: set a cost-per-kilometer baseline, compare discounts and judge prepaid risk."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我算一下每公里成本",
+    "en": "Work out my cost per kilometer"
+  },
+  "plugin": "lynxce-fuelcharge-advisor",
+  "tags": [
+    {
+      "zh": "用车成本",
+      "en": "Running Cost"
+    },
+    {
+      "zh": "优惠核算",
+      "en": "Discounts"
+    },
+    {
+      "zh": "预存风险",
+      "en": "Prepaid Risk"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我算一下每公里成本",
+      "en": "Work out my cost per kilometer"
+    },
+    {
+      "zh": "这个加油优惠值不值",
+      "en": "Is this fuel discount worth it"
+    },
+    {
+      "zh": "预存卡该不该充",
+      "en": "Should I top up this prepaid card"
+    }
+  ],
+  "keywords": [
+    "用车成本",
+    "优惠核算",
+    "预存风险",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

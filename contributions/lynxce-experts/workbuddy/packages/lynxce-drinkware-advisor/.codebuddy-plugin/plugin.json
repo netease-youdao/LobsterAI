@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-drinkware-advisor",
+  "version": "1.0.1",
+  "description": "Check insulated bottles: 304 or 316 steel marks, heat retention claims, capacity for use, lid and seal replacement cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-drinkware-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-drinkware"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-drinkware-advisor",
+  "displayName": {
+    "zh": "保温杯与水杯选购核对顾问",
+    "en": "Insulated Bottle and Cup Check Advisor"
+  },
+  "profession": {
+    "zh": "11.11 保温杯与水杯选购核对顾问",
+    "en": "11.11 Insulated Bottle and Cup Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "保温杯怎么核：304/316材质标识看哪里、保温时长核对、容量与场景匹配、配件密封圈更换成本。",
+    "en": "Check insulated bottles: 304 or 316 steel marks, heat retention claims, capacity for use, lid and seal replacement cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "304 和 316 标识在哪里看",
+    "en": "Where do I find the 304 or 316 steel mark"
+  },
+  "plugin": "lynxce-drinkware-advisor",
+  "tags": [
+    {
+      "zh": "材质标识",
+      "en": "Material Marks"
+    },
+    {
+      "zh": "保温核对",
+      "en": "Heat Retention"
+    },
+    {
+      "zh": "配件成本",
+      "en": "Spare Parts Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "304 和 316 标识在哪里看",
+      "en": "Where do I find the 304 or 316 steel mark"
+    },
+    {
+      "zh": "两款保温时长能直接比吗",
+      "en": "Can I compare the heat retention of two bottles directly"
+    },
+    {
+      "zh": "通勤用多大容量的杯子合适",
+      "en": "What capacity suits a daily commute"
+    }
+  ],
+  "keywords": [
+    "材质标识",
+    "保温核对",
+    "配件成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

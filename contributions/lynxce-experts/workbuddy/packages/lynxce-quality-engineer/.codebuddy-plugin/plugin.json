@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-quality-engineer",
+  "version": "1.0.1",
+  "description": "Organize 8D evidence, equipment records and comparable supplier quality quotes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-quality-engineer.md"
+  ],
+  "skills": [
+    "./skills/lynxce-8d-report",
+    "./skills/lynxce-equipment-sop",
+    "./skills/lynxce-supplier-rfq"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-quality-engineer",
+  "displayName": {
+    "zh": "质量工程师",
+    "en": "Quality Engineer"
+  },
+  "profession": {
+    "zh": "制造质量与客诉处理专家",
+    "en": "Manufacturing Quality & Complaint Specialist"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料完成8D双链报告、设备记录核对与供应商质量比价，交付证据清单、异常决策和可复算样例。",
+    "en": "Organize 8D evidence, equipment records and comparable supplier quality quotes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "客户投诉这批货有划痕,帮我做 8D 报告",
+    "en": "Client reported scratches, help me build an 8D report"
+  },
+  "plugin": "lynxce-quality-engineer",
+  "tags": [
+    {
+      "zh": "8D报告",
+      "en": "8D Report"
+    },
+    {
+      "zh": "根因分析",
+      "en": "Root Cause"
+    },
+    {
+      "zh": "设备点检",
+      "en": "Inspection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "客户投诉这批货有划痕,帮我做 8D 报告",
+      "en": "Client reported scratches, help me build an 8D report"
+    },
+    {
+      "zh": "帮我分析这个不良的根因和流出原因",
+      "en": "Analyze the occurrence and escape root causes"
+    },
+    {
+      "zh": "给这台设备做一份日常点检表",
+      "en": "Create a daily inspection sheet for this machine"
+    }
+  ],
+  "keywords": [
+    "8D报告",
+    "根因分析",
+    "设备点检",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

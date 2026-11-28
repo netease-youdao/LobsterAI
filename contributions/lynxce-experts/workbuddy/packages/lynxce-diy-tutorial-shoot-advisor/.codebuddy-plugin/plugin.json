@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-diy-tutorial-shoot-advisor",
+  "version": "1.0.2",
+  "description": "DIY tutorials: breaking steps down, overhead camera setup, detail shots and listing materials and safety notes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-diy-tutorial-shoot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-diy-tutorial-shoot"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-diy-tutorial-shoot-advisor",
+  "displayName": {
+    "zh": "手工教程顾问",
+    "en": "DIY Tutorial Advisor"
+  },
+  "profession": {
+    "zh": "手工 DIY 教程视频拍摄顾问｜灵策智算",
+    "en": "Handmade DIY Tutorial Shooting Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "手工 DIY 教程怎么拍：步骤怎么拆、机位怎么架、细节怎么给、材料与安全怎么标注。",
+    "en": "DIY tutorials: breaking steps down, overhead camera setup, detail shots and listing materials and safety notes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "教程视频观众说看不懂",
+    "en": "Viewers say my tutorial is unclear"
+  },
+  "plugin": "lynxce-diy-tutorial-shoot-advisor",
+  "tags": [
+    {
+      "zh": "手工教程",
+      "en": "DIY Tutorial"
+    },
+    {
+      "zh": "俯拍机位",
+      "en": "Overhead Setup"
+    },
+    {
+      "zh": "材料清单",
+      "en": "Materials List"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "教程视频观众说看不懂",
+      "en": "Viewers say my tutorial is unclear"
+    },
+    {
+      "zh": "俯拍机位该架多高",
+      "en": "How high should the overhead camera be"
+    },
+    {
+      "zh": "帮我拆一份步骤表",
+      "en": "Break my project into filmable steps"
+    }
+  ],
+  "keywords": [
+    "手工教程",
+    "俯拍机位",
+    "材料清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

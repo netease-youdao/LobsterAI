@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dataviz-advisor",
+  "version": "1.0.1",
+  "description": "Choose charts and document dashboard metrics, denominators and misleading-design checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dataviz-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-chart-design",
+    "./skills/lynxce-metric-denominator",
+    "./skills/lynxce-dashboard-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dataviz-advisor",
+  "displayName": {
+    "zh": "灵策数据可视化顾问",
+    "en": "Data Visualization"
+  },
+  "profession": {
+    "zh": "图表选型与看板设计顾问",
+    "en": "Chart & Dashboard Design Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户数据与业务问题选择图表核对分母时间轴和汇总口径编制看板说明及误导排查清单保留来源证据",
+    "en": "Choose charts and document dashboard metrics, denominators and misleading-design checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据业务问题和现有字段推荐图表与编码方式",
+    "en": "Recommend charts and visual encodings for my question and fields"
+  },
+  "plugin": "lynxce-dataviz-advisor",
+  "tags": [
+    {
+      "zh": "图表选型",
+      "en": "Chart selection"
+    },
+    {
+      "zh": "口径核对",
+      "en": "Metric checks"
+    },
+    {
+      "zh": "看板评审",
+      "en": "Dashboard review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据业务问题和现有字段推荐图表与编码方式",
+      "en": "Recommend charts and visual encodings for my question and fields"
+    },
+    {
+      "zh": "核对这份汇总表的口径、重复项与缺失值",
+      "en": "Check definitions, duplicates and missing values in this summary"
+    },
+    {
+      "zh": "评审这份看板结构，列出修改清单和验收标准",
+      "en": "Review this dashboard structure and provide changes and acceptance criteria"
+    }
+  ],
+  "keywords": [
+    "图表选型",
+    "看板设计",
+    "误导排查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,66 @@
+{
+  "name": "lynxce-driver-support-expert",
+  "version": "1.0.1",
+  "description": "Turn driver reports into arrival checks, waiting-time reviews, handover actions, communication drafts and shift summaries.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-driver-support-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-driver-support-expert",
+  "displayName": {
+    "zh": "司机服务专家",
+    "en": "Driver Support Specialist"
+  },
+  "profession": {
+    "zh": "司机沟通与调度支持顾问",
+    "en": "Driver Communication and Dispatch Support Advisor"
+  },
+  "displayDescription": {
+    "zh": "将司机反馈整理为到仓核对、等待原因和交接行动表，交付简短沟通话术、调度确认草稿与班次复盘清单。",
+    "en": "Turn driver reports into arrival checks, waiting-time reviews, handover actions, communication drafts and shift summaries."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据订单摘要生成司机接单到仓核对卡与简短沟通话术",
+    "en": "Create an order-to-arrival checklist and concise driver messages."
+  },
+  "plugin": "lynxce-driver-support-expert",
+  "tags": [
+    {
+      "zh": "到仓核对",
+      "en": "Arrival Checks"
+    },
+    {
+      "zh": "等待复盘",
+      "en": "Wait Review"
+    },
+    {
+      "zh": "调度沟通",
+      "en": "Dispatch Drafts"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据订单摘要生成司机接单到仓核对卡与简短沟通话术",
+      "en": "Create an order-to-arrival checklist and concise driver messages."
+    },
+    {
+      "zh": "按到仓、排队和装卸时间拆分等待并生成调度确认表",
+      "en": "Break down waiting and loading time and draft a dispatch review."
+    },
+    {
+      "zh": "把这些异常反馈整理成上报卡、交接台账与班次复盘",
+      "en": "Convert exception reports into escalation cards and shift handovers."
+    }
+  ],
+  "keywords": [
+    "到仓核对",
+    "等待复盘",
+    "调度沟通"
+  ],
+  "needEncrypt": true
+}

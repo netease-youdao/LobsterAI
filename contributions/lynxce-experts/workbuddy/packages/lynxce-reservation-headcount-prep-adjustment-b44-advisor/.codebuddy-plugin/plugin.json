@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-reservation-headcount-prep-adjustment-b44-advisor",
+  "version": "1.0.0",
+  "description": "Help staff review reservation headcount prep adjustment with three focused evidence workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-reservation-headcount-prep-adjustment-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-reservation-headcount-prep-adjustment-b44",
+    "./skills/lynxce-reservation-portion-batch-rounding-b44",
+    "./skills/lynxce-reservation-prepared-lock-delta-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-reservation-headcount-prep-adjustment-b44-advisor",
+  "displayName": {
+    "zh": "预订人数备餐核对专家",
+    "en": "Reservation Portion Change Advisor"
+  },
+  "profession": {
+    "zh": "预订人数备餐核对专家",
+    "en": "Reservation Portion Change Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助餐饮预订人员依据确认人数与既定份量规则复算备餐差额，区分已备和可调整项，交付增减待确认表。",
+    "en": "Help staff review reservation headcount prep adjustment with three focused evidence workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我的资料生成预订人数变更备餐调整表",
+    "en": "Create the review from my supplied records"
+  },
+  "plugin": "lynxce-reservation-headcount-prep-adjustment-b44-advisor",
+  "tags": [
+    {
+      "zh": "餐饮预订备餐",
+      "en": "Domain Workflow"
+    },
+    {
+      "zh": "预订人数变更备餐调整表",
+      "en": "Evidence Review"
+    },
+    {
+      "zh": "人工复核",
+      "en": "Human Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我的资料生成预订人数变更备餐调整表",
+      "en": "Create the review from my supplied records"
+    },
+    {
+      "zh": "请保留这些矛盾原值并列最少补证材料",
+      "en": "Keep conflicting values and list missing evidence"
+    },
+    {
+      "zh": "请追加新记录并复算受影响的版本差异",
+      "en": "Compare new evidence and recalculate affected rows"
+    }
+  ],
+  "keywords": [
+    "餐饮预订备餐",
+    "预订人数变更备餐调整表",
+    "人工复核"
+  ]
+}

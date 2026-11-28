@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-microwave-steam-oven-advisor",
+  "version": "1.0.1",
+  "description": "Pick microwaves and steam oven combos: capacity, function mix, built-in size and venting, power, cleaning.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-microwave-steam-oven-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-microwave-steam-oven"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-microwave-steam-oven-advisor",
+  "displayName": {
+    "zh": "微波炉与微蒸烤一体机选购顾问",
+    "en": "Microwave and Steam Oven Combo Advisor"
+  },
+  "profession": {
+    "zh": "11.11 微波炉与微蒸烤一体机选购顾问",
+    "en": "11.11 Microwave and Steam Oven Combo Advisor"
+  },
+  "displayDescription": {
+    "zh": "微波炉微蒸烤怎么挑：按人数定容量、按使用频率取舍蒸烤、核嵌入式尺寸与散热、算功率插座与清洁。",
+    "en": "Pick microwaves and steam oven combos: capacity, function mix, built-in size and venting, power, cleaning."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三口人微波炉买多少升合适",
+    "en": "What microwave capacity suits a family of three"
+  },
+  "plugin": "lynxce-microwave-steam-oven-advisor",
+  "tags": [
+    {
+      "zh": "容量人数",
+      "en": "Capacity by Household"
+    },
+    {
+      "zh": "蒸烤取舍",
+      "en": "Steam and Bake Fit"
+    },
+    {
+      "zh": "嵌入尺寸",
+      "en": "Built-in Size"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三口人微波炉买多少升合适",
+      "en": "What microwave capacity suits a family of three"
+    },
+    {
+      "zh": "一个月蒸两次菜值得买微蒸烤一体机吗",
+      "en": "Is a steam oven combo worth it for steaming twice a month"
+    },
+    {
+      "zh": "橱柜预留 45 厘米高能嵌哪些机型",
+      "en": "Which built-in models fit a 45 centimeter cabinet opening"
+    }
+  ],
+  "keywords": [
+    "容量人数",
+    "蒸烤取舍",
+    "嵌入尺寸",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

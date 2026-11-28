@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-commerce-support-backlog-cover-b45",
+  "version": "1.0.1",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-commerce-support-backlog-cover-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-commerce-support-backlog-cover-load-b45",
+    "./skills/lynxce-commerce-support-backlog-cover-coverage-b45",
+    "./skills/lynxce-commerce-support-backlog-cover-clearance-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-commerce-support-backlog-cover-b45",
+  "displayName": {
+    "zh": "排班顾问",
+    "en": "Support Peak Coverage Planner"
+  },
+  "profession": {
+    "zh": "客服高峰排班",
+    "en": "Support Peak Coverage Planner"
+  },
+  "displayDescription": {
+    "zh": "按时段咨询量与处理时长测算客服负荷，生成岗位覆盖、积压清偿及借调对比方案，帮助主管安排高峰人力。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "每小时120单咨询平均处理4分钟，3名客服如何覆盖并处理积压？",
+    "en": "Support Peak Coverage Planner"
+  },
+  "plugin": "lynxce-commerce-support-backlog-cover-b45",
+  "tags": [
+    {
+      "zh": "客服排班",
+      "en": "客服排班"
+    },
+    {
+      "zh": "积压清偿",
+      "en": "积压清偿"
+    },
+    {
+      "zh": "高峰人力",
+      "en": "高峰人力"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "每小时120单咨询平均处理4分钟，3名客服如何覆盖并处理积压？",
+      "en": "Support Peak Coverage Planner"
+    },
+    {
+      "zh": "午后咨询量涨一半，帮我比较借调1人和延后处理普通工单的方案。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "有两类技能组和已定休息时间，请按小时给覆盖缺口及主管通知稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "客服排班",
+    "积压清偿",
+    "高峰人力"
+  ]
+}

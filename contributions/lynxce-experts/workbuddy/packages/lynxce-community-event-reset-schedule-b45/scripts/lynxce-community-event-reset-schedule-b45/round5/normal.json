@@ -1,0 +1,101 @@
+{
+  "date": null,
+  "start": "18:00",
+  "deadline": "18:40",
+  "workers": [
+    {
+      "id": "甲",
+      "available": [
+        {
+          "start": "18:00",
+          "end": "18:40"
+        }
+      ],
+      "busy": []
+    },
+    {
+      "id": "乙",
+      "available": [
+        {
+          "start": "18:00",
+          "end": "18:40"
+        }
+      ],
+      "busy": []
+    },
+    {
+      "id": "丙",
+      "available": [
+        {
+          "start": "18:00",
+          "end": "18:40"
+        }
+      ],
+      "busy": []
+    }
+  ],
+  "tasks": [
+    {
+      "id": "A",
+      "name": null,
+      "people": 1,
+      "durationMinutes": 10,
+      "predecessors": [],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "B",
+      "name": null,
+      "people": 2,
+      "durationMinutes": 10,
+      "predecessors": [],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "C",
+      "name": null,
+      "people": 2,
+      "durationMinutes": 10,
+      "predecessors": [
+        "B"
+      ],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "D",
+      "name": null,
+      "people": 1,
+      "durationMinutes": 10,
+      "predecessors": [
+        "A",
+        "C"
+      ],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "E",
+      "name": null,
+      "people": 1,
+      "durationMinutes": 10,
+      "predecessors": [
+        "A"
+      ],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    }
+  ],
+  "resources": {},
+  "fixedTasks": [],
+  "items": null,
+  "destinationConflicts": [],
+  "freeTeamProbes": []
+}

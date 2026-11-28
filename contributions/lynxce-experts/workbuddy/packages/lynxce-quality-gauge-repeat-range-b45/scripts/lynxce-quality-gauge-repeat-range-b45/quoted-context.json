@@ -1,0 +1,101 @@
+{
+  "groups": [
+    {
+      "id": "G1",
+      "operator": "甲（假设）",
+      "gauge": "Q1（假设）",
+      "method": "方法V1（假设）",
+      "condition": "同条件假设",
+      "conditionsComparable": true,
+      "readings": [
+        {
+          "partId": "P1",
+          "trialId": "1",
+          "value": "10.00",
+          "unit": "mm",
+          "source": "假设原始测量记录P1-1"
+        },
+        {
+          "partId": "P1",
+          "trialId": "2",
+          "value": "10.01",
+          "unit": "mm",
+          "source": "假设原始测量记录P1-2"
+        },
+        {
+          "partId": "P1",
+          "trialId": "3",
+          "value": "10.00",
+          "unit": "mm",
+          "source": "假设原始测量记录P1-3"
+        },
+        {
+          "partId": "P2",
+          "trialId": "1",
+          "value": "10.20",
+          "unit": "mm",
+          "source": "假设原始测量记录P2-1"
+        },
+        {
+          "partId": "P2",
+          "trialId": "2",
+          "value": "10.22",
+          "unit": "mm",
+          "source": "假设原始测量记录P2-2"
+        },
+        {
+          "partId": "P2",
+          "trialId": "3",
+          "value": "10.21",
+          "unit": "mm",
+          "source": "假设原始测量记录P2-3"
+        },
+        {
+          "partId": "P3",
+          "trialId": "1",
+          "value": "9.90",
+          "unit": "mm",
+          "source": "假设原始测量记录P3-1"
+        },
+        {
+          "partId": "P3",
+          "trialId": "2",
+          "value": "9.91",
+          "unit": "mm",
+          "source": "假设原始测量记录P3-2"
+        },
+        {
+          "partId": "P3",
+          "trialId": "3",
+          "value": "9.90",
+          "unit": "mm",
+          "source": "假设原始测量记录P3-3"
+        }
+      ]
+    }
+  ],
+  "tolerance": {
+    "width": "0.10",
+    "unit": "mm",
+    "source": "仅尺度比较的假设公差"
+  },
+  "references": [],
+  "corrections": [],
+  "objectContext": {
+    "objectType": {
+      "value": "纸片",
+      "sourceKind": "original",
+      "quote": "本轮测量对象为纸片"
+    },
+    "measurementPosition": {
+      "value": "左侧厚度",
+      "sourceKind": "original",
+      "quote": "测量部位为左侧厚度"
+    },
+    "scenario": {
+      "value": "课堂练习",
+      "sourceKind": "original",
+      "quote": "场景为课堂练习"
+    }
+  }
+}

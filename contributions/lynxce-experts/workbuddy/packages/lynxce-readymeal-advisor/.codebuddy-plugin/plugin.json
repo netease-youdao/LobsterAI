@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-readymeal-advisor",
+  "version": "1.0.4",
+  "description": "Choose ready meals wisely: label reading, cold chain checks and per-serving cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-readymeal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-readymeal-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-readymeal-advisor",
+  "displayName": {
+    "zh": "预制菜与净菜选购顾问",
+    "en": "Ready Meal and Prepped Food Advisor"
+  },
+  "profession": {
+    "zh": "预制菜与净菜选购顾问",
+    "en": "Ready Meal and Prepped Food Advisor"
+  },
+  "displayDescription": {
+    "zh": "预制菜怎么挑：配料表怎么读、冷链收货怎么验、每份成本怎么算、储存复热要注意什么。",
+    "en": "Choose ready meals wisely: label reading, cold chain checks and per-serving cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这款预制菜怎么样",
+    "en": "What do you think of this ready meal"
+  },
+  "plugin": "lynxce-readymeal-advisor",
+  "tags": [
+    {
+      "zh": "预制菜",
+      "en": "Ready Meals"
+    },
+    {
+      "zh": "配料标签",
+      "en": "Labels"
+    },
+    {
+      "zh": "每份成本",
+      "en": "Cost per Serving"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这款预制菜怎么样",
+      "en": "What do you think of this ready meal"
+    },
+    {
+      "zh": "每份成本比自己做贵吗",
+      "en": "Is this cheaper than cooking myself"
+    },
+    {
+      "zh": "收到化冻了怎么办",
+      "en": "What if it arrives thawed"
+    }
+  ],
+  "keywords": [
+    "预制菜",
+    "配料标签",
+    "每份成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

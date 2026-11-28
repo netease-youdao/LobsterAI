@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ticket-advisor",
+  "version": "1.0.4",
+  "description": "Buy event tickets safely: official channels, seat selection and the full outing budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ticket-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ticket-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ticket-advisor",
+  "displayName": {
+    "zh": "演出票务与观演出行顾问",
+    "en": "Event Ticketing and Outing Advisor"
+  },
+  "profession": {
+    "zh": "演出票务与观演出行顾问",
+    "en": "Event Ticketing and Outing Advisor"
+  },
+  "displayDescription": {
+    "zh": "买演出票怎么才不踩坑：官方渠道怎么认、座位怎么挑、退改怎么问、总花费怎么一起算。",
+    "en": "Buy event tickets safely: official channels, seat selection and the full outing budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个价位该选哪个区",
+    "en": "Which section fits this budget"
+  },
+  "plugin": "lynxce-ticket-advisor",
+  "tags": [
+    {
+      "zh": "演出票务",
+      "en": "Tickets"
+    },
+    {
+      "zh": "选座逻辑",
+      "en": "Seating"
+    },
+    {
+      "zh": "观演预算",
+      "en": "Outing Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个价位该选哪个区",
+      "en": "Which section fits this budget"
+    },
+    {
+      "zh": "这个渠道靠谱吗",
+      "en": "Is this ticket source trustworthy"
+    },
+    {
+      "zh": "帮我算一下总花费",
+      "en": "Estimate my total spend"
+    }
+  ],
+  "keywords": [
+    "演出票务",
+    "选座逻辑",
+    "观演预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "date": null,
+  "sharedCrew": true,
+  "actualArrivalStatus": {
+    "新X": null
+  },
+  "shipments": [
+    {
+      "id": "新X",
+      "arrival": "09:00",
+      "durationMinutes": 20,
+      "deadline": "11:30",
+      "allowedDocks": [
+        "甲"
+      ]
+    },
+    {
+      "id": "新Y",
+      "arrival": "09:00",
+      "durationMinutes": 20,
+      "deadline": "10:30",
+      "allowedDocks": [
+        "乙"
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "label": "常用停用与锁定预约",
+      "source": "新增本地假设约束样例；非原用户事实",
+      "docks": {
+        "甲": {
+          "open": "09:00",
+          "close": "12:00",
+          "blockedIntervals": [
+            {
+              "start": "09:20",
+              "end": "09:50",
+              "source": "假设停用窗口"
+            }
+          ]
+        },
+        "乙": {
+          "open": "09:00",
+          "close": "12:00",
+          "blockedIntervals": []
+        }
+      },
+      "existingReservations": [
+        {
+          "id": "锁定F",
+          "dock": "甲",
+          "start": "10:30",
+          "end": "11:00",
+          "source": "假设已确认预约不得移动"
+        }
+      ],
+      "sharedCrewIntervals": [
+        {
+          "start": "09:00",
+          "end": "09:15",
+          "source": "假设班组已有作业"
+        }
+      ]
+    }
+  ]
+}

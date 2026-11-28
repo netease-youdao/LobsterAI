@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-anniversary-event-advisor",
+  "version": "1.0.0",
+  "description": "Event materials: turnout, quantity formulas, budget split, arrival and recovery ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-anniversary-event-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-anniversary-event"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-anniversary-event-advisor",
+  "displayName": {
+    "zh": "周年庆物料助理",
+    "en": "Anniversary Event Materials Assistant"
+  },
+  "profession": {
+    "zh": "周年庆开放日物料采购助理",
+    "en": "Anniversary and Open Day Materials Assistant"
+  },
+  "displayDescription": {
+    "zh": "周年庆开放日物料备多少：按邀请与到场率定数量、分品类分配预算留机动，产出物料清单与到货回收台账。",
+    "en": "Event materials: turnout, quantity formulas, budget split, arrival and recovery ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "300 人开放日伴手礼备多少份",
+    "en": "How many gifts for a 300 guest open day"
+  },
+  "plugin": "lynxce-anniversary-event-advisor",
+  "tags": [
+    {
+      "zh": "到场测算",
+      "en": "Turnout Estimate"
+    },
+    {
+      "zh": "预算分配",
+      "en": "Budget Split"
+    },
+    {
+      "zh": "回收台账",
+      "en": "Recovery Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "300 人开放日伴手礼备多少份",
+      "en": "How many gifts for a 300 guest open day"
+    },
+    {
+      "zh": "3 万活动预算各品类怎么分",
+      "en": "How to split a 30000 yuan event budget"
+    },
+    {
+      "zh": "帮我做物料到货和回收台账",
+      "en": "Make a materials arrival and recovery ledger"
+    }
+  ],
+  "keywords": [
+    "到场测算",
+    "预算分配",
+    "回收台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-meeting-panel-advisor",
+  "version": "1.0.0",
+  "description": "Buy meeting panels: screen size from seats, feature checklist, five year cost, decision table.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-panel-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-panel"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-panel-advisor",
+  "displayName": {
+    "zh": "会议平板采购顾问",
+    "en": "Meeting Panel Purchase Advisor"
+  },
+  "profession": {
+    "zh": "会议平板与智能白板办公采购顾问",
+    "en": "Meeting Room Smart Panel Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "会议平板怎么买：按最远座位与内容类型算屏幕尺寸、列书写传屏音视频功能清单、算5年总成本，附决策表。",
+    "en": "Buy meeting panels: screen size from seats, feature checklist, five year cost, decision table."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "十人会议室买多大的会议平板",
+    "en": "What panel size for a ten person room"
+  },
+  "plugin": "lynxce-meeting-panel-advisor",
+  "tags": [
+    {
+      "zh": "屏幕尺寸测算",
+      "en": "Screen Size Sizing"
+    },
+    {
+      "zh": "功能清单",
+      "en": "Feature Checklist"
+    },
+    {
+      "zh": "方案决策表",
+      "en": "Weighted Decision Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "十人会议室买多大的会议平板",
+      "en": "What panel size for a ten person room"
+    },
+    {
+      "zh": "会议平板要看哪些功能参数",
+      "en": "Which features matter in a meeting panel"
+    },
+    {
+      "zh": "几家会议平板方案怎么比",
+      "en": "How to compare several meeting panel options"
+    }
+  ],
+  "keywords": [
+    "屏幕尺寸测算",
+    "功能清单",
+    "方案决策表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

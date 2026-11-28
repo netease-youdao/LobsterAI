@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-birthday-party-advisor",
+  "version": "1.0.0",
+  "description": "Birthday party: cake size and servings, budget, delivery timing, receipt and expense sheets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-birthday-party-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-birthday-party"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-birthday-party-advisor",
+  "displayName": {
+    "zh": "生日会采购助理",
+    "en": "Staff Birthday Party Assistant"
+  },
+  "profession": {
+    "zh": "月度生日会蛋糕采购助理",
+    "en": "Monthly Birthday Party Purchase Assistant"
+  },
+  "displayDescription": {
+    "zh": "月度生日会怎么订蛋糕：按寿星与到场人数定尺寸份数、核人均预算与送达时间，产出采购单与签收报销表。",
+    "en": "Birthday party: cake size and servings, budget, delivery timing, receipt and expense sheets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "45 人生日会订几寸蛋糕",
+    "en": "What cake sizes for a 45 person party"
+  },
+  "plugin": "lynxce-birthday-party-advisor",
+  "tags": [
+    {
+      "zh": "份数测算",
+      "en": "Serving Estimate"
+    },
+    {
+      "zh": "人均预算",
+      "en": "Per Person Budget"
+    },
+    {
+      "zh": "签收报销",
+      "en": "Receipt and Expense"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "45 人生日会订几寸蛋糕",
+      "en": "What cake sizes for a 45 person party"
+    },
+    {
+      "zh": "蛋糕最晚什么时候下单送达",
+      "en": "Latest time to order and deliver the cake"
+    },
+    {
+      "zh": "帮我做生日会采购单和报销表",
+      "en": "Make a birthday party order and expense sheet"
+    }
+  ],
+  "keywords": [
+    "份数测算",
+    "人均预算",
+    "签收报销",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

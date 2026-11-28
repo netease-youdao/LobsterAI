@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-exhibition-advisor",
+  "version": "1.0.1",
+  "description": "Prepare show plans, staffing and lead reviews with evidence and reproducible cost calculations.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-exhibition-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-exhibition-checklist",
+    "./skills/lynxce-exhibition-advisor-review",
+    "./skills/lynxce-exhibition-advisor-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-exhibition-advisor",
+  "displayName": {
+    "zh": "灵策会展顾问",
+    "en": "Exhibition Ops"
+  },
+  "profession": {
+    "zh": "展会筹备与现场执行顾问",
+    "en": "Trade Show Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料完成筹备验收、岗位接待与跟进复盘，交付证据清单、异常决策和可复算样例及复核记录。",
+    "en": "Prepare show plans, staffing and lead reviews with evidence and reproducible cost calculations."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "第一次参展,要准备什么",
+    "en": "First time exhibiting — what do I prepare"
+  },
+  "plugin": "lynxce-exhibition-advisor",
+  "tags": [
+    {
+      "zh": "展会筹备",
+      "en": "Show Prep"
+    },
+    {
+      "zh": "现场执行",
+      "en": "On-site"
+    },
+    {
+      "zh": "线索跟进",
+      "en": "Lead Follow-up"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "第一次参展,要准备什么",
+      "en": "First time exhibiting — what do I prepare"
+    },
+    {
+      "zh": "帮我排一份展会现场排班",
+      "en": "Draft an on-site staffing schedule"
+    },
+    {
+      "zh": "展会收的名片怎么跟进",
+      "en": "How do I follow up on the cards we collected"
+    }
+  ],
+  "keywords": [
+    "展会筹备",
+    "现场执行",
+    "线索跟进",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

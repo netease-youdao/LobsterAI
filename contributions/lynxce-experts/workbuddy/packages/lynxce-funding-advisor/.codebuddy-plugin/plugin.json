@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-funding-advisor",
+  "version": "1.0.2",
+  "description": "Startup funding advisor for business plans, market sizing, unit economics and investor pitch preparation",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-funding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-business-plan",
+    "./skills/lynxce-operating-model",
+    "./skills/lynxce-pitch-evidence"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-funding-advisor",
+  "displayName": {
+    "zh": "创业融资顾问",
+    "en": "Startup Funding Advisor"
+  },
+  "profession": {
+    "zh": "商业计划与路演打磨顾问",
+    "en": "Business Plan & Pitch Advisor"
+  },
+  "displayDescription": {
+    "zh": "提供产品、客户与经营材料，生成七部分商业计划草稿、一页摘要和路演问答，区分事实、假设与待补证据。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "用现有材料先写商业计划初稿和一页摘要，明确未证实的假设",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-funding-advisor",
+  "tags": [
+    {
+      "zh": "商业计划书",
+      "en": "Business Plan"
+    },
+    {
+      "zh": "市场测算",
+      "en": "Market Sizing"
+    },
+    {
+      "zh": "路演打磨",
+      "en": "Pitch"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "用现有材料先写商业计划初稿和一页摘要，明确未证实的假设",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "核对计划书里的客户、市场和经营数字，给证据缺口与修订稿",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "把计划书压缩为路演叙事，给听众可能追问及可用证据",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "商业计划书",
+    "市场测算",
+    "路演打磨",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

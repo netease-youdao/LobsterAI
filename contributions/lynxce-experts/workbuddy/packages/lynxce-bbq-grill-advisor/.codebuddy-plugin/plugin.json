@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bbq-grill-advisor",
+  "version": "1.0.0",
+  "description": "Pick BBQ grills: grill area, fuel type, ventilation, carbon monoxide risk and fire tools.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bbq-grill-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bbq-grill"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bbq-grill-advisor",
+  "displayName": {
+    "zh": "烧烤炉用火安全顾问",
+    "en": "BBQ Grill and Fire Safety Advisor"
+  },
+  "profession": {
+    "zh": "11.11 烧烤炉与户外用火安全选购顾问",
+    "en": "11.11 BBQ Grill and Outdoor Fire Safety Advisor"
+  },
+  "displayDescription": {
+    "zh": "烧烤炉怎么挑：按人数定烤网面积、比炭炉气炉电炉、核通风与一氧化碳风险、备灭火工具。",
+    "en": "Pick BBQ grills: grill area, fuel type, ventilation, carbon monoxide risk and fire tools."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "露营 5 个人烧烤炉要多大",
+    "en": "What grill size suits five people camping"
+  },
+  "plugin": "lynxce-bbq-grill-advisor",
+  "tags": [
+    {
+      "zh": "一氧化碳",
+      "en": "Carbon Monoxide"
+    },
+    {
+      "zh": "烤网面积",
+      "en": "Grill Area"
+    },
+    {
+      "zh": "灭火收尾",
+      "en": "Ember Disposal"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "露营 5 个人烧烤炉要多大",
+      "en": "What grill size suits five people camping"
+    },
+    {
+      "zh": "炭炉能不能放帐篷里取暖",
+      "en": "Can a charcoal grill heat a tent safely"
+    },
+    {
+      "zh": "烧烤结束炭火怎么彻底熄灭",
+      "en": "How to fully put out charcoal after grilling"
+    }
+  ],
+  "keywords": [
+    "一氧化碳",
+    "烤网面积",
+    "灭火收尾",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

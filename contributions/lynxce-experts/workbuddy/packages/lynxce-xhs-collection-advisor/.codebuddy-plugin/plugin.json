@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-xhs-collection-advisor",
+  "version": "1.0.2",
+  "description": "Turn published note lists and engagement data into collection plans, reading order, cover and title rules, and update schedules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-xhs-collection-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-xhs-collection"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-xhs-collection-advisor",
+  "displayName": {
+    "zh": "小红书合集运营顾问",
+    "en": "Xiaohongshu Collection Advisor"
+  },
+  "profession": {
+    "zh": "小红书合集与专栏运营顾问｜灵策智算",
+    "en": "Xiaohongshu Collection and Column Operations Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据已发笔记清单与互动数据盘点主题，规划合集划分和阅读顺序，统一封面与标题规则，附更新排期与复核表。",
+    "en": "Turn published note lists and engagement data into collection plans, reading order, cover and title rules, and update schedules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的笔记清单和数据生成合集划分与排序方案",
+    "en": "Plan collections and reading order from my note list and data"
+  },
+  "plugin": "lynxce-xhs-collection-advisor",
+  "tags": [
+    {
+      "zh": "合集规划",
+      "en": "Collection Plan"
+    },
+    {
+      "zh": "阅读顺序",
+      "en": "Reading Order"
+    },
+    {
+      "zh": "更新排期",
+      "en": "Update Schedule"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的笔记清单和数据生成合集划分与排序方案",
+      "en": "Plan collections and reading order from my note list and data"
+    },
+    {
+      "zh": "帮我检查这个合集的顺序封面和标题前缀",
+      "en": "Review this collection's order covers and title prefixes"
+    },
+    {
+      "zh": "只知道账号定位和笔记数量先给一版合集框架",
+      "en": "With only my niche and note count draft a collection outline"
+    }
+  ],
+  "keywords": [
+    "合集规划",
+    "阅读顺序",
+    "更新排期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

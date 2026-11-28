@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-edit-handoff-advisor",
+  "version": "1.0.2",
+  "description": "Create an editing brief, footage handoff, revision log and evidence-based acceptance record.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-edit-handoff-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-edit-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-edit-handoff-advisor",
+  "displayName": {
+    "zh": "剪辑协作顾问",
+    "en": "Editing Collaboration Advisor"
+  },
+  "profession": {
+    "zh": "剪辑合作对接与成片验收顾问｜灵策智算",
+    "en": "Editing Brief and Deliverable Acceptance Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "把剪辑需求转成可核对的协作文件，交付需求基线、素材交接表、逐条改版反馈与成片验收记录，减少沟通返工",
+    "en": "Create an editing brief, footage handoff, revision log and evidence-based acceptance record."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把我的剪辑需求做成需求基线和素材交接包清单",
+    "en": "Create a scope baseline and footage handoff manifest"
+  },
+  "plugin": "lynxce-edit-handoff-advisor",
+  "tags": [
+    {
+      "zh": "需求基线",
+      "en": "Scope baseline"
+    },
+    {
+      "zh": "改版反馈",
+      "en": "Revision feedback"
+    },
+    {
+      "zh": "交付验收",
+      "en": "Delivery acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把我的剪辑需求做成需求基线和素材交接包清单",
+      "en": "Create a scope baseline and footage handoff manifest"
+    },
+    {
+      "zh": "把零散修改意见合并成按时间码排列的改版单",
+      "en": "Merge feedback into a timecoded revision list"
+    },
+    {
+      "zh": "按约定交付清单生成验收记录和未完成项处理稿",
+      "en": "Prepare an acceptance record with unresolved deliverables"
+    }
+  ],
+  "keywords": [
+    "需求基线",
+    "改版反馈",
+    "交付验收"
+  ],
+  "needEncrypt": true
+}

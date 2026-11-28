@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-window-robot-advisor",
+  "version": "1.0.0",
+  "description": "Pick window robots: suction, edge detection, safety rope, backup and payback.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-window-robot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-window-robot"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-window-robot-advisor",
+  "displayName": {
+    "zh": "擦窗机器人选购顾问",
+    "en": "Window Cleaning Robot Advisor"
+  },
+  "profession": {
+    "zh": "11.11 擦窗机器人选购顾问",
+    "en": "11.11 Window Cleaning Robot Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "擦窗机器人怎么挑：按玻璃与窗框定吸附与边缘识别、核安全绳与断电续航、看适用尺寸、算家政回本次数。",
+    "en": "Pick window robots: suction, edge detection, safety rope, backup and payback."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "无边框阳台封窗能用擦窗机器人吗",
+    "en": "Can a window robot clean frameless balcony glass"
+  },
+  "plugin": "lynxce-window-robot-advisor",
+  "tags": [
+    {
+      "zh": "边框识别",
+      "en": "Edge Detection"
+    },
+    {
+      "zh": "安全保护",
+      "en": "Safety Rope and Backup"
+    },
+    {
+      "zh": "回本测算",
+      "en": "Payback Estimate"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "无边框阳台封窗能用擦窗机器人吗",
+      "en": "Can a window robot clean frameless balcony glass"
+    },
+    {
+      "zh": "断电后擦窗机器人会掉吗",
+      "en": "Does a window robot fall during a power cut"
+    },
+    {
+      "zh": "擦窗机器人多久能比请家政划算",
+      "en": "When a window robot pays off versus cleaners"
+    }
+  ],
+  "keywords": [
+    "边框识别",
+    "安全保护",
+    "回本测算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

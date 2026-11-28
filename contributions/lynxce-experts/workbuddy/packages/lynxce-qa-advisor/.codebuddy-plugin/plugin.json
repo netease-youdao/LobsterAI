@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-qa-advisor",
+  "version": "1.0.1",
+  "description": "Write Q&A answers that work: picking questions, structure and compliant CTAs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-qa-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-qa-content"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-qa-advisor",
+  "displayName": {
+    "zh": "问答内容写作与运营顾问",
+    "en": "Q&A Platform Content Advisor"
+  },
+  "profession": {
+    "zh": "问答内容写作与运营顾问",
+    "en": "Q&A Platform Content Advisor"
+  },
+  "displayDescription": {
+    "zh": "问答平台怎么写才有效果：挑什么题、开头怎么抓人、结构怎么排开、引流怎么做才算合规。",
+    "en": "Write Q&A answers that work: picking questions, structure and compliant CTAs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "这个问题值不值得答",
+    "en": "Is this question worth answering"
+  },
+  "plugin": "lynxce-qa-advisor",
+  "tags": [
+    {
+      "zh": "问答写作",
+      "en": "Q&A Writing"
+    },
+    {
+      "zh": "搜索流量",
+      "en": "Search Traffic"
+    },
+    {
+      "zh": "可信度",
+      "en": "Credibility"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个问题值不值得答",
+      "en": "Is this question worth answering"
+    },
+    {
+      "zh": "回答开头怎么写",
+      "en": "How should I open this answer"
+    },
+    {
+      "zh": "引流怎么做才不违规",
+      "en": "How do I add a CTA without breaking rules"
+    }
+  ],
+  "keywords": [
+    "问答写作",
+    "搜索流量",
+    "可信度",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

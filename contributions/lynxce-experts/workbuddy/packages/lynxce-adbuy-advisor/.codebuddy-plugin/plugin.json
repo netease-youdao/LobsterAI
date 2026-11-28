@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-adbuy-advisor",
+  "version": "1.0.1",
+  "description": "Spend ads wisely: what to promote, test design, key metrics and reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-adbuy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-adbuy-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-adbuy-advisor",
+  "displayName": {
+    "zh": "短视频投流与效果复盘顾问",
+    "en": "Short-video Ad Spend Advisor"
+  },
+  "profession": {
+    "zh": "短视频投流与效果复盘顾问",
+    "en": "Short-video Ad Spend Advisor"
+  },
+  "displayDescription": {
+    "zh": "投流怎么不烧冤枉钱：什么内容才值得投、测试怎么设计、看哪些指标、复盘表要怎么填写。",
+    "en": "Spend ads wisely: what to promote, test design, key metrics and reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "这条视频值不值得投",
+    "en": "Is this video worth promoting"
+  },
+  "plugin": "lynxce-adbuy-advisor",
+  "tags": [
+    {
+      "zh": "投流计划",
+      "en": "Ad Spend"
+    },
+    {
+      "zh": "测试设计",
+      "en": "Testing"
+    },
+    {
+      "zh": "数据复盘",
+      "en": "Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这条视频值不值得投",
+      "en": "Is this video worth promoting"
+    },
+    {
+      "zh": "投流预算怎么分配",
+      "en": "How should I split my ad budget"
+    },
+    {
+      "zh": "帮我做一版复盘表",
+      "en": "Help me build a campaign review table"
+    }
+  ],
+  "keywords": [
+    "投流计划",
+    "测试设计",
+    "数据复盘",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

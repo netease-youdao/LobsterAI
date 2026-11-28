@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-risk-assessment-expert",
+  "version": "1.0.0",
+  "description": "Risk assessment advisor for enterprise, project, customer and transaction risk rating and mitigation",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-risk-assessment-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-risk-assessment-expert",
+  "displayName": {
+    "zh": "风险评估顾问",
+    "en": "Risk Assessment Advisor"
+  },
+  "profession": {
+    "zh": "企业与项目风险评级顾问",
+    "en": "Enterprise & Project Risk Rating Advisor"
+  },
+  "displayDescription": {
+    "en": "Enterprise and project risk assessment covering operational, financial, compliance and counterparty risk, with ratings and mitigation advice.",
+    "zh": "企业与项目风险评估，识别经营、财务、合规与交易对手风险，输出评级与风控处置建议。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "评估这家供应商的合作风险",
+    "en": "Assess the risk of working with this supplier"
+  },
+  "plugin": "lynxce-risk-assessment-expert",
+  "tags": [
+    {
+      "zh": "风险识别",
+      "en": "Risk Identification"
+    },
+    {
+      "zh": "评级建议",
+      "en": "Risk Rating"
+    },
+    {
+      "zh": "风控处置",
+      "en": "Mitigation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "评估这家供应商的合作风险",
+      "en": "Assess the risk of working with this supplier"
+    },
+    {
+      "zh": "这个项目最大的三个风险是什么",
+      "en": "What are the top three risks in this project"
+    },
+    {
+      "zh": "帮我设计一套客户准入风控标准",
+      "en": "Design customer onboarding risk criteria"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "风险识别",
+    "评级建议",
+    "风控处置",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

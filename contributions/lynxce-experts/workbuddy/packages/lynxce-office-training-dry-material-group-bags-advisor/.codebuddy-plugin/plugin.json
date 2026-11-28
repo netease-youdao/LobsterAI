@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-training-dry-material-group-bags-advisor",
+  "version": "1.0.0",
+  "description": "Plan group bags, material counts and shortage checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-training-dry-material-group-bags-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-training-dry-material-group-bags"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-training-dry-material-group-bags-advisor",
+  "displayName": {
+    "zh": "培训材料分袋助理",
+    "en": "Training Bag Advisor"
+  },
+  "profession": {
+    "zh": "培训干式实验材料分组装袋顾问",
+    "en": "Training Bag Advisor"
+  },
+  "displayDescription": {
+    "zh": "按培训小组与干式实验物料清单核算逐组装袋数量，复核袋内尺寸及采购包装量，交付缺件补装验收表。",
+    "en": "Plan group bags, material counts and shortage checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "29人分组需要几袋材料",
+    "en": "Plan material bags for 29 trainees"
+  },
+  "plugin": "lynxce-office-training-dry-material-group-bags-advisor",
+  "tags": [
+    {
+      "zh": "逐组分袋",
+      "en": "Group Bags"
+    },
+    {
+      "zh": "物料展开",
+      "en": "Material Counts"
+    },
+    {
+      "zh": "缺件补装",
+      "en": "Missing Parts"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "29人分组需要几袋材料",
+      "en": "Plan material bags for 29 trainees"
+    },
+    {
+      "zh": "备用整袋如何展开物料需求",
+      "en": "Expand material needs for a spare full bag"
+    },
+    {
+      "zh": "一组少装1根木棒如何补账",
+      "en": "Correct one missing stick in a group bag"
+    }
+  ],
+  "keywords": [
+    "逐组分袋",
+    "物料展开",
+    "缺件补装",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

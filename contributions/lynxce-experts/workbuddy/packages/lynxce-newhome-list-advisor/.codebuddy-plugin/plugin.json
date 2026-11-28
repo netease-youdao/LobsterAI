@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-newhome-list-advisor",
+  "version": "1.0.2",
+  "description": "Plan new-home promotion buying: space-by-space essentials, reverse schedule from move-in, measure first, budget split.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-newhome-list-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-newhome-list"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-newhome-list-advisor",
+  "displayName": {
+    "zh": "新房入住一站式采购顾问",
+    "en": "New Home Move-In Shopping Advisor"
+  },
+  "profession": {
+    "zh": "11.11 新房入住一站式采购顾问",
+    "en": "11.11 New Home Move-In Shopping Advisor"
+  },
+  "displayDescription": {
+    "zh": "新房入住大促集中采购：按空间列必需清单、按入住日倒排买货顺序、先量尺寸再买大件与预算分配。",
+    "en": "Plan new-home promotion buying: space-by-space essentials, reverse schedule from move-in, measure first, budget split."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新房入住要买哪些东西",
+    "en": "What do I need to buy for moving into my new home"
+  },
+  "plugin": "lynxce-newhome-list-advisor",
+  "tags": [
+    {
+      "zh": "空间清单",
+      "en": "Room-by-Room List"
+    },
+    {
+      "zh": "倒排时间表",
+      "en": "Reverse Schedule"
+    },
+    {
+      "zh": "预算分配",
+      "en": "Budget Split"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新房入住要买哪些东西",
+      "en": "What do I need to buy for moving into my new home"
+    },
+    {
+      "zh": "大件和小件先买哪个",
+      "en": "Which should I buy first, big or small items"
+    },
+    {
+      "zh": "装修完的预算怎么分配",
+      "en": "How should I split my post-renovation budget"
+    }
+  ],
+  "keywords": [
+    "空间清单",
+    "倒排时间表",
+    "预算分配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

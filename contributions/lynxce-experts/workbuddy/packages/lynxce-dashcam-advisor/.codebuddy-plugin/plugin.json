@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dashcam-advisor",
+  "version": "1.0.1",
+  "description": "Choose a dashcam: resolution, night vision, rear camera, parking power, card size from bitrate, landed price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dashcam-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-dashcam"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dashcam-advisor",
+  "displayName": {
+    "zh": "行车记录仪与停车监控选购顾问",
+    "en": "Dashcam and Parking Monitor Advisor"
+  },
+  "profession": {
+    "zh": "11.11 行车记录仪与停车监控选购顾问",
+    "en": "11.11 Dashcam and Parking Monitor Advisor"
+  },
+  "displayDescription": {
+    "zh": "行车记录仪怎么选：分辨率夜视与前后双录、停车监控供电方式、存储卡容量按码率算、比到手总价。",
+    "en": "Choose a dashcam: resolution, night vision, rear camera, parking power, card size from bitrate, landed price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "前后双录的行车记录仪怎么选",
+    "en": "How do I choose a front and rear dashcam"
+  },
+  "plugin": "lynxce-dashcam-advisor",
+  "tags": [
+    {
+      "zh": "夜视画质",
+      "en": "Night Vision"
+    },
+    {
+      "zh": "停车监控",
+      "en": "Parking Mode"
+    },
+    {
+      "zh": "存储卡容量",
+      "en": "Card Capacity"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "前后双录的行车记录仪怎么选",
+      "en": "How do I choose a front and rear dashcam"
+    },
+    {
+      "zh": "停车监控要怎么供电",
+      "en": "How should parking mode be powered"
+    },
+    {
+      "zh": "行车记录仪配多大的存储卡",
+      "en": "What card size does my dashcam need"
+    }
+  ],
+  "keywords": [
+    "夜视画质",
+    "停车监控",
+    "存储卡容量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

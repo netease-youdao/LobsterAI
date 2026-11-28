@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-snow-boots-advisor",
+  "version": "1.0.0",
+  "description": "Pick snow boots: waterproofing, shaft height, sizing room, tread depth and lining.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-snow-boots-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-snow-boots"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-snow-boots-advisor",
+  "displayName": {
+    "zh": "雪地靴选购顾问",
+    "en": "Snow Boots Advisor"
+  },
+  "profession": {
+    "zh": "11.11 雪地靴选购顾问",
+    "en": "11.11 Snow Boots Advisor"
+  },
+  "displayDescription": {
+    "zh": "雪地靴怎么挑：按场景选防水与靴筒高度、量脚长留加厚余量、比鞋底纹深防滑、核保暖内里。",
+    "en": "Pick snow boots: waterproofing, shaft height, sizing room, tread depth and lining."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "去哈尔滨旅游雪地靴要防水吗",
+    "en": "Do snow boots need waterproofing for Harbin"
+  },
+  "plugin": "lynxce-snow-boots-advisor",
+  "tags": [
+    {
+      "zh": "防水方式",
+      "en": "Waterproofing"
+    },
+    {
+      "zh": "尺码余量",
+      "en": "Sizing Room"
+    },
+    {
+      "zh": "鞋底防滑",
+      "en": "Outsole Grip"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "去哈尔滨旅游雪地靴要防水吗",
+      "en": "Do snow boots need waterproofing for Harbin"
+    },
+    {
+      "zh": "穿厚袜雪地靴要买大几码",
+      "en": "How much to size up for thick winter socks"
+    },
+    {
+      "zh": "结冰路面雪地靴鞋底怎么看",
+      "en": "How to judge snow boot soles for icy roads"
+    }
+  ],
+  "keywords": [
+    "防水方式",
+    "尺码余量",
+    "鞋底防滑",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-iit-annual-reconcile-advisor",
+  "version": "1.0.0",
+  "description": "Annual IIT reconciliation: filing need, refund or payment estimate, deduction and income checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-iit-annual-reconcile-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-iit-annual-reconcile"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-iit-annual-reconcile-advisor",
+  "displayName": {
+    "zh": "个税汇算助理",
+    "en": "Annual Individual Income Tax Reconciliation Assistant"
+  },
+  "profession": {
+    "zh": "个人所得税综合所得年度汇算助理",
+    "en": "Annual Individual Income Tax Reconciliation Assistant"
+  },
+  "displayDescription": {
+    "zh": "个税年度汇算前自查：判断要不要办、测算补税或退税、核对收入与专项附加扣除，产出汇算核对表。",
+    "en": "Annual IIT reconciliation: filing need, refund or payment estimate, deduction and income checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我今年要不要办个税汇算，是补还是退",
+    "en": "Do I need to file the annual IIT return, refund or pay"
+  },
+  "plugin": "lynxce-iit-annual-reconcile-advisor",
+  "tags": [
+    {
+      "zh": "退补税测算",
+      "en": "Refund Estimate"
+    },
+    {
+      "zh": "专项附加扣除",
+      "en": "Special Deductions"
+    },
+    {
+      "zh": "收入核对",
+      "en": "Income Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我今年要不要办个税汇算，是补还是退",
+      "en": "Do I need to file the annual IIT return, refund or pay"
+    },
+    {
+      "zh": "帮我核对一下专项附加扣除填得对不对",
+      "en": "Check whether my special additional deductions are correct"
+    },
+    {
+      "zh": "帮员工做一份个税汇算核对表",
+      "en": "Make an annual IIT reconciliation checklist for employees"
+    }
+  ],
+  "keywords": [
+    "退补税测算",
+    "专项附加扣除",
+    "收入核对",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

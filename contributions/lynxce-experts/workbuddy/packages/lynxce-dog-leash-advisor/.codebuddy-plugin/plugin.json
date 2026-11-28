@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dog-leash-advisor",
+  "version": "1.0.0",
+  "description": "Pick dog leashes: weight, pull rating, girth fit, harness type, buckles and reflectivity.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dog-leash-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-dog-leash"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dog-leash-advisor",
+  "displayName": {
+    "zh": "狗绳胸背带选购顾问",
+    "en": "Dog Leash and Harness Advisor"
+  },
+  "profession": {
+    "zh": "11.11 狗绳与胸背带选购顾问",
+    "en": "11.11 Dog Leash and Harness Advisor"
+  },
+  "displayDescription": {
+    "zh": "狗绳胸背怎么挑：按体重核绳宽与拉力、量胸围颈围、比胸背项圈与伸缩绳、查扣具与反光。",
+    "en": "Pick dog leashes: weight, pull rating, girth fit, harness type, buckles and reflectivity."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "13 公斤柯基胸背带选什么尺码",
+    "en": "Which harness size fits a 13 kilogram corgi"
+  },
+  "plugin": "lynxce-dog-leash-advisor",
+  "tags": [
+    {
+      "zh": "绳宽拉力",
+      "en": "Width and Pull Rating"
+    },
+    {
+      "zh": "胸围尺码",
+      "en": "Chest Girth Fit"
+    },
+    {
+      "zh": "防挣脱",
+      "en": "Escape Proofing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "13 公斤柯基胸背带选什么尺码",
+      "en": "Which harness size fits a 13 kilogram corgi"
+    },
+    {
+      "zh": "爱暴冲的狗用胸背还是项圈",
+      "en": "Harness or collar for a dog that lunges"
+    },
+    {
+      "zh": "伸缩牵引绳适合在城市里用吗",
+      "en": "Is a retractable leash suitable for city walks"
+    }
+  ],
+  "keywords": [
+    "绳宽拉力",
+    "胸围尺码",
+    "防挣脱",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

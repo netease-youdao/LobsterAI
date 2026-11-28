@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-meeting-resolution-advisor",
+  "version": "1.0.2",
+  "description": "Turn agenda papers and voting rules into votable agendas, quorum and tally checks, resolution minutes and follow-up trackers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-resolution-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-resolution"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-resolution-advisor",
+  "displayName": {
+    "zh": "会议决议记录顾问",
+    "en": "Meeting Resolution Advisor"
+  },
+  "profession": {
+    "zh": "会议表决与决议记录顾问｜灵策智算",
+    "en": "Meeting Voting and Resolution Records Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据议题材料与表决规则，交付可表决议程、到会与计票核对表、决议记录和执行跟踪表，并标出效力待确认项。",
+    "en": "Turn agenda papers and voting rules into votable agendas, quorum and tally checks, resolution minutes and follow-up trackers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据议题材料和议事规则生成可表决议程与计票核对表",
+    "en": "Build a votable agenda and tally sheet from our papers and rules"
+  },
+  "plugin": "lynxce-meeting-resolution-advisor",
+  "tags": [
+    {
+      "zh": "可表决议程",
+      "en": "Votable Agenda"
+    },
+    {
+      "zh": "计票核对",
+      "en": "Tally Check"
+    },
+    {
+      "zh": "决议跟踪",
+      "en": "Resolution Tracking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据议题材料和议事规则生成可表决议程与计票核对表",
+      "en": "Build a votable agenda and tally sheet from our papers and rules"
+    },
+    {
+      "zh": "复核这份决议记录的票数基数回避和要素是否齐全",
+      "en": "Review these minutes for vote base recusal and required elements"
+    },
+    {
+      "zh": "只有讨论记录没有票数时先给决议记录草稿和待确认项",
+      "en": "With only discussion notes draft minutes and open items"
+    }
+  ],
+  "keywords": [
+    "可表决议程",
+    "计票核对",
+    "决议跟踪",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

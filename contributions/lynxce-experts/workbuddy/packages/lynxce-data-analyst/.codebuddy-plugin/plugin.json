@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-data-analyst",
+  "version": "1.0.1",
+  "description": "Defines metrics and analyzes supplied business tables with reconciled denominators and testable hypotheses; no system access.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-data-analyst.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-data-analyst",
+  "displayName": {
+    "zh": "数据分析师",
+    "en": "Data Analyst"
+  },
+  "profession": {
+    "zh": "业务数据与归因分析师",
+    "en": "Business Data & Attribution Analyst"
+  },
+  "displayDescription": {
+    "zh": "依据用户提供的业务表格定义指标口径核对数据并拆解趋势与转化差异保留假设和验证需求不声称接入系统",
+    "en": "Defines metrics and analyzes supplied business tables with reconciled denominators and testable hypotheses; no system access."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "帮我定义这个业务的核心指标体系",
+    "en": "Define the core metric system for this business"
+  },
+  "plugin": "lynxce-data-analyst",
+  "tags": [
+    {
+      "zh": "指标体系",
+      "en": "Metrics"
+    },
+    {
+      "zh": "趋势分析",
+      "en": "Trend Analysis"
+    },
+    {
+      "zh": "归因拆解",
+      "en": "Attribution"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我定义这个业务的核心指标体系",
+      "en": "Define the core metric system for this business"
+    },
+    {
+      "zh": "分析这份销售数据的趋势和异常点",
+      "en": "Analyze trends and anomalies in this sales data"
+    },
+    {
+      "zh": "对本月转化率下降做一次归因拆解",
+      "en": "Attribute this month's conversion-rate drop"
+    }
+  ],
+  "keywords": [
+    "指标体系",
+    "趋势分析",
+    "归因拆解",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/lynxce-metric-dictionary",
+    "./skills/lynxce-data-quality-reconcile",
+    "./skills/lynxce-conversion-decompose"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-meeting-seat-cards-advisor",
+  "version": "1.0.0",
+  "description": "Map confirmed names to seats, check layouts, calculate print quantities and verify placement.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-meeting-seat-cards-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-meeting-seat-cards"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-meeting-seat-cards-advisor",
+  "displayName": {
+    "zh": "会议座签制作核算助理",
+    "en": "Meeting Nameplate Calculation Assistant"
+  },
+  "profession": {
+    "zh": "会议座签桌牌制作与席位核算助理",
+    "en": "Meeting Nameplate Production and Seating Assistant"
+  },
+  "displayDescription": {
+    "zh": "会议座签桌牌怎么做：按确认名单映射席位编号，核对双面文字与尺寸，测算印量，交付席位表与布置验收表。",
+    "en": "Map confirmed names to seats, check layouts, calculate print quantities and verify placement."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "28席双面座签要用多少纸和卡架",
+    "en": "Calculate paper and holders for 28 double sided cards"
+  },
+  "plugin": "lynxce-office-meeting-seat-cards-advisor",
+  "tags": [
+    {
+      "zh": "席位映射",
+      "en": "Seat Mapping"
+    },
+    {
+      "zh": "拼版算量",
+      "en": "Print Layout Quantity"
+    },
+    {
+      "zh": "变更核验",
+      "en": "Change Verification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "28席双面座签要用多少纸和卡架",
+      "en": "Calculate paper and holders for 28 double sided cards"
+    },
+    {
+      "zh": "临时换人怎样更新席位表和旧桌牌",
+      "en": "Update seat records and nameplates after a replacement"
+    },
+    {
+      "zh": "做会议座签制作采购与布置验收表",
+      "en": "Make a nameplate production and placement sheet"
+    }
+  ],
+  "keywords": [
+    "席位映射",
+    "拼版算量",
+    "变更核验",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

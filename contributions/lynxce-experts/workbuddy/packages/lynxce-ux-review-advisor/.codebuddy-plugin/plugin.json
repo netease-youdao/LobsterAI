@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-ux-review-advisor",
+  "version": "1.0.1",
+  "description": "Review supplied screens and task flows into usability findings, state coverage, copy drafts and retest tasks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ux-review-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-ux-review-advisor",
+  "displayName": {
+    "zh": "产品体验走查顾问",
+    "en": "Product Experience Review Advisor"
+  },
+  "profession": {
+    "zh": "产品可用性走查与体验优化顾问",
+    "en": "Product Usability and Experience Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据页面与任务材料梳理体验阻碍，提供状态覆盖、问题分级和文案改稿，附复测任务验证用户完成路径。",
+    "en": "Review supplied screens and task flows into usability findings, state coverage, copy drafts and retest tasks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "01-ProductDesign",
+  "defaultInitPrompt": {
+    "zh": "根据注册流程材料生成任务走查与问题分级表",
+    "en": "Review signup materials into task findings and severity levels"
+  },
+  "plugin": "lynxce-ux-review-advisor",
+  "tags": [
+    {
+      "zh": "任务走查",
+      "en": "Task Review"
+    },
+    {
+      "zh": "状态文案",
+      "en": "State Copy"
+    },
+    {
+      "zh": "复测任务",
+      "en": "Retest Tasks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据注册流程材料生成任务走查与问题分级表",
+      "en": "Review signup materials into task findings and severity levels"
+    },
+    {
+      "zh": "为这个页面生成空态加载失败和恢复文案",
+      "en": "Draft empty loading error and recovery states for this page"
+    },
+    {
+      "zh": "把已发现体验问题转换成新人复测任务表",
+      "en": "Turn usability findings into first-time-user retest tasks"
+    }
+  ],
+  "keywords": [
+    "任务走查",
+    "状态文案",
+    "复测任务",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

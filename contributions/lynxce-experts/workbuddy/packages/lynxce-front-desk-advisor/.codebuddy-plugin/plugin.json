@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-front-desk-advisor",
+  "version": "1.0.1",
+  "description": "Front desk rules: visitor sign-in, room prep, parcels, calls and VIP visits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-front-desk-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-visitor-reception"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-front-desk-advisor",
+  "displayName": {
+    "zh": "前台行政与访客接待顾问",
+    "en": "Front Desk and Visitor Reception Advisor"
+  },
+  "profession": {
+    "zh": "前台行政与访客接待顾问",
+    "en": "Front Desk and Visitor Reception Advisor"
+  },
+  "displayDescription": {
+    "zh": "前台行政和访客接待怎么规范：来访怎么登记、会议室怎么提前备好、快递电话怎么处理、重要来访怎么安排。",
+    "en": "Front desk rules: visitor sign-in, room prep, parcels, calls and VIP visits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我定一套访客登记流程",
+    "en": "Set up a visitor sign-in process"
+  },
+  "plugin": "lynxce-front-desk-advisor",
+  "tags": [
+    {
+      "zh": "前台行政",
+      "en": "Front Desk"
+    },
+    {
+      "zh": "访客接待",
+      "en": "Visitor Reception"
+    },
+    {
+      "zh": "会务准备",
+      "en": "Meeting Prep"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我定一套访客登记流程",
+      "en": "Set up a visitor sign-in process"
+    },
+    {
+      "zh": "领导来参观前台要准备什么",
+      "en": "What should reception prepare for a VIP visit"
+    },
+    {
+      "zh": "前台接电话怎么说",
+      "en": "How should reception answer calls"
+    }
+  ],
+  "keywords": [
+    "前台行政",
+    "访客接待",
+    "会务准备",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-desk-cable-dual-end-id-advisor",
+  "version": "1.0.0",
+  "description": "Register cable IDs, port mappings and label pack needs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-desk-cable-dual-end-id-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-desk-cable-dual-end-id"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-desk-cable-dual-end-id-advisor",
+  "displayName": {
+    "zh": "线缆标签编号助理",
+    "en": "Cable Label Register Advisor"
+  },
+  "profession": {
+    "zh": "桌面线缆双端标签编号顾问",
+    "en": "Cable Label Register Advisor"
+  },
+  "displayDescription": {
+    "zh": "按桌面设备端口建立线缆双端编号，核算标签包装与补领数量，区分断连待查和改接记录，交付映射台账。",
+    "en": "Register cable IDs, port mappings and label pack needs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "40根线双端标签要买几包",
+    "en": "Calculate label packs for forty cables"
+  },
+  "plugin": "lynxce-office-desk-cable-dual-end-id-advisor",
+  "tags": [
+    {
+      "zh": "双端编号",
+      "en": "Dual-end IDs"
+    },
+    {
+      "zh": "端口映射",
+      "en": "Port Mapping"
+    },
+    {
+      "zh": "补领核算",
+      "en": "Label Refill"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "40根线双端标签要买几包",
+      "en": "Calculate label packs for forty cables"
+    },
+    {
+      "zh": "两根线编号重复如何处理",
+      "en": "Resolve a duplicate cable identifier"
+    },
+    {
+      "zh": "设备改接后怎样更新映射台账",
+      "en": "Update cable mappings after a port change"
+    }
+  ],
+  "keywords": [
+    "双端编号",
+    "端口映射",
+    "补领核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

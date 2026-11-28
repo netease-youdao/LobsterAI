@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-crib-bedding-advisor",
+  "version": "1.0.1",
+  "description": "Pick cribs and bedding: bedside fit, slat spacing standard, mattress firmness, usable months, bumper risk.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-crib-bedding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-crib-bedding"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-crib-bedding-advisor",
+  "displayName": {
+    "zh": "婴儿床与床品选购与尺寸核对顾问",
+    "en": "Crib and Bedding Picker with Size Check Advisor"
+  },
+  "profession": {
+    "zh": "11.11 婴儿床与床品选购与尺寸核对顾问",
+    "en": "11.11 Crib and Bedding Picker with Size Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "婴儿床怎么挑：核尺寸与拼接、看栏杆间距等国标要点、选床垫硬度、算可调档位年限、提示床围风险。",
+    "en": "Pick cribs and bedding: bedside fit, slat spacing standard, mattress firmness, usable months, bumper risk."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "婴儿床怎么和大床拼接齐平",
+    "en": "How to align a crib flush with the adult bed"
+  },
+  "plugin": "lynxce-crib-bedding-advisor",
+  "tags": [
+    {
+      "zh": "拼接尺寸",
+      "en": "Bedside Fit"
+    },
+    {
+      "zh": "栏杆国标",
+      "en": "Slat Spacing Standard"
+    },
+    {
+      "zh": "床垫硬度",
+      "en": "Mattress Firmness"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "婴儿床怎么和大床拼接齐平",
+      "en": "How to align a crib flush with the adult bed"
+    },
+    {
+      "zh": "婴儿床栏杆间距多少才合格",
+      "en": "What slat spacing does a crib need to meet the standard"
+    },
+    {
+      "zh": "婴儿床垫选椰棕还是乳胶",
+      "en": "Coconut coir or latex crib mattress"
+    }
+  ],
+  "keywords": [
+    "拼接尺寸",
+    "栏杆国标",
+    "床垫硬度",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

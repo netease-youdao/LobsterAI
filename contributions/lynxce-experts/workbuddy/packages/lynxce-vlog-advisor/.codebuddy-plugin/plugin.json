@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-vlog-advisor",
+  "version": "1.0.1",
+  "description": "Vlogs with a story: a clear arc, shot list, clean audio and an editing structure.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-vlog-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-vlog-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-vlog-advisor",
+  "displayName": {
+    "zh": "Vlog 叙事与拍剪顾问",
+    "en": "Vlog Storytelling and Editing Advisor"
+  },
+  "profession": {
+    "zh": "Vlog 叙事与拍剪顾问",
+    "en": "Vlog Storytelling and Editing Advisor"
+  },
+  "displayDescription": {
+    "zh": "Vlog 怎么拍才不像流水账：出门前先定主线、镜头清单怎么列、收音怎么做、剪辑结构怎么搭。",
+    "en": "Vlogs with a story: a clear arc, shot list, clean audio and an editing structure."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "周末出游想拍个 Vlog 怎么规划",
+    "en": "Plan a weekend trip vlog"
+  },
+  "plugin": "lynxce-vlog-advisor",
+  "tags": [
+    {
+      "zh": "Vlog",
+      "en": "Vlog"
+    },
+    {
+      "zh": "镜头清单",
+      "en": "Shot List"
+    },
+    {
+      "zh": "叙事剪辑",
+      "en": "Story Editing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "周末出游想拍个 Vlog 怎么规划",
+      "en": "Plan a weekend trip vlog"
+    },
+    {
+      "zh": "我的 Vlog 很无聊怎么改",
+      "en": "My vlog is boring, how to fix"
+    },
+    {
+      "zh": "帮我列一份拍摄镜头清单",
+      "en": "List the shots I need"
+    }
+  ],
+  "keywords": [
+    "Vlog",
+    "镜头清单",
+    "叙事剪辑",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

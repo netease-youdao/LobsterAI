@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-camera-cover-issue-advisor",
+  "version": "1.0.0",
+  "description": "Match camera covers and reconcile model-based issues.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-camera-cover-issue-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-camera-cover-issue"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-camera-cover-issue-advisor",
+  "displayName": {
+    "zh": "摄像头盖领用师",
+    "en": "Camera Cover Model and Issue Ledger Advisor"
+  },
+  "profession": {
+    "zh": "办公电脑摄像头遮挡盖型号领用顾问",
+    "en": "Camera Cover Model and Issue Ledger Advisor"
+  },
+  "displayDescription": {
+    "zh": "按办公电脑型号核摄像头遮挡盖尺寸与合盖限制，分适配批次登记领用退回，计算补货数量及异常差异。",
+    "en": "Match camera covers and reconcile model-based issues."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按已有记录核对办公电脑摄像头遮挡盖型号领用",
+    "en": "Check the supplied records"
+  },
+  "plugin": "lynxce-office-camera-cover-issue-advisor",
+  "tags": [
+    {
+      "zh": "适配复核",
+      "en": "Fit Review"
+    },
+    {
+      "zh": "数量核算",
+      "en": "Quantity Calculation"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按已有记录核对办公电脑摄像头遮挡盖型号领用",
+      "en": "Check the supplied records"
+    },
+    {
+      "zh": "列数量差异与待补依据",
+      "en": "List quantity gaps and missing evidence"
+    },
+    {
+      "zh": "输出可复核算式与异常台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "适配复核",
+    "数量核算",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

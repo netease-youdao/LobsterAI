@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-client-visit-gift-advisor",
+  "version": "1.0.0",
+  "description": "Client gifts: tiers, compliance limits, value checks and a purchase approval form.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-client-visit-gift-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-client-visit-gift"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-client-visit-gift-advisor",
+  "displayName": {
+    "zh": "伴手礼合规采购助理",
+    "en": "Client Gift Compliance Assistant"
+  },
+  "profession": {
+    "zh": "客户拜访伴手礼办公采购顾问",
+    "en": "Client Visit Gift Purchase and Approval Advisor"
+  },
+  "displayDescription": {
+    "zh": "拜访伴手礼送什么不踩线：按客户级别与合规限额分档，标价核限额、实付核预算，产出采购审批单。",
+    "en": "Client gifts: tiers, compliance limits, value checks and a purchase approval form."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "国企客户伴手礼单价怎么定",
+    "en": "How to set gift value for a state owned client"
+  },
+  "plugin": "lynxce-client-visit-gift-advisor",
+  "tags": [
+    {
+      "zh": "客户分档",
+      "en": "Client Tiers"
+    },
+    {
+      "zh": "合规限额",
+      "en": "Gift Limits"
+    },
+    {
+      "zh": "采购审批",
+      "en": "Purchase Approval"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "国企客户伴手礼单价怎么定",
+      "en": "How to set gift value for a state owned client"
+    },
+    {
+      "zh": "券后价没超限额算不算合规",
+      "en": "Whether a discounted price below the limit is compliant"
+    },
+    {
+      "zh": "帮我做一张伴手礼采购审批单",
+      "en": "Make a client gift purchase approval form"
+    }
+  ],
+  "keywords": [
+    "客户分档",
+    "合规限额",
+    "采购审批",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

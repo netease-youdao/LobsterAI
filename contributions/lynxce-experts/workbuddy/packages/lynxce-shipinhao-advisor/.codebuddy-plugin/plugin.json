@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-shipinhao-advisor",
+  "version": "1.0.1",
+  "description": "Grow a Channels account: positioning, cadence, private domain and livestreams.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shipinhao-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-shipinhao-ops"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-shipinhao-advisor",
+  "displayName": {
+    "zh": "视频号内容与直播运营顾问",
+    "en": "WeChat Channels Operations Advisor"
+  },
+  "profession": {
+    "zh": "视频号内容与直播运营顾问",
+    "en": "WeChat Channels Operations Advisor"
+  },
+  "displayDescription": {
+    "zh": "视频号怎么做起来：内容定位怎么选、更新节奏怎么排、私域怎么联动、直播要怎么准备开播。",
+    "en": "Grow a Channels account: positioning, cadence, private domain and livestreams."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "视频号该做什么内容",
+    "en": "What content should my Channels account post"
+  },
+  "plugin": "lynxce-shipinhao-advisor",
+  "tags": [
+    {
+      "zh": "视频号运营",
+      "en": "Channels"
+    },
+    {
+      "zh": "私域联动",
+      "en": "Private Domain"
+    },
+    {
+      "zh": "直播准备",
+      "en": "Livestream"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "视频号该做什么内容",
+      "en": "What content should my Channels account post"
+    },
+    {
+      "zh": "怎么把观众引到私域",
+      "en": "How do I bring viewers into private domain"
+    },
+    {
+      "zh": "帮我写一份直播脚本",
+      "en": "Help me draft a livestream script"
+    }
+  ],
+  "keywords": [
+    "视频号运营",
+    "私域联动",
+    "直播准备",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-small-pet-cage-advisor",
+  "version": "1.0.0",
+  "description": "Pick small pet cages: floor area, bar spacing, bedding dust, wheel size and monthly cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-small-pet-cage-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-small-pet-cage"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-small-pet-cage-advisor",
+  "displayName": {
+    "zh": "小宠笼具垫料选购顾问",
+    "en": "Small Pet Cage and Bedding Advisor"
+  },
+  "profession": {
+    "zh": "11.11 小宠笼具与垫料选购顾问",
+    "en": "11.11 Small Pet Cage and Bedding Advisor"
+  },
+  "displayDescription": {
+    "zh": "小宠笼具怎么挑：按物种定底面积与高度、核栏杆间距防逃、比垫料吸水粉尘、算月垫料成本。",
+    "en": "Pick small pet cages: floor area, bar spacing, bedding dust, wheel size and monthly cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "金丝熊的笼子底面积要多大",
+    "en": "How much floor area a Syrian hamster needs"
+  },
+  "plugin": "lynxce-small-pet-cage-advisor",
+  "tags": [
+    {
+      "zh": "底面积",
+      "en": "Floor Area"
+    },
+    {
+      "zh": "栏杆间距",
+      "en": "Bar Spacing"
+    },
+    {
+      "zh": "垫料成本",
+      "en": "Bedding Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "金丝熊的笼子底面积要多大",
+      "en": "How much floor area a Syrian hamster needs"
+    },
+    {
+      "zh": "侏儒仓鼠笼栏杆间距多少不会钻出",
+      "en": "What bar spacing keeps a dwarf hamster in"
+    },
+    {
+      "zh": "仓鼠垫料一个月要花多少钱",
+      "en": "How much hamster bedding costs per month"
+    }
+  ],
+  "keywords": [
+    "底面积",
+    "栏杆间距",
+    "垫料成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-pilot-production-gate-b43-advisor",
+  "version": "1.0.1",
+  "description": "Review supplied records for pilot issue closure and production gate review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pilot-production-gate-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pilot-production-gate-b43",
+    "./skills/lynxce-pilot-production-gate-b43-int-version-coverage",
+    "./skills/lynxce-pilot-production-gate-b43-int-residual-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pilot-production-gate-b43-advisor",
+  "displayName": {
+    "zh": "试产问题闭环顾问",
+    "en": "Pilot Issue Closure and Production Gate Review Advisor"
+  },
+  "profession": {
+    "zh": "试产问题转量产闭环核对专家",
+    "en": "Pilot Issue Closure and Production Gate Review"
+  },
+  "displayDescription": {
+    "zh": "整理试产问题、修订与复测记录，核对同版证据和回归覆盖，交付问题闭环矩阵、遗留移交表与量产评审草案。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据试产问题和复测记录，区分已修订、已验证与尚未闭环事项",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-pilot-production-gate-b43-advisor",
+  "tags": [
+    {
+      "zh": "制造质量",
+      "en": "Business Domain"
+    },
+    {
+      "zh": "试产问题转量产闭环核对",
+      "en": "Task Review"
+    },
+    {
+      "zh": "问题复测闭环矩阵",
+      "en": "Evidence Deliverable"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据试产问题和复测记录，区分已修订、已验证与尚未闭环事项",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "核对修订版本与复测样本是否一致，列出不能支持关闭的问题",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "为下一轮量产评审整理阻断项、条件移交项与复核证据",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "制造质量",
+    "试产问题转量产闭环核对",
+    "问题复测闭环矩阵"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tv-size-advisor",
+  "version": "1.0.2",
+  "description": "Pick a TV: size by viewing distance, Mini LED vs OLED and refresh rate, ports and boot ads, mount and delivery cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tv-size-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tv-size"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tv-size-advisor",
+  "displayName": {
+    "zh": "电视尺寸与面板选购顾问",
+    "en": "TV Size and Panel Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电视尺寸与面板选购顾问",
+    "en": "11.11 TV Size and Panel Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "电视怎么选：按观看距离定尺寸、Mini LED与OLED及刷新率、接口与开机广告、挂装运费与到手价。",
+    "en": "Pick a TV: size by viewing distance, Mini LED vs OLED and refresh rate, ports and boot ads, mount and delivery cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "沙发离电视 3 米买多大的合适",
+    "en": "What TV size fits a 3 meter viewing distance"
+  },
+  "plugin": "lynxce-tv-size-advisor",
+  "tags": [
+    {
+      "zh": "尺寸核算",
+      "en": "Size by Distance"
+    },
+    {
+      "zh": "面板对比",
+      "en": "Panel Comparison"
+    },
+    {
+      "zh": "到手总价",
+      "en": "Total Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "沙发离电视 3 米买多大的合适",
+      "en": "What TV size fits a 3 meter viewing distance"
+    },
+    {
+      "zh": "Mini LED 和 OLED 我该选哪个",
+      "en": "Should I choose Mini LED or OLED"
+    },
+    {
+      "zh": "电视加上挂架安装一共要花多少",
+      "en": "What is the total cost with wall mount and installation"
+    }
+  ],
+  "keywords": [
+    "尺寸核算",
+    "面板对比",
+    "到手总价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

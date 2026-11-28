@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-flower-advisor",
+  "version": "1.0.4",
+  "description": "Get more from flowers: subscription versus one-off, freshness checks and vase life.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-flower-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-flower-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-flower-advisor",
+  "displayName": {
+    "zh": "鲜花订阅与花材采买顾问",
+    "en": "Flower Subscription and Buying Advisor"
+  },
+  "profession": {
+    "zh": "鲜花订阅与花材采买顾问",
+    "en": "Flower Subscription and Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "鲜花怎么买更划算：订阅还是单买、新鲜度怎么验、当季怎么挑、瓶插期要怎么才能延长。",
+    "en": "Get more from flowers: subscription versus one-off, freshness checks and vase life."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "鲜花订阅值不值得订",
+    "en": "Is a flower subscription worth it"
+  },
+  "plugin": "lynxce-flower-advisor",
+  "tags": [
+    {
+      "zh": "鲜花订阅",
+      "en": "Flowers"
+    },
+    {
+      "zh": "新鲜度",
+      "en": "Freshness"
+    },
+    {
+      "zh": "每日成本",
+      "en": "Cost per Day"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "鲜花订阅值不值得订",
+      "en": "Is a flower subscription worth it"
+    },
+    {
+      "zh": "这束花怎么看新不新鲜",
+      "en": "How do I judge freshness"
+    },
+    {
+      "zh": "怎么让花开得更久",
+      "en": "How do I make flowers last longer"
+    }
+  ],
+  "keywords": [
+    "鲜花订阅",
+    "新鲜度",
+    "每日成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

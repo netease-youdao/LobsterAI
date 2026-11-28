@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-mineral-resource-tax-b53",
+  "version": "1.0.0",
+  "description": "Mineral Resource Tax Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-mineral-resource-tax-b53.md"
+  ],
+  "skills": [
+    "./skills/lynxce-mineral-resource-tax-s1-b53",
+    "./skills/lynxce-mineral-resource-tax-s2-b53",
+    "./skills/lynxce-mineral-resource-tax-s3-b53"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-mineral-resource-tax-b53",
+  "displayName": {
+    "zh": "资源税顾问",
+    "en": "Mineral Resource Tax Advisor"
+  },
+  "profession": {
+    "zh": "资源税申报顾问",
+    "en": "Mineral Resource Tax Advisor"
+  },
+  "displayDescription": {
+    "zh": "为矿业企业财务核对原矿选矿和自用去向，交付资源税计算底稿、扣减证据目录及完整差异补正稿。",
+    "en": "Mineral Resource Tax Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "原矿、洗选煤和锅炉自用如何分别做税基底稿？",
+    "en": "Mineral Resource Tax Advisor"
+  },
+  "plugin": "lynxce-mineral-resource-tax-b53",
+  "tags": [
+    {
+      "zh": "资源税",
+      "en": "资源税"
+    },
+    {
+      "zh": "原矿选矿",
+      "en": "原矿选矿"
+    },
+    {
+      "zh": "自用核算",
+      "en": "自用核算"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "原矿、洗选煤和锅炉自用如何分别做税基底稿？",
+      "en": "Mineral Resource Tax Advisor"
+    },
+    {
+      "zh": "外购原矿用于混洗，扣减凭据和税率怎样核？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "采购金额两个来源不一致，请出全量补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "资源税",
+    "原矿选矿",
+    "自用核算"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-demo-sample-reusable-insert-advisor",
+  "version": "1.0.0",
+  "description": "Check reusable sample inserts, fit and costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-demo-sample-reusable-insert-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-demo-sample-reusable-insert"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-demo-sample-reusable-insert-advisor",
+  "displayName": {
+    "zh": "样品内衬核算助理",
+    "en": "Sample Insert Advisor"
+  },
+  "profession": {
+    "zh": "样品定位内衬核算顾问",
+    "en": "Sample Insert Advisor"
+  },
+  "displayDescription": {
+    "zh": "按客户演示样品外形核算可复用定位内衬与箱内净空，比较材料包装费用，交付试装验收及周转异常表。",
+    "en": "Check reusable sample inserts, fit and costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "样品200毫米如何算内衬净空",
+    "en": "Size an insert for a 200 mm sample"
+  },
+  "plugin": "lynxce-office-demo-sample-reusable-insert-advisor",
+  "tags": [
+    {
+      "zh": "定位净空",
+      "en": "Insert Clearance"
+    },
+    {
+      "zh": "周转缺口",
+      "en": "Reuse Gap"
+    },
+    {
+      "zh": "试装验收",
+      "en": "Trial Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "样品200毫米如何算内衬净空",
+      "en": "Size an insert for a 200 mm sample"
+    },
+    {
+      "zh": "周转6套已有2套需要买几套",
+      "en": "Calculate the gap for six reusable sets"
+    },
+    {
+      "zh": "箱盖压住样品凸起如何复核",
+      "en": "Review a case lid touching a sample"
+    }
+  ],
+  "keywords": [
+    "定位净空",
+    "周转缺口",
+    "试装验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-hotel-lost-custody-chain-b44-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied hotel records with three evidence-based workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hotel-lost-custody-chain-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hotel-lost-custody-chain-b44",
+    "./skills/lynxce-hotel-found-record-duplicate-b44",
+    "./skills/lynxce-hotel-claim-material-gap-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hotel-lost-custody-chain-b44-advisor",
+  "displayName": {
+    "zh": "遗失物保管交接顾问",
+    "en": "Hotel Lost Item Shift Custody Chain Advisor"
+  },
+  "profession": {
+    "zh": "酒店遗失物保管交接资料核对顾问",
+    "en": "Hotel Lost Item Shift Custody Chain Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户资料核对酒店遗失物跨班保管链，区分事实缺项与冲突，输出专项证据对照及人工复核记录。",
+    "en": "Review supplied hotel records with three evidence-based workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "collaboration",
+  "defaultInitPrompt": {
+    "zh": "请用现有资料生成酒店遗失物跨班保管链，未知项保留待补。",
+    "en": "Review the supplied records and mark missing evidence."
+  },
+  "plugin": "lynxce-hotel-lost-custody-chain-b44-advisor",
+  "tags": [
+    {
+      "zh": "酒店遗失物保管交接",
+      "en": "Domain records"
+    },
+    {
+      "zh": "证据核对",
+      "en": "Evidence review"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请用现有资料生成酒店遗失物跨班保管链，未知项保留待补。",
+      "en": "Review the supplied records and mark missing evidence."
+    },
+    {
+      "zh": "请单独运行遗失物疑似重复登记核对，保留原值与算式。",
+      "en": "Run the first internal task with evidence and arithmetic."
+    },
+    {
+      "zh": "请核对遗失物认领材料缺口中的矛盾和边界条件。",
+      "en": "Review conflicts and boundaries in the second internal task."
+    }
+  ],
+  "keywords": [
+    "酒店遗失物保管交接",
+    "证据核对",
+    "异常复核"
+  ]
+}

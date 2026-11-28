@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-instrument-advisor",
+  "version": "1.0.4",
+  "description": "An instrument costs more than its price tag: sizing, accessories, setup and lesson budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-instrument-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-instrument-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-instrument-advisor",
+  "displayName": {
+    "zh": "乐器选购与入门配置顾问",
+    "en": "Musical Instrument Buying Advisor"
+  },
+  "profession": {
+    "zh": "乐器选购与入门配置顾问",
+    "en": "Musical Instrument Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "买乐器别只算琴价：尺寸按身高怎么定、配件与调试要多少钱、课时费怎么一起进年度预算。",
+    "en": "An instrument costs more than its price tag: sizing, accessories, setup and lesson budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子这个年龄买多大的琴",
+    "en": "What instrument size fits my child"
+  },
+  "plugin": "lynxce-instrument-advisor",
+  "tags": [
+    {
+      "zh": "乐器选购",
+      "en": "Instruments"
+    },
+    {
+      "zh": "入门配置",
+      "en": "Starter Kit"
+    },
+    {
+      "zh": "总预算",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子这个年龄买多大的琴",
+      "en": "What instrument size fits my child"
+    },
+    {
+      "zh": "入门阶段买什么价位合适",
+      "en": "What price tier suits a beginner"
+    },
+    {
+      "zh": "帮我把配件和课时一起算进预算",
+      "en": "Include accessories and lessons in the budget"
+    }
+  ],
+  "keywords": [
+    "乐器选购",
+    "入门配置",
+    "总预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

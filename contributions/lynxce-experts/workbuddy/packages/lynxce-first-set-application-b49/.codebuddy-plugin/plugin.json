@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-first-set-application-b49",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-first-set-application-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-first-set-directory-map",
+    "./skills/lynxce-first-set-premium-ledger",
+    "./skills/lynxce-first-set-full-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-first-set-application-b49",
+  "displayName": {
+    "zh": "装备顾问",
+    "en": "First Equipment Application Advisor"
+  },
+  "profession": {
+    "zh": "首台套申报顾问",
+    "en": "First Equipment Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "为装备制造企业匹配首台套目录参数，串联交付投保与保费额度，形成资格说明、资金底稿和完整补正稿。",
+    "en": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按目录和同型号报告写首台套资格准备说明。",
+    "en": "First Equipment Application Advisor"
+  },
+  "plugin": "lynxce-first-set-application-b49",
+  "tags": [
+    {
+      "zh": "首台套申报",
+      "en": "首台套申报"
+    },
+    {
+      "zh": "目录参数",
+      "en": "目录参数"
+    },
+    {
+      "zh": "保费补助",
+      "en": "保费补助"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按目录和同型号报告写首台套资格准备说明。",
+      "en": "First Equipment Application Advisor"
+    },
+    {
+      "zh": "请核交付保单、实缴退费及剩余额度，完成资金底稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "B保费10万与6万两版冲突，重出全台账和补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "首台套申报",
+    "目录参数",
+    "保费补助"
+  ]
+}

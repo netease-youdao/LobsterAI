@@ -1,0 +1,142 @@
+{
+  "date": null,
+  "start": "18:00",
+  "deadline": "18:40",
+  "workers": [
+    {
+      "id": "甲",
+      "available": [
+        {
+          "start": "18:00",
+          "end": "18:40"
+        }
+      ],
+      "busy": []
+    },
+    {
+      "id": "乙",
+      "available": [
+        {
+          "start": "18:00",
+          "end": "18:40"
+        }
+      ],
+      "busy": []
+    },
+    {
+      "id": "丙",
+      "available": [
+        {
+          "start": "18:00",
+          "end": "18:40"
+        }
+      ],
+      "busy": []
+    }
+  ],
+  "tasks": [
+    {
+      "id": "A",
+      "name": null,
+      "people": 1,
+      "durationMinutes": 10,
+      "predecessors": [],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "B",
+      "name": null,
+      "people": 2,
+      "durationMinutes": 10,
+      "predecessors": [],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "C",
+      "name": null,
+      "people": 2,
+      "durationMinutes": 10,
+      "predecessors": [
+        "B"
+      ],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "D",
+      "name": null,
+      "people": 1,
+      "durationMinutes": 10,
+      "predecessors": [
+        "A",
+        "C"
+      ],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    },
+    {
+      "id": "E",
+      "name": null,
+      "people": 1,
+      "durationMinutes": 10,
+      "predecessors": [
+        "A"
+      ],
+      "resources": [],
+      "allowedWorkers": null,
+      "actualStatus": null
+    }
+  ],
+  "resources": {},
+  "fixedTasks": [],
+  "items": null,
+  "destinationConflicts": [
+    {
+      "item": "桌布",
+      "values": [
+        {
+          "source": "本轮桌布清单",
+          "destination": "库房二"
+        },
+        {
+          "source": "本轮负责人文字",
+          "destination": "交还桌布供应方"
+        }
+      ],
+      "sameBatchConfirmed": null,
+      "linkedTaskIds": null
+    }
+  ],
+  "freeTeamProbes": [
+    {
+      "label": "1人连续5分钟，非现场承诺",
+      "people": 1,
+      "durationMinutes": 5,
+      "after": "18:10"
+    },
+    {
+      "label": "2人连续5分钟，非现场承诺",
+      "people": 2,
+      "durationMinutes": 5,
+      "after": "18:10"
+    },
+    {
+      "label": "3人连续5分钟，非现场承诺",
+      "people": 3,
+      "durationMinutes": 5,
+      "after": "18:10"
+    },
+    {
+      "label": "外送人数与时长未知，不产起点",
+      "people": null,
+      "durationMinutes": null,
+      "after": "18:10"
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-scented-candle-advisor",
+  "version": "1.0.0",
+  "description": "Pick scented candles: burn time, wax and container, safe distance and flame rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-scented-candle-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-scented-candle"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-scented-candle-advisor",
+  "displayName": {
+    "zh": "香薰蜡烛选购顾问",
+    "en": "Scented Candle and Fire Safety Advisor"
+  },
+  "profession": {
+    "zh": "11.11 香薰蜡烛安全选购顾问",
+    "en": "11.11 Scented Candle Safe Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "香薰蜡烛怎么挑：算燃烧时长与每小时成本、核蜡材与容器耐热、量安全距离、守明火不离人。",
+    "en": "Pick scented candles: burn time, wax and container, safe distance and flame rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "卧室床头能点香薰蜡烛吗",
+    "en": "Is it safe to burn a candle on a bedside table"
+  },
+  "plugin": "lynxce-scented-candle-advisor",
+  "tags": [
+    {
+      "zh": "明火安全",
+      "en": "Open Flame Safety"
+    },
+    {
+      "zh": "燃烧时长",
+      "en": "Burn Time"
+    },
+    {
+      "zh": "无火替代",
+      "en": "Flameless Options"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "卧室床头能点香薰蜡烛吗",
+      "en": "Is it safe to burn a candle on a bedside table"
+    },
+    {
+      "zh": "200 克香薰蜡烛能点多少小时",
+      "en": "How many hours a 200 gram candle burns"
+    },
+    {
+      "zh": "家里有猫用什么代替明火蜡烛",
+      "en": "What to use instead of open flame candles with cats"
+    }
+  ],
+  "keywords": [
+    "明火安全",
+    "燃烧时长",
+    "无火替代",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}
