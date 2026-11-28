@@ -1205,4 +1205,95 @@ describe('coworkService session-entry context usage refresh', () => {
     contextUsageListeners.forEach(cb => cb({ sessionId: 'session-a', usage: pushedUsage }));
     expect(store.getState().cowork.contextUsageBySessionId['session-a']).toEqual(pushedUsage);
   });
+
+  test('coalesces streaming messageUpdate bursts per frame and prevents stopped sessions from flipping back to running', async () => {
+    vi.useFakeTimers();
+    const runningSession: CoworkSession = {
+      ...makeSession([
+        { id: 'u1', type: 'user', content: 'hi', timestamp: 1 },
+        { id: 'a1', type: 'assistant', content: '', timestamp: 2, metadata: { isStreaming: true } },
+      ], 0, 2),
+      id: 'session-stream',
+      status: CoworkSessionStatusValue.Running,
+    };
+    const updateListeners: Array<(payload: {
+      sessionId: string;
+      messageId: string;
+      content: string;
+      metadata?: Record<string, unknown>;
+    }) => void> = [];
+    const rafQueue: Array<() => void> = [];
+
+    vi.stubGlobal('window', {
+      requestAnimationFrame: vi.fn((cb: () => void) => {
+        rafQueue.push(cb);
+        return rafQueue.length;
+      }),
+      cancelAnimationFrame: vi.fn(),
+      electron: {
+        cowork: {
+          stopSession: vi.fn(async () => ({ success: true })),
+          onStreamMessage: vi.fn(() => () => undefined),
+          onStreamMessageUpdate: vi.fn((cb: (payload: {
+            sessionId: string;
+            messageId: string;
+            content: string;
+            metadata?: Record<string, unknown>;
+          }) => void) => {
+            updateListeners.push(cb);
+            return () => undefined;
+          }),
+          onStreamPermission: vi.fn(() => () => undefined),
+          onStreamPermissionDismiss: vi.fn(() => () => undefined),
+          onStreamComplete: vi.fn(() => () => undefined),
+          onStreamError: vi.fn(() => () => undefined),
+          onSessionsChanged: vi.fn(() => () => undefined),
+        },
+      },
+    });
+
+    (coworkService as unknown as { setupStreamListeners: () => void }).setupStreamListeners();
+    store.dispatch(setCurrentSession(runningSession));
+
+    // Rapid streaming updates within a single frame coalesce to one RAF flush.
+    for (let i = 1; i <= 20; i += 1) {
+      updateListeners.forEach(cb => cb({
+        sessionId: 'session-stream',
+        messageId: 'a1',
+        content: `chunk-${i}`,
+        metadata: { isStreaming: true },
+      }));
+    }
+    expect(rafQueue).toHaveLength(1);
+    expect(store.getState().cowork.currentSession?.messages[1]?.content).toBe('');
+
+    rafQueue.shift()?.();
+    expect(store.getState().cowork.currentSession?.messages[1]?.content).toBe('chunk-20');
+
+    // Queue another streaming update, then stop the session before the next frame fires.
+    updateListeners.forEach(cb => cb({
+      sessionId: 'session-stream',
+      messageId: 'a1',
+      content: 'stale-pre-stop',
+      metadata: { isStreaming: true },
+    }));
+    await coworkService.stopSession('session-stream');
+    expect(store.getState().cowork.currentSession?.status).toBe(CoworkSessionStatusValue.Idle);
+    expect(store.getState().cowork.isStreaming).toBe(false);
+
+    // Even if a queued RAF callback runs afterwards, it must not resurrect running status.
+    while (rafQueue.length > 0) rafQueue.shift()?.();
+    expect(store.getState().cowork.currentSession?.status).toBe(CoworkSessionStatusValue.Idle);
+    expect(store.getState().cowork.currentSession?.messages[1]?.content).toBe('chunk-20');
+
+    // Finalization update (`isStreaming: false`) applies immediately without flipping idle -> running.
+    updateListeners.forEach(cb => cb({
+      sessionId: 'session-stream',
+      messageId: 'a1',
+      content: 'final-stopped-text',
+      metadata: { isStreaming: false },
+    }));
+    expect(store.getState().cowork.currentSession?.messages[1]?.content).toBe('final-stopped-text');
+    expect(store.getState().cowork.currentSession?.status).toBe(CoworkSessionStatusValue.Idle);
+  });
 });

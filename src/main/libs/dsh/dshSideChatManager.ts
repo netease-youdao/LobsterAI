@@ -40,6 +40,7 @@ import type { DshAdapterSessionRecord, DshModelSelection } from '../agentEngine/
 import { createCoworkLlmTrace } from '../llmTrace';
 import { registerLlmUsageContext } from '../llmUsageContext';
 import type { DshHostManager, DshHostSessionContext } from './dshHostManager';
+import { DshStreamUpdateThrottler } from './dshStreamUpdateThrottler';
 import { record } from './dshSubagentHistory';
 import type { DshPromptPart, DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from './dshTypertClient';
 
@@ -309,6 +310,13 @@ export class DshSideChatManager extends EventEmitter {
   private readonly activeTurns = new Map<string, ActiveSideChatTurn>();
   private readonly dshToSideChat = new Map<string, { parentSessionId: string; sideChatId: string }>();
   private readonly pendingInteractions = new Map<string, PendingSideChatInteraction>();
+  private readonly streamUpdateThrottler: DshStreamUpdateThrottler<{
+    sessionId: string;
+    parentSessionId: string;
+    messageId: string;
+    content: string;
+    metadata: Record<string, unknown>;
+  }>;
 
   constructor(deps: DshSideChatManagerDeps) {
     super();
@@ -321,6 +329,20 @@ export class DshSideChatManager extends EventEmitter {
     this.resolveParentDshSessionId = deps.resolveParentDshSessionId;
     this.ensureHostReadyClient = deps.ensureHostReadyClient;
     this.onTurnFinished = deps.onTurnFinished;
+    this.streamUpdateThrottler = new DshStreamUpdateThrottler({
+      onPersist: ({ sessionId, messageId, content, metadata }) => {
+        this.sideChatStore.updateMessageContent(sessionId, messageId, content, metadata);
+      },
+      onEmit: ({ parentSessionId, sessionId, messageId, content, metadata }) => {
+        this.emit('messageUpdate', {
+          parentSessionId,
+          sideChatId: sessionId,
+          messageId,
+          content,
+          metadata,
+        });
+      },
+    });
   }
 
   isSideChatActive(sideChatId: string): boolean {
@@ -515,6 +537,7 @@ export class DshSideChatManager extends EventEmitter {
     this.cancelPendingPermissionsForSideChat(sideChatId);
 
     if (!turn) {
+      this.streamUpdateThrottler.clearSession(sideChatId);
       const existing = this.sideChatStore.getSideChatSummary(sideChatId);
       if (existing?.status === CoworkSideChatStatus.Running) {
         const updated = this.sideChatStore.updateSideChat(sideChatId, { status: CoworkSideChatStatus.Idle });
@@ -533,6 +556,7 @@ export class DshSideChatManager extends EventEmitter {
     turn.turnAborted = true;
     turn.abortController.abort(new Error('Side chat stopped by user'));
     this.finalizeActiveMessages(turn);
+    this.streamUpdateThrottler.clearSession(sideChatId);
     this.activeTurns.delete(sideChatId);
     this.stampUserTurnMetadata(turn, { turnOutcome: CoworkTurnOutcome.Stopped });
 
@@ -567,6 +591,7 @@ export class DshSideChatManager extends EventEmitter {
     for (const sideChatId of [...this.activeTurns.keys()]) {
       void this.stopSideChat(sideChatId);
     }
+    this.streamUpdateThrottler.clearAll();
   }
 
   renameSideChat(sideChatId: string, title: string): CoworkSideChatSummary {
@@ -1212,10 +1237,9 @@ export class DshSideChatManager extends EventEmitter {
           const msgId = this.ensureAssistantMessage(turn);
           turn.currentAssistantText += deltaText;
           const meta = { isStreaming: true };
-          this.sideChatStore.updateMessageContent(turn.sideChatId, msgId, turn.currentAssistantText, meta);
-          this.emit('messageUpdate', {
+          this.streamUpdateThrottler.schedule({
+            sessionId: turn.sideChatId,
             parentSessionId: turn.parentSessionId,
-            sideChatId: turn.sideChatId,
             messageId: msgId,
             content: turn.currentAssistantText,
             metadata: meta,
@@ -1224,10 +1248,9 @@ export class DshSideChatManager extends EventEmitter {
           const msgId = this.ensureThinkingMessage(turn);
           turn.currentThinkingText += deltaText;
           const meta = { isThinking: true, isStreaming: true };
-          this.sideChatStore.updateMessageContent(turn.sideChatId, msgId, turn.currentThinkingText, meta);
-          this.emit('messageUpdate', {
+          this.streamUpdateThrottler.schedule({
+            sessionId: turn.sideChatId,
             parentSessionId: turn.parentSessionId,
-            sideChatId: turn.sideChatId,
             messageId: msgId,
             content: turn.currentThinkingText,
             metadata: meta,
@@ -1409,6 +1432,7 @@ export class DshSideChatManager extends EventEmitter {
   private finalizeThinkingMessage(turn: ActiveSideChatTurn, seq?: number): void {
     const msgId = turn.currentThinkingMessageId;
     if (!msgId) return;
+    this.streamUpdateThrottler.clearMessage(msgId);
     const text = turn.currentThinkingText;
     turn.currentThinkingMessageId = null;
     turn.currentThinkingText = '';
@@ -1432,6 +1456,7 @@ export class DshSideChatManager extends EventEmitter {
   private finalizeAssistantMessage(turn: ActiveSideChatTurn, seq?: number): void {
     const msgId = turn.currentAssistantMessageId;
     if (!msgId) return;
+    this.streamUpdateThrottler.clearMessage(msgId);
     const text = turn.currentAssistantText;
     turn.currentAssistantMessageId = null;
     turn.currentAssistantText = '';
@@ -1459,11 +1484,13 @@ export class DshSideChatManager extends EventEmitter {
 
   private resetFailedStreamBuffers(turn: ActiveSideChatTurn): void {
     if (turn.currentThinkingMessageId) {
+      this.streamUpdateThrottler.clearMessage(turn.currentThinkingMessageId);
       this.sideChatStore.deleteMessage(turn.sideChatId, turn.currentThinkingMessageId);
       turn.currentThinkingMessageId = null;
       turn.currentThinkingText = '';
     }
     if (turn.currentAssistantMessageId) {
+      this.streamUpdateThrottler.clearMessage(turn.currentAssistantMessageId);
       this.sideChatStore.deleteMessage(turn.sideChatId, turn.currentAssistantMessageId);
       turn.currentAssistantMessageId = null;
       turn.currentAssistantText = '';

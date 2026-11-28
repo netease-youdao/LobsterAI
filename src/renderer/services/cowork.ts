@@ -224,6 +224,13 @@ class CoworkService {
   private sessionEntryContextUsageRefreshAt = new Map<string, number>();
   private contextCompactionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private newUserWelcomeAnimationTimer: ReturnType<typeof setInterval> | null = null;
+  private pendingStreamMessageUpdates = new Map<string, {
+    sessionId: string;
+    messageId: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }>();
+  private streamMessageUpdateFlushHandle: { kind: 'raf' | 'timeout'; id: number } | null = null;
   private readonly btwAbortRunIds = new Set<string>();
   private readonly queuedFollowUpCoordinator = new CoworkQueuedFollowUpCoordinator({
     getState: () => store.getState(),
@@ -275,6 +282,105 @@ class CoworkService {
       return;
     }
     store.dispatch(setStreaming(isStreaming));
+  }
+
+  private isLiveStreamingMessageUpdate(metadata?: Record<string, unknown>): boolean {
+    return metadata?.isFinal !== true
+      && metadata?.isStreaming !== false
+      && !Object.prototype.hasOwnProperty.call(metadata ?? {}, 'dshDelivery');
+  }
+
+  private applyStreamMessageUpdate(
+    update: {
+      sessionId: string;
+      messageId: string;
+      content: string;
+      metadata?: Record<string, unknown>;
+    },
+    options?: { markRunning?: boolean },
+  ): void {
+    const { sessionId, messageId, content, metadata } = update;
+    const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
+    if (
+      options?.markRunning !== false
+      && this.isLiveStreamingMessageUpdate(metadata)
+      && session?.status !== 'completed'
+    ) {
+      store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
+      this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
+    }
+    if (metadata?.isFinal === true && typeof metadata.model === 'string' && metadata.model.trim()) {
+      this.logDiagnostic(
+        'debug',
+        `received final message metadata for session ${sessionId}, message ${messageId}, model ${metadata.model}`,
+      );
+    }
+    store.dispatch(updateMessageContent({ sessionId, messageId, content, metadata }));
+  }
+
+  private schedulePendingStreamMessageUpdatesFlush(): void {
+    if (this.streamMessageUpdateFlushHandle) return;
+    const flush = () => {
+      this.streamMessageUpdateFlushHandle = null;
+      this.flushPendingStreamMessageUpdates();
+    };
+    if (
+      typeof window !== 'undefined'
+      && typeof window.requestAnimationFrame === 'function'
+      && (typeof document === 'undefined' || document.visibilityState === 'visible')
+    ) {
+      this.streamMessageUpdateFlushHandle = {
+        kind: 'raf',
+        id: window.requestAnimationFrame(flush),
+      };
+    } else {
+      this.streamMessageUpdateFlushHandle = {
+        kind: 'timeout',
+        id: globalThis.setTimeout(flush, 0) as unknown as number,
+      };
+    }
+  }
+
+  private cancelPendingStreamMessageUpdatesFlush(): void {
+    if (!this.streamMessageUpdateFlushHandle) return;
+    const handle = this.streamMessageUpdateFlushHandle;
+    this.streamMessageUpdateFlushHandle = null;
+    if (handle.kind === 'raf' && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(handle.id);
+    } else {
+      globalThis.clearTimeout(handle.id);
+    }
+  }
+
+  private flushPendingStreamMessageUpdates(
+    sessionId?: string,
+    options?: { markRunning?: boolean },
+  ): void {
+    if (this.pendingStreamMessageUpdates.size === 0) return;
+    for (const [key, update] of [...this.pendingStreamMessageUpdates.entries()]) {
+      if (sessionId !== undefined && update.sessionId !== sessionId) continue;
+      this.pendingStreamMessageUpdates.delete(key);
+      this.applyStreamMessageUpdate(update, options);
+    }
+    if (this.pendingStreamMessageUpdates.size === 0) {
+      this.cancelPendingStreamMessageUpdatesFlush();
+    }
+  }
+
+  private clearPendingStreamMessageUpdates(sessionId?: string): void {
+    if (sessionId === undefined) {
+      this.pendingStreamMessageUpdates.clear();
+      this.cancelPendingStreamMessageUpdatesFlush();
+      return;
+    }
+    for (const [key, update] of [...this.pendingStreamMessageUpdates.entries()]) {
+      if (update.sessionId === sessionId) {
+        this.pendingStreamMessageUpdates.delete(key);
+      }
+    }
+    if (this.pendingStreamMessageUpdates.size === 0) {
+      this.cancelPendingStreamMessageUpdatesFlush();
+    }
   }
 
   isInitialized(): boolean {
@@ -360,6 +466,7 @@ class CoworkService {
         console.log('[CoworkService] onStreamMessage: after loadSessions, sessionExists=', nowExists, 'totalSessions=', newState.sessions.length);
       }
 
+      this.flushPendingStreamMessageUpdates(sessionId);
       // A new user turn means this session is actively running again
       // (especially important for IM-triggered turns that do not call continueSession from renderer).
       if (message.type === 'user' || message.type === 'assistant' || message.type === 'tool_use' || message.type === 'tool_result') {
@@ -375,18 +482,17 @@ class CoworkService {
 
     // Message update listener (for streaming content updates)
     const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content, metadata }) => {
-      const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
-      if (metadata?.isFinal !== true && !Object.prototype.hasOwnProperty.call(metadata ?? {}, 'dshDelivery') && session?.status !== 'completed') {
-        store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
-        this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
+      const updateKey = `${sessionId}:${messageId}`;
+      if (this.isLiveStreamingMessageUpdate(metadata)) {
+        this.pendingStreamMessageUpdates.set(updateKey, { sessionId, messageId, content, metadata });
+        this.schedulePendingStreamMessageUpdatesFlush();
+        return;
       }
-      if (metadata?.isFinal === true && typeof metadata.model === 'string' && metadata.model.trim()) {
-        this.logDiagnostic(
-          'debug',
-          `received final message metadata for session ${sessionId}, message ${messageId}, model ${metadata.model}`,
-        );
+      this.pendingStreamMessageUpdates.delete(updateKey);
+      if (this.pendingStreamMessageUpdates.size === 0) {
+        this.cancelPendingStreamMessageUpdatesFlush();
       }
-      store.dispatch(updateMessageContent({ sessionId, messageId, content, metadata }));
+      this.applyStreamMessageUpdate({ sessionId, messageId, content, metadata });
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
 
@@ -403,6 +509,9 @@ class CoworkService {
     }
 
     const sessionStatusCleanup = cowork.onStreamSessionStatus?.(({ sessionId, status }) => {
+      if (status !== CoworkSessionStatusValue.Running) {
+        this.flushPendingStreamMessageUpdates(sessionId, { markRunning: false });
+      }
       const coworkState = store.getState().cowork;
       const previousStatus = coworkState.sessions.find(session => session.id === sessionId)?.status
         ?? (coworkState.currentSession?.id === sessionId ? coworkState.currentSession.status : undefined);
@@ -513,6 +622,7 @@ class CoworkService {
 
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
+      this.flushPendingStreamMessageUpdates(sessionId, { markRunning: false });
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
       this.setCurrentSessionStreaming(sessionId, false, 'stream_complete');
       this.clearAutomaticContextUsageSuppression(sessionId);
@@ -532,6 +642,7 @@ class CoworkService {
         }));
         return;
       }
+      this.flushPendingStreamMessageUpdates(sessionId, { markRunning: false });
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
       this.setCurrentSessionStreaming(sessionId, false, 'stream_error');
       this.queuedFollowUpCoordinator.handleSessionError(sessionId);
@@ -849,6 +960,7 @@ class CoworkService {
   }
 
   private cleanupListeners(): void {
+    this.clearPendingStreamMessageUpdates();
     this.streamListenerCleanups.forEach(cleanup => cleanup());
     this.streamListenerCleanups = [];
     this.openClawEngineListenerAttached = false;
@@ -1702,6 +1814,7 @@ class CoworkService {
     this.logDiagnostic('info', `stop requested for session ${sessionId}.`);
     const result = await cowork.stopSession(sessionId);
     if (result.success) {
+      this.clearPendingStreamMessageUpdates(sessionId);
       this.setCurrentSessionStreaming(sessionId, false, 'stop_session_completed');
       store.dispatch(updateSessionStatus({ sessionId, status: 'idle' }));
       this.queuedFollowUpCoordinator.handleSessionIdle(sessionId);
