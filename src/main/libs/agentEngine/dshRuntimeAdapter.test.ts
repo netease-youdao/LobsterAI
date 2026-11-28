@@ -3279,4 +3279,77 @@ describe('DshRuntimeAdapter', () => {
     adapter.stopAllSessions();
     expect(controlAborted).toBe(true);
   });
+
+  test('throttles rapid streaming deltas and cancels pending timers on stopSession without stale updates', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-burst-stop',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+    const updateMessageContentSpy = vi.spyOn(store, 'updateMessageContent');
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-burst-1' })),
+      cancelSession: vi.fn(async () => ({ accepted: true })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* (_req: unknown, signal?: AbortSignal) {
+        yield { type: 'assistant-stream', frame: { type: 'start' } };
+        for (let i = 0; i < 200; i += 1) {
+          yield {
+            type: 'assistant-stream',
+            frame: { type: 'chunk', chunk: { type: 'text-delta', index: i, text: `tok${i} ` } },
+          };
+        }
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const emittedUpdates: Array<{ content: string; metadata?: Record<string, unknown> }> = [];
+    adapter.on('messageUpdate', (_sid, _mid, content, metadata) => {
+      emittedUpdates.push({ content, metadata });
+    });
+
+    const turnPromise = adapter.startSession('cw-burst-stop', 'Write a long essay');
+    await vi.waitFor(() => {
+      expect(messages.some((m) => m.type === 'assistant')).toBe(true);
+    });
+    // Wait until all 200 synchronous chunks in the generator have been consumed
+    // and the generator is parked waiting for abort.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const streamingUpdatesBeforeStop = emittedUpdates.filter((u) => u.metadata?.isStreaming === true);
+    expect(streamingUpdatesBeforeStop.length).toBeGreaterThanOrEqual(1);
+    expect(streamingUpdatesBeforeStop.length).toBeLessThan(10);
+    expect(updateMessageContentSpy.mock.calls.length).toBeLessThan(10);
+
+    adapter.stopSession('cw-burst-stop');
+    await turnPromise;
+
+    const assistantMsg = messages.find((m) => m.type === 'assistant');
+    expect(assistantMsg?.content).toContain('tok0 ');
+    expect(assistantMsg?.content).toContain('tok199 ');
+    expect(assistantMsg?.metadata?.isStreaming).toBe(false);
+
+    const countAfterStop = emittedUpdates.length;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(emittedUpdates.length).toBe(countAfterStop);
+  });
 });

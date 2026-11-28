@@ -3539,7 +3539,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <button
       type="button"
       onClick={handleStopClick}
-      className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-all hover:opacity-90 active:scale-95 focus:outline-none focus:ring-2 focus:ring-primary/40"
+      className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-all hover:opacity-90 active:scale-95 focus:outline-none"
       aria-label={stopButtonLabel}
       title={stopButtonLabel}
     >
@@ -4490,7 +4490,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 <button
                   type="button"
                   onClick={handleStopClick}
-                  className="flex h-[34px] w-[34px] items-center justify-center rounded-full transition-all hover:opacity-90 active:scale-95 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  className="flex h-[34px] w-[34px] items-center justify-center rounded-full transition-all hover:opacity-90 active:scale-95 focus:outline-none"
                   aria-label={stopButtonLabel}
                   title={stopButtonLabel}
                 >

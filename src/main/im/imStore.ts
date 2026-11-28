@@ -38,6 +38,7 @@ import {
   DingTalkInstanceConfig,
   DingTalkMultiInstanceConfig,
   DingTalkOpenClawConfig,
+  DiscordDmPolicy,
   DiscordInstanceConfig,
   DiscordMultiInstanceConfig,
   DiscordOpenClawConfig,
@@ -47,6 +48,7 @@ import {
   FeishuMultiInstanceConfig,
   FeishuOpenClawConfig,
   IMGatewayConfig,
+  ImGroupPolicy,
   IMSessionMapping,
   IMSettings,
   NeteaseBeeChanConfig,
@@ -60,6 +62,7 @@ import {
   QQConfig,
   QQInstanceConfig,
   QQMultiInstanceConfig,
+  TelegramDmPolicy,
   TelegramInstanceConfig,
   TelegramMultiInstanceConfig,
   TelegramOpenClawConfig,
@@ -69,6 +72,8 @@ import {
   WeixinOpenClawConfig,
 } from './types';
 import { activeWecomBotId } from './wecomConnections';
+
+const IM_MIGRATION_TELEGRAM_DISCORD_ALLOWLIST_KEY = 'migration:telegram_discord_allowlist_v1';
 
 interface StoredConversationReplyRoute {
   channel: string;
@@ -323,14 +328,12 @@ export class IMStore {
           debug?: boolean;
         };
         if (oldConfig.botToken) {
-          const hasAllowList =
-            Array.isArray(oldConfig.allowedUserIds) && oldConfig.allowedUserIds.length > 0;
           const newConfig = {
             ...DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
             enabled: oldConfig.enabled ?? false,
             botToken: oldConfig.botToken,
             allowFrom: oldConfig.allowedUserIds ?? [],
-            dmPolicy: hasAllowList ? ('allowlist' as const) : ('pairing' as const),
+            dmPolicy: TelegramDmPolicy.Allowlist,
             debug: oldConfig.debug ?? true,
           };
           const now = Date.now();
@@ -875,6 +878,82 @@ export class IMStore {
       } catch {
         // Ignore parse errors
       }
+    }
+
+    this.migrateTelegramAndDiscordToAllowlist();
+  }
+
+  private migrateTelegramAndDiscordToAllowlist(): void {
+    const marker = this.db
+      .prepare('SELECT value FROM im_config WHERE key = ?')
+      .get(IM_MIGRATION_TELEGRAM_DISCORD_ALLOWLIST_KEY) as { value: string } | undefined;
+    if (marker) {
+      return;
+    }
+
+    const now = Date.now();
+    let migratedCount = 0;
+
+    for (const { prefix, allowlistDmPolicy, disabledDmPolicy } of [
+      {
+        prefix: 'telegram:%',
+        allowlistDmPolicy: TelegramDmPolicy.Allowlist,
+        disabledDmPolicy: TelegramDmPolicy.Disabled,
+      },
+      {
+        prefix: 'discord:%',
+        allowlistDmPolicy: DiscordDmPolicy.Allowlist,
+        disabledDmPolicy: DiscordDmPolicy.Disabled,
+      },
+    ]) {
+      const rows = this.db
+        .prepare('SELECT key, value FROM im_config WHERE key LIKE ?')
+        .all(prefix) as Array<{ key: string; value: string }>;
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value) as Record<string, unknown>;
+          let changed = false;
+
+          if (parsed.dmPolicy !== allowlistDmPolicy && parsed.dmPolicy !== disabledDmPolicy) {
+            parsed.dmPolicy = allowlistDmPolicy;
+            changed = true;
+          }
+          if (!Array.isArray(parsed.allowFrom)) {
+            parsed.allowFrom = [];
+            changed = true;
+          }
+          if (
+            parsed.groupPolicy !== ImGroupPolicy.Allowlist
+            && parsed.groupPolicy !== ImGroupPolicy.Disabled
+          ) {
+            parsed.groupPolicy = ImGroupPolicy.Allowlist;
+            changed = true;
+          }
+          if (!Array.isArray(parsed.groupAllowFrom)) {
+            parsed.groupAllowFrom = [];
+            changed = true;
+          }
+
+          if (changed) {
+            this.db
+              .prepare('UPDATE im_config SET value = ?, updated_at = ? WHERE key = ?')
+              .run(JSON.stringify(parsed), now, row.key);
+            migratedCount += 1;
+          }
+        } catch {
+          // Ignore malformed rows
+        }
+      }
+    }
+
+    this.db
+      .prepare('INSERT OR REPLACE INTO im_config (key, value, updated_at) VALUES (?, ?, ?)')
+      .run(IM_MIGRATION_TELEGRAM_DISCORD_ALLOWLIST_KEY, '1', now);
+
+    if (migratedCount > 0) {
+      console.log(
+        `[IMStore] Migrated ${migratedCount} Telegram/Discord instance(s) to fail-closed allowlist policy`,
+      );
     }
   }
 

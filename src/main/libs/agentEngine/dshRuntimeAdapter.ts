@@ -92,6 +92,7 @@ import type {
 } from '../dsh/dshHostManager';
 import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
 import type { DshSideChatManager } from '../dsh/dshSideChatManager';
+import { DshStreamUpdateThrottler } from '../dsh/dshStreamUpdateThrottler';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import { admitDshPrompt, DshAdmissionUnconfirmedError, followDshTurn, isDshTransportError, untilAborted } from '../dsh/dshTurnRecovery';
@@ -881,6 +882,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
   private readonly readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
   private readonly messageEditing?: DshMessageEditCoordinator;
+  private readonly streamUpdateThrottler: DshStreamUpdateThrottler<{
+    sessionId: string;
+    messageId: string;
+    content: string;
+    metadata: Record<string, unknown>;
+  }>;
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
   private readonly startingTurns = new Map<string, { controller: AbortController; since: number; messageId?: string }>();
@@ -917,6 +924,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
     this.readBrowserAnnotationAsset = deps.readBrowserAnnotationAsset;
+    this.streamUpdateThrottler = new DshStreamUpdateThrottler({
+      onPersist: ({ sessionId, messageId, content, metadata }) => {
+        this.store.updateMessageContent(sessionId, messageId, content, metadata);
+      },
+      onEmit: ({ sessionId, messageId, content, metadata }) => {
+        this.emit('messageUpdate', sessionId, messageId, content, metadata);
+      },
+    });
     if (deps.store.messageEdits && deps.store.messageVersions) {
       this.messageEditing = new DshMessageEditCoordinator({
         edits: deps.store.messageEdits,
@@ -1790,6 +1805,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
     const turn = this.activeTurns.get(sessionId);
     if (!turn) {
+      this.streamUpdateThrottler.clearSession(sessionId);
       if (starting) {
         this.store.updateSession(sessionId, { status: 'idle' });
         this.emit('sessionStatus', sessionId, 'idle');
@@ -1802,6 +1818,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.finalizeActiveThinkingMessage(turn);
     this.finalizeActiveAssistantMessage(turn);
     this.discardReusableMessages(turn);
+    this.streamUpdateThrottler.clearSession(sessionId);
     this.cancelPendingInteractionsForSession(sessionId);
 
     this.lastCancelledTurnBySession.set(sessionId, {
@@ -1837,6 +1854,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     for (const sessionId of ids) {
       this.stopSession(sessionId);
     }
+    this.streamUpdateThrottler.clearAll();
   }
 
   private async cancelDshTurn(turn: ActiveTurnState): Promise<void> {
@@ -3097,6 +3115,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       this.finalizeActiveThinkingMessage(turn);
       this.finalizeActiveAssistantMessage(turn);
       this.discardReusableMessages(turn);
+      this.streamUpdateThrottler.clearSession(coworkSessionId);
       if (this.activeTurns.get(coworkSessionId) === turn) {
         this.activeTurns.delete(coworkSessionId);
       }
@@ -3141,6 +3160,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         return;
       }
       this.discardReusableMessages(turn);
+      this.streamUpdateThrottler.clearSession(coworkSessionId);
       if (this.activeTurns.get(coworkSessionId) === turn) {
         this.activeTurns.delete(coworkSessionId);
       }
@@ -3197,8 +3217,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           const msgId = this.ensureAssistantMessage(turn);
           turn.currentAssistantText += deltaText;
           const meta = { isStreaming: true };
-          this.store.updateMessageContent(coworkSessionId, msgId, turn.currentAssistantText, meta);
-          this.emit('messageUpdate', coworkSessionId, msgId, turn.currentAssistantText, meta);
+          this.streamUpdateThrottler.schedule({
+            sessionId: coworkSessionId,
+            messageId: msgId,
+            content: turn.currentAssistantText,
+            metadata: meta,
+          });
         } else if (
           (chunk.type === 'reasoning-delta' || chunk.type === 'thinking-delta')
           && deltaText
@@ -3206,8 +3230,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           const msgId = this.ensureThinkingMessage(turn);
           turn.currentThinkingText += deltaText;
           const meta = { isThinking: true, isStreaming: true };
-          this.store.updateMessageContent(coworkSessionId, msgId, turn.currentThinkingText, meta);
-          this.emit('messageUpdate', coworkSessionId, msgId, turn.currentThinkingText, meta);
+          this.streamUpdateThrottler.schedule({
+            sessionId: coworkSessionId,
+            messageId: msgId,
+            content: turn.currentThinkingText,
+            metadata: meta,
+          });
         }
       }
 
@@ -3647,6 +3675,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private finalizeActiveThinkingMessage(turn: ActiveTurnState, seq?: number): void {
     if (!turn.currentThinkingMessageId) return;
     const msgId = turn.currentThinkingMessageId;
+    this.streamUpdateThrottler.clearMessage(msgId);
     const thinking = turn.currentThinkingText;
     const meta: Record<string, unknown> = {
       isThinking: true,
@@ -3690,6 +3719,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private finalizeActiveAssistantMessage(turn: ActiveTurnState, seq?: number): void {
     if (!turn.currentAssistantMessageId) return;
     const msgId = turn.currentAssistantMessageId;
+    this.streamUpdateThrottler.clearMessage(msgId);
     const text = turn.currentAssistantText;
     const meta: Record<string, unknown> = {
       isStreaming: false,
@@ -3706,6 +3736,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private resetAttemptMessagesForRetry(turn: ActiveTurnState): void {
     const thinkingId = turn.currentThinkingMessageId ?? turn.attemptThinkingMessageId;
     if (thinkingId) {
+      this.streamUpdateThrottler.clearMessage(thinkingId);
       const meta = { isThinking: true, isStreaming: true };
       this.store.updateMessageContent(turn.coworkSessionId, thinkingId, '', meta);
       this.emit('messageUpdate', turn.coworkSessionId, thinkingId, '', meta);
@@ -3721,6 +3752,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
     const assistantId = turn.currentAssistantMessageId ?? turn.attemptAssistantMessageId;
     if (assistantId) {
+      this.streamUpdateThrottler.clearMessage(assistantId);
       const meta = { isStreaming: true };
       this.store.updateMessageContent(turn.coworkSessionId, assistantId, '', meta);
       this.emit('messageUpdate', turn.coworkSessionId, assistantId, '', meta);
@@ -3737,10 +3769,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   private discardReusableMessages(turn: ActiveTurnState): void {
     if (turn.reusableThinkingMessageId) {
+      this.streamUpdateThrottler.clearMessage(turn.reusableThinkingMessageId);
       this.store.deleteMessage?.(turn.coworkSessionId, turn.reusableThinkingMessageId);
       turn.reusableThinkingMessageId = null;
     }
     if (turn.reusableAssistantMessageId) {
+      this.streamUpdateThrottler.clearMessage(turn.reusableAssistantMessageId);
       this.store.deleteMessage?.(turn.coworkSessionId, turn.reusableAssistantMessageId);
       turn.reusableAssistantMessageId = null;
     }

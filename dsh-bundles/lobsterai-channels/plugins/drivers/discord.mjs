@@ -1,3 +1,7 @@
+import {
+  isStrictDirectMessageAllowed,
+  isStrictGroupMessageAllowed,
+} from './access-policy.mjs';
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
 import {
   detectImageMime,
@@ -10,6 +14,8 @@ const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 41_250;
 const MIN_HEARTBEAT_INTERVAL_MS = 5_000;
 const MAX_HEARTBEAT_INTERVAL_MS = 120_000;
+const DISCORD_USER_PREFIX_RE = /^(?:discord|user):/i;
+const DISCORD_GROUP_PREFIX_RE = /^(?:discord|guild|server|channel|group):/i;
 
 function acceptsGuildMessage(message, botId, config) {
   if (config.groupPolicy === 'disabled') return false;
@@ -117,8 +123,21 @@ export class DiscordChannelDriver extends BaseChannelDriver {
     if (message.author?.bot || message.author?.id === this.botUserId) return;
     const senderId = String(message.author?.id || '').trim();
     const chatId = String(message.channel_id || '').trim();
-    if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
-    if (message.guild_id && !acceptsGuildMessage(message, this.botUserId, this.config)) return;
+    if (!senderId || !chatId) return;
+    const guildId = String(message.guild_id || '').trim();
+    if (guildId) {
+      const guildConfig = this.config.guilds?.[guildId] ?? this.config.guilds?.['*'];
+      if (!isStrictGroupMessageAllowed(this.config, {
+        groupCandidates: [guildId, chatId],
+        senderId,
+        groupConfig: guildConfig,
+        groupPrefixPattern: DISCORD_GROUP_PREFIX_RE,
+        senderPrefixPattern: DISCORD_USER_PREFIX_RE,
+      })) return;
+      if (!acceptsGuildMessage(message, this.botUserId, this.config)) return;
+    } else if (!isStrictDirectMessageAllowed(this.config, senderId, DISCORD_USER_PREFIX_RE)) {
+      return;
+    }
 
     const { text, attachments } = await this.extractInboundPayload(message, signal);
     if (!text && attachments.length === 0) return;
